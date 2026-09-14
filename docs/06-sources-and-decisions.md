@@ -32,20 +32,19 @@
 
 | 主题 | 来源 |
 | --- | --- |
-| Tauri 分层与运行环境 | [Architecture](https://v2.tauri.app/concept/architecture/) · [Capabilities](https://v2.tauri.app/security/capabilities/) |
-| 原生命令 | [Rust Commands](https://v2.tauri.app/develop/calling-rust/) · [Permissions](https://v2.tauri.app/security/permissions/) |
-| SQL 与 migration | [SQL 插件](https://v2.tauri.app/plugin/sql/) · [JavaScript 接口](https://github.com/tauri-apps/plugins-workspace/blob/v2/plugins/sql/guest-js/index.ts) |
-| 事务与连接池核查 | [插件状态](https://github.com/tauri-apps/plugins-workspace/blob/v2/plugins/sql/src/lib.rs) · [执行实现](https://github.com/tauri-apps/plugins-workspace/blob/v2/plugins/sql/src/wrapper.rs) |
-| HTTP 与 SSE | [HTTP Client](https://v2.tauri.app/plugin/http-client/) · [流式读取/取消实现](https://github.com/tauri-apps/plugins-workspace/blob/v2/plugins/http/guest-js/index.ts) · [eventsource-parser](https://github.com/rexxars/eventsource-parser) |
-| 测试 | [WebdriverIO / Tauri 指南](https://v2.tauri.app/develop/tests/webdriver/) |
+| Tauri 与 sidecar | [Architecture](https://v2.tauri.app/concept/architecture/) · [Node sidecar](https://v2.tauri.app/learn/sidecar-nodejs/) · [External Binaries](https://v2.tauri.app/develop/sidecar/) |
+| 桌面通信与权限 | [Rust Commands](https://v2.tauri.app/develop/calling-rust/) · [Channels](https://v2.tauri.app/develop/calling-frontend/) · [Capabilities](https://v2.tauri.app/security/capabilities/) · [AppManifest::commands](https://docs.rs/tauri-build/latest/tauri_build/struct.AppManifest.html#method.commands) |
+| Node 与 SQLite | [Node Releases](https://nodejs.org/en/about/previous-releases) · [better-sqlite3](https://github.com/WiseLibs/better-sqlite3) · [SQLite WAL](https://www.sqlite.org/wal.html) |
+| 流式解析 | [eventsource-parser](https://github.com/rexxars/eventsource-parser) |
+| 桌面测试 | [WebdriverIO / Tauri 指南](https://v2.tauri.app/develop/tests/webdriver/) |
 | Windows 构建与分发 | [Prerequisites](https://v2.tauri.app/start/prerequisites/) · [Installer](https://v2.tauri.app/distribute/windows-installer/) · [Signing](https://v2.tauri.app/distribute/sign/windows/) |
 | 密钥保护 | [Windows DPAPI](https://learn.microsoft.com/en-us/windows/win32/api/dpapi/nf-dpapi-cryptprotectdata) |
-| DeepSeek 基础接口 | [入门](https://api-docs.deepseek.com/) · [Chat Completions](https://api-docs.deepseek.com/api/create-chat-completion/) |
+| DeepSeek Responses | [指南与兼容表](https://api-docs.deepseek.com/guides/responses_api/) · [接口定义](https://api-docs.deepseek.com/api/create-response/) |
 | 推理与工具 | [Thinking Mode](https://api-docs.deepseek.com/guides/thinking_mode/) · [Tool Calls](https://api-docs.deepseek.com/guides/tool_calls/) |
-| 模型、容量与费用 | [Models & Pricing](https://api-docs.deepseek.com/quick_start/pricing/) · [Context Caching](https://api-docs.deepseek.com/guides/kv_cache/) |
+| 模型与费用 | [Models & Pricing](https://api-docs.deepseek.com/quick_start/pricing/) · [Context Caching](https://api-docs.deepseek.com/guides/kv_cache/) |
 | 连接与错误 | [Rate Limit](https://api-docs.deepseek.com/quick_start/rate_limit/) · [Error Codes](https://api-docs.deepseek.com/quick_start/error_codes/) |
 
-Tauri 插件源码引用 v2 分支，用于本次接口核查；M0 必须以实际锁定版本重验，不能将分支当前行为视为所有 2.x 版本的保证。服务文档及模型映射为动态信息，发布前复核。
+动态文档须在接入及发布前复核。依赖在 M0 锁定具体版本；源码说明不等于所选版本的实测结论。
 
 Pi、DeepSeek Harness 使用 MIT，Codex 使用 Apache-2.0；复用源码及分发依赖时保留对应 LICENSE、NOTICE 和第三方声明。
 
@@ -53,28 +52,29 @@ Pi、DeepSeek Harness 使用 MIT，Codex 使用 Apache-2.0；复用源码及分�
 
 | 编号 | 决策 | 依据 | 复核条件 |
 | --- | --- | --- | --- |
-| ADR-001 | Tauri 2 + React + TypeScript | Windows 桌面与开发语言要求 | 桌面要求变化 |
-| ADR-002 | 纯 TypeScript 引擎，首版运行于 WebView | 当前代码文件工具不依赖 Node | 出现 Node 专属能力或独立运行需求 |
-| ADR-003 | 通过接口注入平台能力 | 核心可独立测试和迁移 | 不同平台适配成本经测量 |
-| ADR-004 | 自研小核心、五个文件工具 | 聚焦代码读写与执行记录 | 当前范围无法满足实际任务 |
-| ADR-005 | Tauri SQL + SQLite，原生命令提交事务 | 减少运行依赖，保留原子状态提交 | 锁定插件版本的连接池接口变化 |
-| ADR-006 | Tauri HTTP + DeepSeekProvider | 原生网络与平台无关协议适配 | SSE 或取消契约无法满足 |
-| ADR-007 | 串行工具、固定修改确认 | 文件一致性与结果可核对 | 资源锁和并发收益经验证 |
-| ADR-008 | WebdriverIO + tauri-service，Windows external 模式 | 遵循官方测试路线 | 测试平台或驱动要求变化 |
-| ADR-009 | Windows 11 x64、NSIS、手动升级 | 收敛分发矩阵 | 目标设备变化 |
+| ADR-001 | Tauri 2 + React Client | Windows 桌面及 TypeScript 开发要求 | 桌面需求变化 |
+| ADR-002 | 平台无关 TS Agent Core | 核心可测试，不绑定客户端或运行环境 | 接口不能覆盖实际执行需要 |
+| ADR-003 | 独立 Node.js Runtime sidecar | 执行状态与界面生命周期分离 | 实测资源或分发成本超出预算 |
+| ADR-004 | Client SDK + 版本化协议 | Client 不依赖 Core/Runtime 内部实现 | 出现其他客户端需求 |
+| ADR-005 | Runtime 直接访问 HTTP、文件及 SQLite | 避免经桌面插件中转业务能力 | 执行环境发生变化 |
+| ADR-006 | Store Worker + better-sqlite3 | 单写者、完整事务、不阻塞调度线程 | 原生模块兼容性无法满足 |
+| ADR-007 | 首版只实现 Responses，保留 ModelProvider | 结构化输出项与语义事件适合 Agent 记录 | 必要服务能力需要其他协议 |
+| ADR-008 | 五个文件工具、串行执行、固定确认 | 聚焦代码读写和文件一致性 | 有经验证的并发需求 |
+| ADR-009 | WebdriverIO + tauri-service external 模式 | Windows 桌面验收与官方工具路线 | 驱动或平台要求变化 |
+| ADR-010 | Windows 11 x64、NSIS、手动升级 | 收敛发布矩阵 | 目标设备变化 |
 
-Node sidecar 仅作为条件性迁移方案，不在首版实现或安装包中。Process、其他业务工具及第三方执行插件不进入当前接口范围。
+Responses 为无状态实现，本地历史、工具结果、压缩和恢复由 Runtime 管理。response.completed 不代表整个任务已完成；API 的并行工具参数不能替代 Runtime 串行策略。
 
 ## 待验证项
 
 | 验证项 | 阶段 | 判定依据 |
 | --- | --- | --- |
-| 核心无平台依赖、生产包启动 | M0 | 独立类型检查、干净 Windows 安装 |
-| HTTP SSE、取消与释放 | M0 | 真实插件传输，覆盖响应头前与流中取消 |
-| SQL 事务与迁移 | M0 | 中途失败回滚、重复请求、实际连接设置 |
-| 权限、密钥与 WebView 生命周期 | M0 | 原生命令检查、持久记录检查、重载核对 |
-| 模型消息与 reasoning 回放 | M2 | 固定回放及真实 API 契约 |
-| 文件替换、外部冲突、撤销 | M3 | 版本变化、占用及竞态记录 |
-| 中断恢复、压缩、升级与质量 | M4 | 故障注入、固定代码任务、安装验收 |
+| Core 无平台依赖 | M0 | 独立类型检查及内存测试宿主 |
+| Runtime 独立运行、Node/SQLite 打包 | M0 | 无 WebView 集成测试及干净 Windows 安装 |
+| 私有传输、背压、进程退出 | M0 | 管道分片、Host 故障及残留进程检查 |
+| Client 重连与去重 | M1 | 同一 Run 重订阅，状态及事件一致 |
+| Responses 输出项、事件与回放 | M2 | DS 固定回放及真实 API 契约 |
+| 文件替换、冲突和撤销 | M3 | 版本变化、文件占用及竞态记录 |
+| 中断恢复、压缩、迁移与分发 | M4 | 故障注入、固定任务和安装验收 |
 
-发布记录包含应用、Tauri 插件、WebView2、模型配置、工具和数据 schema 版本，以及日期、结果与已知限制。
+发布记录包含应用、Core、Protocol、Runtime、Node、原生模块、WebView2、模型配置及数据 schema 版本，以及日期、测试结果和已知限制。

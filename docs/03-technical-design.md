@@ -2,233 +2,226 @@
 
 适用版本：v0.1 · 更新日期：2026-09-14
 
-## 1. 架构与职责
+## 1. 架构
 
 ```mermaid
 flowchart LR
-    UI[React 界面] --> APP[应用服务]
-    APP --> ENGINE[纯 TypeScript 引擎]
-    ENGINE --> PORTS[文件 / 存储 / HTTP 接口]
-    PORTS --> ADAPTERS[Tauri 适配器]
-    ADAPTERS --> NATIVE[原生插件与受限命令]
-    NATIVE --> FILES[项目代码]
-    NATIVE --> DB[(SQLite)]
-    NATIVE --> MODEL[DeepSeek API]
+    UI[Desktop Client] --> SDK[Client SDK]
+    SDK --> BRIDGE[Tauri 传输桥]
+    BRIDGE --> RPC[Runtime RPC]
+    subgraph R[Node.js sidecar]
+        RPC --> CORE[TS Agent Core]
+        CORE --> PROVIDER[Responses Provider]
+        CORE --> TOOLS[工具执行器]
+        CORE --> STORE[Store Worker]
+    end
+    PROVIDER --> API[DeepSeek Responses API]
+    TOOLS --> FILES[授权项目]
+    STORE --> DB[(SQLite)]
 ```
 
-首版的界面、应用服务和引擎位于同一 WebView；图中为模块边界，不代表独立进程。
+Core 在 Runtime 进程中执行。Client 通过协议连接 Runtime，不在 WebView 中创建 Agent 循环。
 
-| 模块 | 职责 |
-| --- | --- |
-| UI | 项目树、对话、状态、代码和差异预览 |
-| AppService | 持有唯一引擎实例、用户命令、事件投影及生命周期 |
-| task-engine | 模型循环、工具规则、修改计划、上下文与恢复决策 |
-| adapters/tauri | 把核心接口转换为 Tauri 插件调用或原生命令 |
-| Native | 窗口、可信项目登记、文件提交、事务、凭据及能力限制 |
+| 部分 | 职责 | 状态归属 |
+| --- | --- | --- |
+| Agent Core | 循环、取消、工具调度、上下文及状态转换 | 当前执行的内存状态 |
+| Runtime | 装配 Core、Provider、文件工具、存储、RPC 和恢复 | 任务、授权、事件及操作记录的唯一权威 |
+| Client SDK | 类型化命令、订阅、重连和错误映射 | 连接状态及待确认请求 |
+| Desktop Client | 项目树、对话、差异、确认与设置 | 可重建的界面投影 |
+| Tauri Host | 窗口、系统选择器、凭据保护、sidecar 生命周期 | 进程句柄和系统资源 |
 
-引擎不依赖 DOM、React、Tauri、node:fs 或 Node 全局对象。运行平台由入口注入，不在核心中判断浏览器或 Node 环境。
+Rust 不实现模型循环、文件工具、数据库事务或业务状态机。Runtime 不调用桌面的 SQL、HTTP、文件插件。
 
 ### 核心接口
 
-| 接口 | 能力 |
-| --- | --- |
-| FileSystem | 项目内分页枚举、版本读取、提交已预检内容、核对操作 |
-| Storage | 读取历史、按预期版本原子提交状态和事件 |
-| HttpTransport | 返回状态、响应头及异步字节流，支持取消 |
-| Credentials | 会话内取得 Provider 凭据 |
-| RuntimeServices | 时间、ID、UTF-8 解码、让出执行权与取消订阅 |
+Core 定义 ModelProvider、ToolExecutor、Journal、Cancellation 和 RuntimeServices 接口，由 Runtime 注入。它不引用 DOM、React、Tauri、Node API 或数据库驱动。
 
-接口使用普通数据、Uint8Array、Promise 和 AsyncIterable；HTTP 的 Request/Response、DOM 事件与 AbortController 留在适配器。核心使用自有 Cancellation 接口，不要求 DOM 类型库。当前没有 Process 接口或命令执行工具。
+ModelProvider 返回规范文本、工具意图及不透明的 providerState；Core 保存该状态，但不解析 DeepSeek 字段。工具和存储接口均为异步接口，支持内存替身。当前不定义通用 Process 工具。
 
-### 目录
+### 工程边界
 
 ```text
-src/
-  ui/                 React 界面
-  app/                引擎实例、应用服务、装配
-  task-engine/
-    core/             状态、循环、取消与输入队列
-    providers/        DeepSeekProvider、FakeProvider
-    tools/            五个代码文件工具
-    policy/           修改计划与执行规则
-    context/          消息投影、预算、压缩
-    ports/            平台无关接口
-  adapters/tauri/      文件、SQL、HTTP、凭据和调度
-  shared/             数据 schema、ID 与错误码
-src-tauri/
-  src/                窗口、文件、事务、凭据命令
-  capabilities/       主窗口及插件权限
-  migrations/         版本化 SQL
-tests/                核心、原生集成、桌面、契约与评测
+apps/desktop/
+  src/                    React 界面、Client SDK 装配
+  src-tauri/              窗口、凭据、sidecar 与受限通信
+packages/
+  agent-core/             状态、循环、上下文、工具规则与接口
+  protocol/               RPC/事件 schema、协议版本、错误码
+  client/                 SDK 与可替换 Transport
+  runtime/
+    server/               RPC、任务服务、装配与生命周期
+    providers/            DeepSeekResponsesProvider、FakeProvider
+    adapters/             Node HTTP、文件、时间与取消
+    tools/                文件执行器、路径策略、ChangeWriter
+    storage/              Store Worker、SQLite 与迁移
+tests/                    fixtures、integration、desktop、evals
 ```
 
-不分发 Node runtime、sidecar 或 Node 原生模块。Node 仅用于开发构建和测试。
+依赖方向：Desktop → Client SDK → Protocol；Runtime → Core + Protocol。Core 不依赖 Client 或 Protocol；Runtime 将 Core 事件映射为对外事件。使用 npm workspaces 管理，所有包随同一应用版本发布，不单独发布 SDK。
 
-## 2. 生命周期与调用边界
+## 2. Runtime 生命周期与传输
 
-AppService 在应用入口创建一次，不随 React 组件挂载重复创建。启动顺序为原生初始化 → 数据库迁移 → 核对旧执行 → 加载历史 → 开放新任务。
+Tauri Host 从固定应用资源路径启动随包 Node 和 Runtime 入口，清除 NODE_OPTIONS、NODE_PATH 等注入项；不加载项目中的可执行配置，不使用模型提供的程序或启动参数。[sidecar 分发](https://v2.tauri.app/develop/sidecar/)
 
-任务循环采用异步 I/O；搜索、差异计算和消息处理分块执行，通过 RuntimeServices 定期让出线程，避免长同步循环阻塞取消按钮。首版不引入 Web Worker，后续仅在测量证明必要时增加。
+启动顺序：单实例检查 → 启动 Runtime → 协议握手 → 迁移及中断核对 → ready → Client 加载快照。Runtime 可由测试宿主独立启动，无须 WebView。
 
-正常关闭先取消模型和新工具，等待已开始的原生写入及数据库提交，再退出。页面重载或 WebView 崩溃会中断引擎，不能保证关闭后继续运行；窗口最小化与系统睡眠的行为单独验收。
+### 生命周期
 
-Host 为每次 WebView 初始化分配 sessionId；新会话拒绝旧会话尚未开始的写请求，先等待原生在途操作结束，再执行恢复核对。丢失返回值的文件操作按 unknown 处理，不因页面重载直接重试。
+| 情况 | 行为 |
+| --- | --- |
+| Client 刷新或重新挂载 | 重新订阅同一 Runtime，Run 不重新创建 |
+| Client 暂时断开 | Runtime 保留状态；已确认的固定批次可继续，新修改等待确认 |
+| Runtime 崩溃 | Host 最多重启一次；旧 Run 标为 interrupted，不自动重跑 |
+| 用户退出应用 | 停止派发，等待在途写入和存储完成，再关闭 Runtime |
+| Host 崩溃或管道关闭 | Runtime 停止接收任务并退出；Windows Job Object 清理残留进程 |
 
-### 应用服务
+副作用尚未明确时不得启动下一 Run。强制结束可能留下 unknown 操作，下一次启动按第 5 节核对。首版不作为脱离桌面的常驻服务运行。
 
-以下为 TypeScript 应用服务，不是全部暴露为原生 IPC 的方法。
+### 传输
 
-| 方法 | 主要参数 | 行为 |
+Client SDK 的 Transport 在桌面侧使用 Tauri invoke / Channel，Host 与 Runtime 使用私有 stdin/stdout；stdout 仅传 UTF-8 JSON Lines，stderr 仅输出脱敏日志。不启动本地监听端口。
+
+协议帧包含 protocolVersion、kind、id、method 和 payload；响应复用 id。握手返回 runtimeId、协议版本和能力；协议不兼容时拒绝启动。Runtime 重启生成新 runtimeId，使旧请求和临时流失效。
+
+读端处理 UTF-8 字节分片、多帧与残帧。单帧上限 8 MiB；队列有界并支持背压。持久事件可从数据库重放，临时文本增量允许丢弃，不允许丢失后静默继续展示错误状态。
+
+### 命令
+
+| 方法 | 参数要点 | 结果 |
 | --- | --- | --- |
-| `project.select` | 系统目录选择 | 原生侧登记可信 projectId |
-| `task.create/submit` | requestId、projectId/taskId、expectedRevision、text | 创建任务或新 Run |
-| `task.steer` | taskId、runId、requestId、text | 在批次结束后领取补充输入 |
-| `run.cancel` | taskId、runId、requestId | 接受停止，最终状态异步更新 |
-| `approval.resolve` | approvalId、planHash、decision、expectedRevision | 确认固定修改批次 |
-| `task.snapshot/subscribe` | taskId、afterSeq | 数据快照和进程内事件订阅 |
-| `changes.revert` | changeSetId、expectedRevision | 撤销预览与确认 |
-| `settings.saveKey` | providerId、key | 保存后只返回配置状态 |
+| `task.create` | requestId、projectId、text | taskId |
+| `task.submit` | requestId、taskId、expectedRevision、text | 新 runId |
+| `task.steer` | taskId、runId、requestId、text | 待领取输入 |
+| `run.cancel` | taskId、runId、requestId | 接受停止；终态由事件返回 |
+| `approval.resolve` | approvalId、planHash、decision、expectedRevision | 一次性固定确认 |
+| `task.snapshot/subscribe` | taskId、afterSeq | 一致快照或事件 |
+| `project.list/read/search` | projectId、相对路径/条件、分页 | 有范围限制的界面查询 |
+| `changes.revert` | changeSetId、expectedRevision | 撤销预览，确认后执行 |
 
-变更命令按 requestId 去重，expectedRevision 拒绝过期操作。UI 只调用应用服务，核心只调用注入接口；使用静态导入规则保持边界。
+业务变更按 requestId 持久去重，expectedRevision 拒绝过期操作。RPC id 用于关联一次传输，不能代替持久 requestId。
 
-原生 IPC 限于 project_select、file_list/read/apply/inspect、store_commit、session_open/drain 和 credentials 等必要命令。检查来源主窗口、sessionId、参数及资源范围；不提供任意程序执行、任意数据库路径或模型指定 SQL 的接口。
+目录选择和密钥保存是 Host 本地命令。Host 将系统选择器结果和凭据通过独立控制消息交给 Runtime；通用 Client RPC 白名单不得转发这些控制消息。Runtime 再校验项目真实路径，模型不能登记新根目录或读取密钥。
 
-## 3. 任务、事件与循环
+## 3. 状态与事件
 
 | 对象 | 定义 |
 | --- | --- |
-| Task | 一个项目中的持久任务与对话历史 |
-| Run | 一次启动或继续执行 |
-| Step / Attempt | 一步模型请求及工具批次 / 一次网络尝试 |
-| ToolCall | 模型原调用 ID、参数、顺序及最终结果 |
-| FileVersion | 项目、相对路径、原始字节哈希、编码与读取范围 |
-| ChangeSet | 固定修改批次、前后版本、确认及逐项结果 |
+| Task / Run | 持久任务 / 一次启动或继续执行 |
+| Step / Attempt | 一次模型响应及工具批次 / 一次网络尝试 |
+| ModelTurn | 规范结果、Provider 原始输出项、配置与协议版本 |
+| ToolCall | 内部 ID、模型 call_id、参数、顺序及结果 |
+| FileVersion | 项目、相对路径、字节哈希、编码与读取范围 |
+| ChangeSet | 固定修改批次、确认、前后版本及逐项结果 |
 
-v0.1 全局只运行一个 Run，工具串行。同一任务的继续操作创建新 Run。状态为 queued、running、awaiting_approval、cancelling，以及 completed、failed、cancelled、interrupted 四种终态；completed 的 outcome 区分 success 与 partial。
+全局只运行一个 Run，工具串行。继续已结束任务创建新 Run。状态包括 queued、running、awaiting_approval、cancelling，以及 completed、failed、cancelled、interrupted 四种终态；completed 的 outcome 区分 success 与 partial。
 
-单步流程：
+单步流程：冻结上下文 → 请求模型 → 完整校验并提交 ModelTurn 和工具意图 → 预检及确认 → 串行执行工具 → 提交完整结果组 → 请求下一步。Responses 的 response.completed 只代表本次模型响应结束，仍有工具时不能将 Run 标为完成。
 
-1. 保存输入，冻结本步上下文与模型配置。
-2. 检查取消、预算和未判定操作，发起模型请求。
-3. 完整聚合响应，提交 assistant 消息与工具意图。
-4. 校验工具参数；读操作直接执行，写操作生成固定预览并等待确认。
-5. 串行执行，按模型声明顺序补齐全部工具结果。
-6. 提交结果后进入下一步；模型结束时核对实际修改与失败项。
+半截输出不执行；拒绝、参数错误和取消均形成结构化工具结果。补充输入在工具批次结束后生效。连续三次相同调用及错误结束自动循环。需要用户解释时结束本轮，收到回答再创建 Run。
 
-半截流式调用不执行。被拒绝、未执行或取消的完整调用均有结构化结果。补充需求在工具批次结束后生效；连续三次相同调用及错误结束自动循环。需要用户解释时，模型提出问题并结束本轮，收到回答后创建新 Run。
+事件包含 eventId、taskId、runId、seq、type、timestamp 和 payload。状态、事件及请求去重结果在同一 SQLite 事务提交后发送。seq 在任务内递增；Provider 的 sequence_number 只标识一次模型流，两者不得混用。
 
-持久事件包含 schemaVersion、eventId、taskId、runId、seq、type、timestamp、payload。状态、事件及命令去重结果在同一事务提交后发送。seq 在任务内递增，时间使用 UTC ISO-8601。
+Client 先订阅缓冲，再读取带 lastSeq 的快照，只应用更大的 seq；缺号或 runtimeId 改变时重新同步。快照读取也通过 Store Worker，保证状态与 lastSeq 一致。
 
-文本增量按 30–50 ms 合并，不逐 token 落盘；携带 runId、attemptId、streamRevision。UI 先订阅缓冲，再读取快照，只应用大于 lastSeq 的事件；缺号时重新同步。重试重置当前预览，不拼接旧 Attempt。
+临时文本每 30–50 ms 合并发送，携带 runId、attemptId 和 streamRevision。重试重置预览；正文 delta 不逐 token 落盘，完整输出及最终 usage 随 ModelTurn 保存。
 
-## 4. 工具契约
+## 4. 文件工具
 
-仅注册以下五个模型工具：
+仅注册五个 function 工具，工具 schema 和 effect 由 Runtime 固定注册：
 
-| 工具 | 输入 | 结果与约束 |
+| 工具 | 输入 | 行为 |
 | --- | --- | --- |
-| `list_files` | projectId、相对目录、游标 | 按忽略规则分页枚举代码与配置文件 |
-| `read_file` | projectId、相对路径、行区间 | 文本、行号、fileVersionId、原始字节 SHA-256 |
-| `search_text` | projectId、字面量、路径范围、游标 | 文件、行号和上下文；不接受任意正则 |
-| `write_file` | projectId、相对路径、content | 仅新建；父目录须存在，目标存在即冲突 |
-| `edit_file` | fileVersionId、edits | 已读取版本的精确文本替换，生成差异后确认 |
+| `list_files` | projectId、相对目录、游标 | 分页列举源代码及配置文件 |
+| `read_file` | projectId、相对路径、行区间 | 文本、行号、fileVersionId、SHA-256 |
+| `search_text` | projectId、字面量、路径范围、游标 | 命中位置与上下文，不接受任意正则 |
+| `write_file` | projectId、相对路径、content | 仅新建；父目录须存在，重名即冲突 |
+| `edit_file` | fileVersionId、edits | 基于已读版本进行唯一匹配的文本替换 |
 
-edits 为 oldText/newText 列表，针对同一原始版本预检；每项必须唯一匹配且互不重叠，新增文本沿用原文件换行风格。不同调用不得在同一待确认批次内修改同一路径；后续修改需重新读取版本。所有写入复用同一个 ChangeWriter。
+edits 为 oldText/newText 列表，针对同一基础版本校验唯一匹配且不重叠，新增内容沿用原换行风格。同一待确认批次不得重复修改同一路径；后续修改须重读。
 
-工具结果包含 callId、status、summary，可附 data、fileVersionIds、changeSetId、truncated、nextCursor、error。status 为 ok / error / denied / cancelled / unknown。工具 effect 由应用注册，不采用模型声明。
+所有操作通过 Runtime ResourceAccess / ChangeWriter，不接收 Client 指定的实现代码。Core 的参数校验和确认不能替代执行器的路径及版本复核。
 
-### 默认限制
+工具结果包含 status、summary，可附 data、fileVersionIds、changeSetId、truncated、nextCursor、error。status 为 ok / error / denied / cancelled / unknown；Provider 按原 call_id 回传结果。
 
-| 项目 | 初始上限 |
+| 限制 | 初始值 |
 | --- | --- |
 | 单 Run | 30 Step、100 次工具调用、20 分钟活动时间 |
-| 单文件 | 1 MiB，超限拒绝编辑 |
-| 文件枚举 | 单页 500 项，单次任务扫描 10,000 项 |
-| 读取或搜索结果 | 32 KiB，截断时返回下一位置 |
+| 单文件 | 1 MiB |
+| 枚举 | 单页 500 项，任务扫描最多 10,000 项 |
+| 读取或搜索结果 | 32 KiB，超限分页 |
 | 修改批次 | 10 个文件、2 MiB 新内容 |
 
-等待用户不计入活动时间。编码限 UTF-8，接受并保留已有 BOM、LF/CRLF；其他编码、二进制及混合换行文件返回明确限制，不自动转换。新文件默认 UTF-8 无 BOM、LF。
+等待用户不计入活动时间。仅支持 UTF-8，保留已有 BOM 和 LF/CRLF；拒绝其他编码、二进制及混合换行。新文件默认 UTF-8 无 BOM、LF。
 
-文件范围限源代码及相关文本配置。使用扩展名/文件名白名单与内容检查，遵循 .gitignore，并默认排除 .git、node_modules、target、dist、凭据及私钥。扫描直接解析忽略规则，不调用 Git，不执行项目配置。
+遵循 .gitignore，默认排除 .git、依赖、生成目录、凭据和私钥；使用源文件/配置文件白名单及内容检查。不执行 Git、项目配置、脚本或其他命令。
 
 ## 5. 修改、取消与恢复
 
-### 修改批次
+### 固定修改批次
 
-1. 读取并登记基础版本；校验路径、编码、大小和工具参数。
-2. 生成最终字节、差异与 ChangeSet，记录操作 ID、beforeHash、afterHash、工具版本及 planHash。
-3. 一次展示完整批次。确认仅适用于该 planHash；内容、版本或范围变化需重新预览。
-4. 执行前复核路径与哈希，先提交包含前后版本及备份位置的 prepared 记录；存储失败时不修改项目文件。
-5. 调用原生 file_apply，重新检查项目范围与哈希，备份落盘成功后才提交目标文件。新建采用排他创建；修改采用同目录暂存及替换，不以删除目标文件作为失败后的重试方式。
-6. 重新读取校验结果，提交逐项状态、实际哈希和工具结果。
+1. 登记读取版本，生成最终字节、差异、beforeHash、afterHash 和 planHash。
+2. 展示整个批次，确认只适用于该哈希、工具版本及项目范围；变化后重新预览。
+3. 执行前复核真实路径和当前哈希，持久保存 prepared 记录；存储失败则不写文件。
+4. ChangeWriter 保存并同步旧字节备份。新建采用排他创建；修改采用同目录暂存和替换，不以删除目标作为失败后的重试方式。
+5. 重读目标，核对哈希后保存实际结果和工具结果，再继续执行。
 
-路径检查覆盖大小写、分隔符、越界、保留名称、尾部点/空格和 ADS；拒绝 UNC、设备路径、符号链接及 junction，创建前检查父目录。权限限于用户选择的本地项目。
+路径策略覆盖大小写、越界、设备名、尾部空格/点及 ADS；拒绝 UNC、设备路径、符号链接和 junction。新建检查父目录。Node Runtime 以当前用户权限运行，此策略不是 OS 沙箱，也不能隔离恶意本机进程的路径竞态。
 
-每次写入前的版本检查用于发现外部编辑冲突，不提供与其他进程之间的原子 compare-and-swap 保证。修改期间不应由多个工具同时写同一文件；检查与写入间的竞态属于已知限制，见 M3 验证。
+哈希检查可发现提交前的版本变化，不提供与外部编辑器之间的原子 compare-and-swap。多文件逐项提交，无整批原子性保证。
 
-多文件逐项提交，不保证整批原子性。撤销也生成固定预览；仅当当前字节匹配原 afterHash 时还原备份。撤销新建文件仅可移除仍匹配记录的该文件，不能扩展为通用删除操作。
+撤销也展示固定预览，只有当前哈希等于原 afterHash 才还原备份。撤销新建仅可移除仍匹配记录的该文件，不提供通用删除工具。
 
 ### 取消
 
-Cancellation 接口贯穿 Provider、搜索及工具调度；HTTP 适配器将其转换为 AbortSignal。取消立即阻止新请求和新工具；已进入文件提交阶段的操作等待完成并记录真实结果，不能把取消请求当作已撤回写入。
+Core 使用 Cancellation，Runtime 将其映射为 HTTP AbortSignal 和工具取消检查。取消先阻止新请求与新工具；已经进入文件提交阶段的操作须等结果明确后停止，不把“收到取消”视作撤回写入。
 
-UI 在 200 ms 内显示“正在停止”。只有在途操作结果明确后才进入 cancelled；进程被终止或结果不明进入 interrupted。停止不自动撤销已完成修改。
+Client 在 200 ms 内显示正在停止。实际停止后为 cancelled；进程被终止或副作用不明为 interrupted。等待确认时释放事务和文件锁。已完成修改保留，不自动撤销。
 
-### 恢复
+### 恢复规则
 
-| 中断位置 | 处理 |
+| 中断位置或当前状态 | 处理 |
 | --- | --- |
-| assistant 未完整提交 | Attempt 中断，不执行其工具 |
-| prepared 已保存、尚未开始 | 用户继续后重新校验，旧确认失效 |
-| 写操作开始、无最终记录 | 标记 unknown，核对目标、暂存与备份 |
-| 文件等于 afterHash | 记录目标已达到预期状态，补齐结果；不重复写入 |
-| 文件等于 beforeHash | 记录当前仍为原状态，重新预览后才可重试 |
-| 文件不匹配前后版本 | 保留 unknown，提示人工核对 |
-| 结果已提交、模型未继续 | 复用工具结果，仅恢复模型请求 |
+| 模型流未完整提交 | Attempt 中断，其工具不执行 |
+| 工具意图已提交、未开始 | 用户继续后重验范围、版本和确认 |
+| 写操作开始、无最终记录 | 标为 unknown，核对目标、暂存和备份 |
+| 目标等于 afterHash | 补记当前已达到预期状态，不重复写 |
+| 目标等于 beforeHash | 保留当前原状态，重新预览确认后才可重试 |
+| 目标不匹配前后版本 | 保留 unknown，等待人工核对 |
+| 工具结果已提交、模型未继续 | 复用结果，仅恢复模型请求 |
 
-unknown 阻止后续自动修改。文件哈希可确认当前内容，不能证明是哪一个进程完成写入；恢复记录不夸大执行事实。
+unknown 阻止新的自动修改。哈希证明当前内容，不能证明写入者。Runtime 恢复持久历史后，Provider 重建完整 Responses input，不依赖服务端 response ID 续接。
 
-## 6. 存储与事务
+## 6. 存储、凭据与诊断
 
-采用 Tauri SQL 插件的 SQLite 驱动。数据库连接和 migration 由原生插件管理；TypeScript StorageAdapter 管理查询、状态映射及提交请求。
+数据位于 `%LOCALAPPDATA%\Tilot`，开发使用 Tilot-Dev；数据库为 data/tilot.sqlite，操作备份为 `tasks/<taskId>/operations`。Client 不直接访问这些数据。
 
-逻辑数据库为 `sqlite:tilot.sqlite`，实际位置以插件的 app_config_dir 为准；代码备份使用 app_local_data_dir 下的 operations 目录。开发与正式版本采用不同应用标识。设置页可查看实际路径，避免硬编码盘符。[SQL 插件](https://v2.tauri.app/plugin/sql/)
-
-### 事务边界
-
-当前插件 JavaScript 接口未暴露事务对象，后端单次查询从连接池执行。不能用多个 execute 调用拼接 BEGIN / COMMIT，也不能把 migration 的事务能力当作任务事务。[JS 接口](https://github.com/tauri-apps/plugins-workspace/blob/v2/plugins/sql/guest-js/index.ts) · [连接池实现](https://github.com/tauri-apps/plugins-workspace/blob/v2/plugins/sql/src/wrapper.rs)
-
-增加一个原生 store_commit 命令：从插件管理的 SQLite 池取得单个连接，在同一事务中校验 revision、写入状态/事件/请求去重记录，再提交；任一步失败则回滚。复用插件公开的 DbInstances/DbPool，不创建第二套数据库。[插件实现](https://github.com/tauri-apps/plugins-workspace/blob/v2/plugins/sql/src/lib.rs)
-
-提交参数为版本化记录集合，Rust 使用固定 SQL 模板和参数绑定，不接收模型生成 SQL。所有业务写入经过此命令，原生侧串行化提交；插件用于初始化和固定查询。事务不跨用户等待、HTTP 请求或文件 I/O。
-
-M0 检查实际连接的 foreign_keys、synchronous、journal_mode 和 busy_timeout；所需设置作用于真实写连接，不假设一次 PRAGMA 会配置整个连接池。
+Store Worker 使用 better-sqlite3，独占数据库写连接；启用外键、WAL、busy timeout 和 synchronous=FULL。事务在 Worker 内完整执行，失败整体回滚，不跨网络、文件 I/O 或用户等待。[SQLite WAL](https://www.sqlite.org/wal.html)
 
 | 表 | 内容 |
 | --- | --- |
-| projects / tasks / runs | 根目录登记、revision、last_seq、状态和配置快照 |
-| messages / attempts | 规范模型历史、网络尝试、usage 与错误 |
-| tool_calls / change_sets / operations | 参数、批次、前后版本、备份和逐项结果 |
-| approvals / file_versions | 固定确认、读取版本及定位 |
-| events / commands / inbox | 持久事件、请求去重及补充输入 |
-| compactions | 压缩边界与摘要 |
+| projects / tasks / runs | 根目录、revision、last_seq、运行状态和配置 |
+| model_turns / response_items | 规范投影、原始输出项、原顺序及 Provider schema |
+| attempts / tool_calls | 网络尝试、usage、原 call_id、参数与结果 |
+| change_sets / operations / approvals | 固定计划、备份、前后哈希及确认 |
+| file_versions / events / commands / inbox | 读取版本、持久事件、请求去重及补充输入 |
+| compactions / schema_migrations | 摘要边界与数据版本 |
 
-失败 Attempt 的临时预览不进入规范历史。迁移版本由插件管理，避免另建不一致的迁移账本。数据库与项目文件仍不是同一事务，按第 5 节操作记录恢复。
+数据库和项目文件不共享事务，通过操作记录恢复。升级先作一致备份，再按版本迁移；失败停止写入，高版本 schema 拒绝降级。任务删除只清理私有历史和备份，不触碰项目源文件。
 
-升级前停止执行并制作数据库一致备份，同时包含本地操作备份目录；不能直接复制仍在写入的数据库主文件。迁移失败停止启动，较高 schema 拒绝降级写入。删除任务仅清理私有历史与备份，不删除项目代码。
+Host 使用当前用户范围 DPAPI 保存 Key，解密后仅经私有控制通道交给 Runtime 内存。Key 保存后不回传 WebView；设置查询仅返回配置状态。独立测试宿主通过同一凭据接口注入测试凭据，Runtime 不依赖桌面解密 API。[DPAPI](https://learn.microsoft.com/en-us/windows/win32/api/dpapi/nf-dpapi-cryptprotectdata)
 
-## 7. 权限、密钥与诊断
+Key 不进入命令行、环境变量、日志、事件或模型输入。保护失败时仅会话内使用；DPAPI 不隔离同用户恶意进程。历史和备份默认本地明文，被模型读取的代码会发往 DeepSeek。
 
-原生命令复核项目范围；Tauri capabilities 仅授予主窗口必要命令、SQL 和 HTTP 插件能力。应用命令须在构建清单中显式登记权限。核心接口和导入规则是模块边界，不是同一 WebView 内的安全隔离。[Capabilities](https://v2.tauri.app/security/capabilities/)
+## 7. 桌面边界
 
-HTTP 权限仅允许 DeepSeek 所需接口；关闭重定向，不关闭 TLS 验证。首版连接地址固定于应用支持的配置，模型不能更改。新增地址需同时修改适配器和原生能力配置。
+WebView 只暴露必要的 Host command，用于 RPC、Channel 订阅、目录选择和密钥保存。普通 `#[tauri::command]` 经 `invoke_handler` 注册后，默认可被应用内所有 window/webview 调用；仅配置 capability 不会自动将这些命令变成白名单。[Capabilities](https://v2.tauri.app/security/capabilities/)
 
-Host 使用当前用户范围的 DPAPI 保存 API Key。HTTP 适配器发起请求时，Key 会短暂进入 WebView 内存，再交给原生 HTTP 插件；不宣称密钥始终停留在 Rust。Key 不进入 React 状态、数据库、持久事件、日志或模型消息，用后释放引用；JavaScript 无法保证内存立即清零。[DPAPI](https://learn.microsoft.com/en-us/windows/win32/api/dpapi/nf-dpapi-cryptprotectdata)
+v0.1 在 `build.rs` 中通过 `AppManifest::commands` 为全部 Host command 生成权限，再由 capability 仅向受信任的主 WebView 授予所需权限。封装内部 plugin 并定义 permissions 也是可选方式，首版采用应用命令方案。[AppManifest](https://docs.rs/tauri-build/latest/tauri_build/struct.AppManifest.html#method.commands)
 
-WebView 仅加载随包页面，限制导航与新窗口，使用严格 CSP。代码、差异和 Markdown 按数据渲染，不执行 HTML、脚本或远程资源。模型只获得五个注册工具，不获得原生 IPC、数据库或网络接口。
+敏感 command 在 Rust 内再次校验调用来源和参数：使用 Tauri 提供的调用 WebView 信息核对身份与页面来源，不信任前端自报身份；限制 RPC 方法和帧大小，Channel 绑定已校验的调用方。Runtime 继续校验任务归属、根目录及执行状态。ACL 约束命令调用权限，业务校验由 Host/Runtime 负责。
 
-任务历史与备份默认明文保存在本机，被模型读取的代码会发送至 DeepSeek。DPAPI 不隔离同用户恶意进程；首版不加载第三方可执行插件或不可信页面。
+不向 WebView 提供通用 shell、数据库、文件或 HTTP 能力；不授予远程页面调用权限。
 
-错误码至少包含 AUTH_INVALID、RATE_LIMITED、PROVIDER_PROTOCOL_ERROR、INPUT_INVALID、FILE_CHANGED、FILE_EXISTS、FILE_LOCKED、UNSUPPORTED_ENCODING、ACCESS_DENIED、EXECUTION_UNKNOWN、CANCELLED、STORAGE_ERROR。
+Client 仅加载随包页面，设置 CSP，限制导航和新窗口。代码、差异和 Markdown 按数据渲染，不执行脚本或加载远程资源。模型不具备注册工具、调用 RPC 或扩展授权的能力。
 
-日志保留关联 ID、耗时、错误类别和 usage，不记录全文代码或请求头。应用只能确认文件读写结果，不能声称已经编译、运行或通过测试。
+日志记录关联 ID、耗时、错误分类与 usage，默认不记录代码全文或请求头。缺失 usage 标为未知。应用只确认文件读写结果，不声明编译、运行或测试通过。

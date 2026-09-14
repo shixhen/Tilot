@@ -4,74 +4,74 @@
 
 ## 1. 选型结论
 
-采用 **Tauri 2 + React + TypeScript**。任务引擎为独立 TypeScript 模块，首版与界面运行于同一 WebView，通过适配器访问文件、数据库和 HTTP。
+采用 **TS Agent Core + Client/Runtime 解耦**架构。Client 使用 Tauri 2 + React；Runtime 使用独立 Node.js sidecar，加载 Agent Core 并提供文件、模型和存储能力。
 
-当前五个代码文件工具不需要 Node 专属运行能力，因此首版不分发 Node.js，也不设置默认 sidecar。开发和测试仍使用 Node 工具链。
+Agent Core 是业务核心，Runtime 是执行环境，Client 是用户界面。Core 不依赖平台，Runtime 不依赖桌面界面，Client 通过版本化协议访问 Runtime。
 
-Tauri 插件提供原生实现的 JavaScript 接口。Rust 保留在插件注册、窗口、凭据、受限文件操作和数据库事务桥接中；模型循环、工具规则和上下文逻辑使用 TypeScript。[Tauri 架构][T1]
+sidecar 指随应用安装、由桌面宿主启动的后台程序。Tauri 支持分发 Node 运行环境与 JavaScript 资源，用户无需自行安装 Node.js。[官方说明][T1]
 
-## 2. 架构边界
+## 2. 采用独立 Runtime 的依据
 
-| 层 | 职责 | 依赖约束 |
+| 目标 | 对应设计 |
+| --- | --- |
+| 界面与执行分离 | 页面刷新后重新订阅，任务及模型连接由 Runtime 持有 |
+| 核心可独立验证 | Core 注入 Provider、工具执行器和存储接口，可使用内存替身测试 |
+| 客户端可替换 | Client 仅依赖协议；核心不引用 React、Tauri 或 UI 数据结构 |
+| 文件状态有统一归属 | Runtime 统一管理授权、修改记录、数据库与恢复 |
+| 控制 Rust 范围 | Rust 仅负责窗口、系统对话框、凭据和进程通信 |
+
+代价是 Node 运行环境、SQLite 原生模块和跨进程协议的维护。选择依据为执行边界及可维护性，安装大小和内存必须实测。
+
+独立进程不等于常驻服务。首版随桌面应用启动和退出；界面刷新不会终止任务，退出应用会停止 Runtime。
+
+## 3. 依赖边界
+
+| 部分 | 允许依赖 | 禁止依赖 |
 | --- | --- | --- |
-| task-engine | 任务状态、模型循环、工具、上下文 | 不引用 DOM、React、Tauri 或 Node API |
-| adapters/tauri | FileSystem、Storage、HTTP、凭据适配 | 将核心接口映射至插件或原生命令 |
-| ui | 项目树、对话、代码与差异预览 | 通过应用服务操作任务 |
-| native | 权限范围、文件提交、事务、系统集成 | 不实现模型或提示词逻辑 |
+| Agent Core | 普通 TypeScript 类型、注入接口 | DOM、React、Tauri、Node API、SQLite 驱动 |
+| Runtime | Core、协议、Node 适配器、具体 Provider | React、WebView、桌面插件 |
+| Client SDK | 协议、注入的通信接口 | Core 内部实现、Node API |
+| Desktop | Client SDK、React、Tauri | Runtime 内部模块、数据库和模型凭据读取 |
 
-接口注入指由应用向引擎提供文件、存储等能力，而不是由引擎自行导入平台 API。以后更换运行环境时，主要替换适配器。
-
-首版没有命令执行需求，不预设 Process 接口。只有出现 Node 专属依赖，或实测证明需要独立运行环境时，再评估 sidecar。
-
-WebView 方案减少分发依赖，但引擎与界面共享线程和生命周期：页面重载会中断循环，长时间同步计算会影响交互。采用分页、异步 I/O 和协作调度；不承诺关闭应用后继续运行。
-
-## 3. 关键选型核查
-
-| 项目 | 采用方案 | 必须补充的约束 |
-| --- | --- | --- |
-| 数据库 | Tauri SQL 插件 + SQLite | migration 不等于业务事务；原生侧提供单连接事务提交 |
-| 网络 | Tauri HTTP Client | 验证响应体流式读取、取消和超时；限制 API 地址 |
-| 桌面测试 | WebdriverIO + @wdio/tauri-service | Windows 使用 external 驱动模式，生产包不含测试入口 |
-| 模型 | 可配置的 DeepSeekProvider | 按日期核查模型 ID、能力和返回模型，不自动替换用户配置 |
-
-SQL 插件支持 SQLite 和 migration，但当前 JavaScript 接口只有 load/get、select、execute、close 等方法，没有显式事务对象。连续调用 BEGIN、写入和 COMMIT，不能假设使用连接池中的同一连接。[SQL 插件][S1]、[接口源码][S2]
-
-HTTP 插件提供 fetch 接口；当前实现支持响应体读取与取消。能完成普通 JSON 请求不足以证明 SSE 可用，需在实际 WebView2 和锁定插件版本中验证。[HTTP Client][H1]、[实现源码][H2]
-
-官方推荐通过 WebdriverIO 与 @wdio/tauri-service 使用 Tauri WebDriver；直接使用 tauri-driver 仍是 Windows 可用路线。[测试指南][W1]
+Runtime 直接发起模型请求、读写项目和数据库。桌面宿主只提供原生交互和启动凭据，不成为文件、HTTP 或事务的中转层。
 
 ## 4. 技术栈
 
 | 层 | 组件 |
 | --- | --- |
-| 界面与构建 | React、CSS Modules、TypeScript、Vite、npm |
-| 任务引擎 | 独立 TypeScript 模块、Zod、eventsource-parser |
-| 文件 | 受限 Tauri 文件命令；文本搜索与编辑规则在 TypeScript 中 |
-| HTTP | @tauri-apps/plugin-http |
-| 存储 | @tauri-apps/plugin-sql、SQLite、原生事务命令 |
-| 桌面与分发 | Tauri 2、Rust、NSIS、WebView2 |
+| 桌面 Client | Tauri 2、React、CSS Modules、Vite |
+| Agent Core | TypeScript、Zod、平台无关接口 |
+| Runtime | Node.js 24 LTS、TypeScript、Node 文件与网络 API |
+| 模型 | DeepSeekResponsesProvider、Node fetch、eventsource-parser |
+| 存储 | SQLite、better-sqlite3、独立 Store Worker |
+| 构建与分发 | npm workspaces、esbuild、Tauri externalBin、NSIS |
 | 测试 | Vitest、WebdriverIO、@wdio/tauri-service、cargo test |
 
-文件命令保留在原生侧，用于统一检查项目范围和完成不可拆分的文件提交步骤。数据库迁移以版本化 SQL 文件维护，Rust 注册执行。
+Node、后台 JavaScript 和原生依赖作为一个应用版本分发。SQLite 在 Runtime 内提交事务；Client 不使用 Tauri SQL 或 HTTP 插件。[Node 发布周期][N1]、[SQLite 驱动][S1]、[外部程序分发][T2]
 
-M0 锁定 npm、Cargo 依赖及测试驱动版本，验证原生插件、事务与生产安装包。安装体积、内存和响应速度均以实测为准。
+M0 锁定具体版本，优先验证生产包的 Node/SQLite 兼容性、资源定位和进程退出。
 
-## 5. 参考项目与模型
+## 5. 模型协议
+
+首版仅实现 **Responses API**，保留 ModelProvider 抽象。采用独立输出项和语义事件组织模型结果，适配任务记录及流式展示。[Responses 指南][D1]
+
+DeepSeek 的 Responses 是无状态接口：历史由应用保存，不能依赖 previous_response_id、服务端会话或后台任务。代码工具仍由 Runtime 执行，协议不会代替文件授权和恢复。[接口说明][D2]
+
+使用 `deepseek-flash` 作为默认模型，模型 ID、能力及实际返回值独立记录。Chat Completions 仅作为协议比较背景，不在首版维护第二套实现。
+
+## 6. 参考项目
 
 | 项目 | 参考内容 | Tilot 采用的设计 |
 | --- | --- | --- |
-| Pi | Agent Loop、消息投影、事件流 | 核心独立于 UI；模型历史与界面状态分离 |
-| Codex | 工具 orchestrator | 统一校验、确认、执行和结果记录 |
-| DeepSeek Harness | 模型适配、工具流水线 | Provider 接口和统一工具边界 |
+| Pi | Agent Loop、消息投影、事件流 | 小核心、运行环境注入、历史与界面分离 |
+| Codex | 工具 orchestrator、应用服务协议 | 执行统一入口及客户端/运行时边界 |
+| DeepSeek Harness | Provider、工具流水线、桌面后台 | 模型适配与执行分层 |
 
-参考源码及固定提交见 [来源记录](06-sources-and-decisions.md)。当前范围不引入完整插件框架。
+固定提交及原始资料见 [来源记录](06-sources-and-decisions.md)。首版不引入完整插件框架或其他业务工具。
 
-截至核查日，DeepSeek 官方要求使用 `deepseek-flash`；`deepseek-v4-flash` 属兼容旧名称，已转由新 Flash 模型服务。`deepseek-v4-pro` 仍在提供服务。默认配置保留 `deepseek-flash`，接入前复核模型表。[模型说明][D1]
-
-[T1]: https://v2.tauri.app/concept/architecture/
-[S1]: https://v2.tauri.app/plugin/sql/
-[S2]: https://github.com/tauri-apps/plugins-workspace/blob/v2/plugins/sql/guest-js/index.ts
-[H1]: https://v2.tauri.app/plugin/http-client/
-[H2]: https://github.com/tauri-apps/plugins-workspace/blob/v2/plugins/http/guest-js/index.ts
-[W1]: https://v2.tauri.app/develop/tests/webdriver/
-[D1]: https://api-docs.deepseek.com/quick_start/pricing/
+[T1]: https://v2.tauri.app/learn/sidecar-nodejs/
+[T2]: https://v2.tauri.app/develop/sidecar/
+[N1]: https://nodejs.org/en/about/previous-releases
+[S1]: https://github.com/WiseLibs/better-sqlite3
+[D1]: https://api-docs.deepseek.com/guides/responses_api/
+[D2]: https://api-docs.deepseek.com/api/create-response/

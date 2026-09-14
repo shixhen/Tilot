@@ -4,64 +4,68 @@
 
 ## 1. 里程碑
 
-估算 20–31 个开发日；按单人全职、预留 20% 余量计，约 5–8 周。估算假设具备 TypeScript 开发能力，Tauri 与 Rust 桥接的学习成本在 M0 后复核。
+估算 22–35 个开发日；按单人全职、预留 20% 余量计，约 6–9 周。假设具备 TypeScript 开发能力，Tauri、原生依赖及协议适配成本在 M0 后复核。
 
 | 阶段 | 工作量 | 交付 | 验收条件 |
 | --- | --- | --- | --- |
-| M0 平台原型 | 4–6 日 | WebView 引擎、HTTP/SQL 插件、文件及事务桥接、安装包 | 真实流式取消、事务回滚和无开发环境启动通过 |
-| M1 项目与任务 | 3–5 日 | 项目树、读取、搜索、历史、FakeProvider | 文件范围正确；任务与事件重启后可恢复 |
-| M2 模型与循环 | 4–6 日 | DeepSeekProvider、工具循环、流式展示、取消 | 真实模型完成代码查找；DS 契约通过 |
-| M3 修改与撤销 | 5–8 日 | 新建、精确编辑、差异预览、批次确认、备份 | 冲突检测、部分成功、取消与撤销结果明确 |
-| M4 恢复与发布 | 4–6 日 | 中断核对、压缩、迁移、评测、安装升级 | 故障恢复及发布门槛通过 |
+| M0 平台原型 | 5–7 日 | workspaces、Core 接口、Node sidecar、RPC、SQLite、安装包 | 无开发环境可运行；Runtime 可独立测试，事务与退出通过 |
+| M1 Client/Runtime | 4–6 日 | SDK、任务服务、事件同步、项目读取与 FakeProvider | Client 刷新后接回同一 Run，无重复动作 |
+| M2 Responses | 4–7 日 | Provider、输出项存储、SSE、工具循环与取消 | 真实服务完成多轮代码查找，DS 契约通过 |
+| M3 修改与撤销 | 5–8 日 | 新建、编辑、差异、批次确认及备份 | 冲突、部分成功、取消和撤销结果明确 |
+| M4 恢复与发布 | 4–7 日 | 故障恢复、压缩、迁移、评测、安装升级 | 发布门槛及干净环境验收通过 |
 
-按 M0 → M4 执行。操作 ID、版本指纹与持久事件从对应功能的首次实现建立，不在最后补加。
+按 M0 → M4 执行。持久 ID、事件和文件指纹从对应功能首次实现建立。首版不并行维护 Chat Completions Provider。
 
 ## 2. M0 验证清单
 
-1. 建立 task-engine、adapters/tauri 和 UI 边界；核心用不含 DOM/Node 类型的配置检查，禁止导入平台模块。
-2. 在实际 Windows WebView2 中验证 HTTP 插件的 SSE、响应头前取消、流中取消及 reader 释放。
-3. 验证 SQL migration 和 store_commit：同一连接内提交多条记录，任一语句失败全部回滚，重复请求返回原结果。
-4. 验证文件范围、中文路径、主窗口权限、密钥保存；页面重载时先核对原生在途写入。
-5. 在无开发环境的 Windows 安装生产包，验证 WebView2 缺失行为，测量体积、冷启动及全进程内存。
+1. Core 独立类型检查，不引入 DOM/Node 类型和平台模块；以 FakeProvider、内存 Journal 运行一次完整工具循环。
+2. 独立启动 Runtime，通过测试 Client 调用；进程启动不要求 WebView，工具、HTTP 和数据库不通过桌面插件。
+3. 验证 Runtime 请求去重、协议分片、队列背压和 Client 快照重连。
+4. 验证 Store Worker 的同连接事务：中途失败整体回滚，状态、事件和请求结果一致。
+5. 将固定 Node、Runtime JavaScript、Worker 入口和 SQLite 原生模块打包，验证中文/空格路径及资源定位。
+6. 验证 Host/Runtime 退出、管道断开、Job Object、凭据通道和无开发环境安装。
+7. 验证全部 Host command 均纳入应用权限清单；主 WebView 获授权后可调用，移除授权或换用未授权 WebView 时被拒绝。另验证 Rust 来源、参数校验及 Channel 绑定。
 
-真实 SSE 取消、单连接事务及 WebView 中断恢复是 M0 阻断项。普通 JSON 请求成功、mock 测试通过或 migration 成功，均不能替代这些验证。
+Node/SQLite 生产包兼容性与进程生命周期为 M0 阻断项。开发机可运行或浏览器 mock 通过，不能代替真实安装验收。
 
-版本管理包括 package-lock.json、Cargo.lock、Tauri 插件及测试驱动。发布包不含 Node runtime；开发工具版本与应用运行依赖分别记录。
+锁定 package-lock.json、Cargo.lock、Node 下载校验和及原生模块构建记录。桌面、SDK、Core 和 Runtime 同版发布。
 
 ## 3. 测试分层
 
-| 层级 | 工具与内容 |
+| 层级 | 工具与范围 |
 | --- | --- |
-| 类型与静态检查 | 核心无平台依赖、TypeScript 检查；Rust fmt、clippy |
-| 单元 | Vitest：协议聚合、状态、参数、路径、编辑与预算 |
-| 集成 | 原生测试宿主：文件提交、SQLite 事务、真实 HTTP；核心使用假模型注入故障 |
-| Rust 桥接 | cargo test：范围校验、文件版本、事务回滚、凭据与会话失效 |
-| 桌面 | WebdriverIO + @wdio/tauri-service：项目、对话、修改、停止和恢复 |
-| 服务契约 | 真实 DeepSeek，单独启用并记录模型及日期 |
-| 安装 | 普通 Windows 账户下安装、升级、卸载与数据保留 |
+| Core | Vitest、独立类型检查；内存替身验证循环、状态、取消与上下文 |
+| Runtime | Vitest；真实 Node 文件、SQLite、HTTP 和 stdio 故障注入 |
+| Protocol / Client | schema 兼容、重复请求、重连、旧事件及背压 |
+| Rust Host | cargo test、fmt、clippy；命令权限、来源与参数校验、RPC 白名单、凭据及进程生命周期 |
+| Desktop | WebdriverIO + @wdio/tauri-service；真实 Client/Runtime 交互 |
+| 服务契约 | 真实 DeepSeek Responses，单独启用并记录配置 |
+| 安装 | 普通 Windows 账户下安装、升级、卸载及数据保留 |
 
-按官方推荐使用 WebdriverIO + @wdio/tauri-service。Windows 选择 external 驱动模式，通过 tauri-driver 驱动匹配的 Edge WebDriver；生产包不包含嵌入式 WebDriver 或后端 mock 插件。浏览器 mock 用于界面测试，原生 I/O 验收使用真实应用。[Tauri WebDriver](https://v2.tauri.app/develop/tests/webdriver/)
+Windows E2E 使用 tauri-service 的 external 模式，通过 tauri-driver 和匹配的 Edge WebDriver 控制应用；生产包不含嵌入式测试服务或后端 mock 插件。[官方测试指南](https://v2.tauri.app/develop/tests/webdriver/)
 
-以下测试验证 Tilot 自身；应用不因此获得执行用户项目代码或测试命令的能力。
+测试验证 Tilot 自身，不向应用添加执行用户项目代码、构建或测试命令的能力。
 
 ### 关键用例
 
 | 编号 | 场景 | 通过条件 |
 | --- | --- | --- |
-| R-01 | UTF-8、BOM、CRLF、中文路径 | 未修改部分字节保持一致，差异与落盘内容一致 |
-| R-02 | 越界、设备路径、junction、ADS、UNC | 拒绝越界或不支持的路径 |
-| R-03 | 忽略目录、凭据、二进制、超大文件 | 不误读，不静默转换；超限有明确结果 |
-| R-04 | 搜索分页、结果截断、重复文本 | 定位正确，编辑不在多重匹配时猜测 |
-| R-05 | 重复提交、UI 重载、迟到原生结果、最小化/睡眠恢复 | 不重复写入，新会话核对旧操作，状态可恢复 |
-| R-06 | 预览后外部修改、重名、文件占用 | 提交前发现的冲突阻止写入 |
-| R-07 | 写前/写后取消、迟到确认、部分批次完成 | 停止新动作，保留准确的逐项结果 |
-| R-08 | 目标替换后、数据库提交前崩溃 | 先核对前后哈希，不自动重复写入 |
-| R-09 | 撤销前外部修改、新建文件撤销 | 冲突时不覆盖；删除仅限匹配记录的新建文件 |
-| R-10 | 事务中途失败、磁盘满、迁移失败 | 数据库批次完整回滚，外部文件按操作记录核对 |
-| R-11 | 源码中的指令、恶意预览、越权 IPC | 工具不扩权，预览不执行脚本，持久记录不含凭据 |
-| R-12 | API 失败、压缩、缺失 usage、取消 | 遵守 [DS 契约](04-deepseek-integration.md#8-契约测试) |
+| R-01 | UTF-8、BOM、CRLF、中文路径 | 未修改部分字节保持一致，差异与落盘一致 |
+| R-02 | 越界、设备路径、junction、ADS、UNC | 拒绝越界及不支持的路径 |
+| R-03 | 忽略目录、凭据、二进制、超大文件 | 不误读，不静默转换 |
+| R-04 | 分页、截断、重复文本 | 定位正确，编辑不在多重匹配时猜测 |
+| R-05 | Client 重载、重复 RPC、事件缺号 | 接回同一 Run，副作用不重复 |
+| R-06 | 预览后文件变化、重名、占用 | 检测到冲突时阻止写入 |
+| R-07 | 写前/写后取消、迟到确认、部分完成 | 停止新动作，保留准确逐项结果 |
+| R-08 | 写入后、数据库提交前杀死 Runtime | 重启先核对哈希，不盲目重试 |
+| R-09 | 撤销冲突、新文件撤销 | 不覆盖外部修改；删除仅限匹配记录的新建文件 |
+| R-10 | 事务失败、磁盘满、迁移失败 | 数据库回滚，外部文件按操作记录核对 |
+| R-11 | 恶意源码、预览、Client 越权消息 | 工具不扩权，不泄露持久凭据 |
+| R-12 | Responses 失败、压缩、usage、取消 | 遵守 [DS 契约](04-deepseek-integration.md#8-契约测试) |
+| R-13 | Host 崩溃、管道关闭、重复启动 | 无残留执行进程，无第二个写入者 |
+| R-14 | 核心迁移至内存测试宿主 | 无需 DOM、Tauri、SQLite 或真实模型即可运行 |
 
-M3 必须测试编辑器同时保存、替换时文件占用及外部修改竞态，记录可检测的冲突和不能保证的窗口，不将哈希检查表述为操作系统级写锁。
+M3 测试编辑器同时保存、替换时占用及外部修改竞态，记录已知限制，不把哈希检查表述为 OS 写锁。
 
 ## 4. 任务评测
 
@@ -69,23 +73,25 @@ M3 必须测试编辑器同时保存、替换时文件占用及外部修改竞�
 
 | 类别 | 数量 | 样例 |
 | --- | --- | --- |
-| 读取与定位 | 3 | 查找函数、跨文件调用关系、解释配置 |
+| 读取与定位 | 3 | 查找函数、跨文件关系、解释配置 |
 | 新建 | 2 | 在现有目录创建模块、目标重名 |
 | 修改 | 3 | 单点修复、多文件接口调整、保留 BOM/换行 |
 | 异常处理 | 2 | 文件版本变化、批次拒绝或部分失败 |
 
-每项记录固定输入、预期文件/行号或差异、允许修改的文件、模型配置和判定方法。修改任务检查最终字节、无关文件未变、说明与实际结果一致。
+每项记录输入、预期文件/行号或差异、允许修改范围、模型配置和判定方法。检查最终字节、无关文件未变及说明与实际结果一致。
 
-至少 9/10 项在三次中通过两次；权限、重复写入、已检测冲突及撤销保护用例须全部通过。记录耗时、请求数、工具数、usage 和人工干预。上述为验收目标，当前没有实测结果。
+至少 9/10 项在三次中通过两次；权限、重复写入、已检测冲突及撤销保护用例须全部通过。记录耗时、请求数、工具数、usage 和人工干预，并满足 [产品验收目标](02-product-plan.md#6-验收目标)。当前尚无实测结果。
 
 ## 5. Windows 分发
 
-采用 Tauri NSIS、Windows x64、按用户安装、手动升级。应用使用 WebView2 与编译进安装包的原生插件，不附带 Node runtime，也不要求用户安装 Rust 或 Node。
+采用 Tauri NSIS、Windows x64、按用户安装、手动升级。Node 可执行文件通过 externalBin 分发，Runtime、Store Worker 和原生依赖作为资源附带；生产包不依赖系统 Node、Rust 或编译器。[Node sidecar](https://v2.tauri.app/learn/sidecar-nodejs/)
 
-Windows 界面依赖 WebView2。首版采用 downloadBootstrapper，缺少运行环境时联网安装；已有运行环境时可离线打开本地界面，模型调用仍需联网。独立离线安装包不在本轮计划。[Windows 安装器](https://v2.tauri.app/distribute/windows-installer/)
+构建时使用 x86_64-pc-windows-msvc 目标对应的 sidecar 命名；锁定 Node 版本与 SQLite 原生模块 ABI。原生模块保留为独立资源并通过固定路径加载，不能遗漏在 JavaScript bundle 外的依赖。
 
-安装验收覆盖普通账户、中文路径、125%/150% 缩放、WebView2 已有/缺失、断网、代理失败、WebView 重载及崩溃。升级验证旧数据迁移和备份恢复；卸载默认保留任务数据，不触碰项目代码。
+Windows 界面依赖 WebView2；首版使用 downloadBootstrapper，缺失时联网安装。已有运行环境时可离线打开历史，模型调用仍需联网。[安装器](https://v2.tauri.app/distribute/windows-installer/)
 
-发布时验证应用和安装器签名，附依赖及许可证清单。[Windows 签名](https://v2.tauri.app/distribute/sign/windows/)
+安装验收覆盖普通账户、中文路径、125%/150% 缩放、WebView2 已有/缺失、代理失败及 Runtime 崩溃。升级验证数据与操作备份恢复；卸载保留任务数据，不触碰项目代码。
 
-不设其他业务能力的后续版本排期。当前阶段完成后，依据代码读写的实际使用结果确定下一步。
+公开发布验证应用与安装器签名，附依赖及许可证清单。[Windows 签名](https://v2.tauri.app/distribute/sign/windows/)
+
+后续能力不在本轮排期；完成代码读写和可靠性验收后再确定下一步。

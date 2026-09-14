@@ -1,23 +1,20 @@
-# DeepSeek 接入规范
+# DeepSeek Responses 接入规范
 
-适用版本：v0.1 · API 文档核查日期：2026-09-14
+适用版本：v0.1 · API 核查日期：2026-09-14
 
 ## 1. 协议与配置
 
-采用 DeepSeek 官方 Chat Completions。TypeScript Provider 通过注入的 HttpTransport 请求模型，Tauri 适配器使用 @tauri-apps/plugin-http；eventsource-parser 解析 SSE。Provider 不直接依赖浏览器 fetch、Node fetch 或 Tauri API。[API 入门][A1]、[HTTP 插件][A10]
+首版只实现 `POST https://api.deepseek.com/responses`。DeepSeekResponsesProvider 位于 Node Runtime，通过 HttpTransport 发起请求；Node fetch 处理 HTTP，eventsource-parser 处理 SSE。Core 只依赖 ModelProvider 接口。[接口定义][A1]
 
-截至核查日，默认模型为 `deepseek-flash`，可选 `deepseek-v4-pro`。官方将 `deepseek-v4-flash` 视为兼容旧名称，其请求转由新 Flash 模型服务，因此不将它替换为首选 ID。[模型说明][A3]
-
-模型 ID、能力和核查日期保存在版本化配置中，Provider 不按模型名称写死行为。保留用户选择，更新配置不自动改换模型；每次请求记录请求 ID 和实际返回的 model。首版 endpoint 限于 DeepSeek 官方地址，与 Tauri HTTP 权限一致，模型输出不能更改。
+应用配置示例：
 
 ```json
 {
   "schemaVersion": 1,
   "provider": "deepseek",
+  "api": "responses",
   "baseURL": "https://api.deepseek.com",
-  "api": "chat-completions",
   "model": "deepseek-flash",
-  "thinking": { "type": "enabled" },
   "reasoningEffort": "high",
   "contextBudgetTokens": 65536,
   "maxOutputTokens": 16384,
@@ -27,149 +24,203 @@
 }
 ```
 
-以上为应用配置。Provider 将 reasoningEffort、maxOutputTokens 映射为 `reasoning_effort`、`max_tokens`，并加入 messages、tools 和 stream；密钥独立传入。
-
-“快速”关闭推理，“标准”使用 high；高级选项提供 low/max。每次请求显式发送设置。推理模式不发送采样调参，tool_choice 使用 auto。strict 为 Beta，v0.1 默认关闭；本地始终校验工具参数。[推理参数][A2]、[工具约束][A4]、[请求字段][A5]
-
-## 2. Provider 契约
-
-| 对象 | 必要内容 |
+| 应用数据 | 请求字段 |
 | --- | --- |
-| ModelRequest | 模型配置、冻结消息、工具 schema、输出预算 |
-| Capabilities | tools、reasoning、strictTools、contextWindowTokens、reasoningReplay |
-| AssistantMessage | id、content、toolCalls、providerMetadata |
-| ToolCall | 原调用 ID、name、argumentsJson |
-| providerMetadata | reasoningContent、responseModel、requestId |
-| ProviderEvent | text_delta、reasoning_delta、tool_delta、completed 或 failed |
+| model | model |
+| 系统策略 | instructions，每次请求都发送 |
+| 本次所需历史 | input，按顺序排列消息、推理、调用及结果 |
+| reasoningEffort | reasoning.effort |
+| maxOutputTokens | max_output_tokens |
+| 工具声明 | tools 中的平铺 function 对象 |
+| 流式开关 | stream: true |
 
-调用入口为 `stream(request, cancellation): AsyncIterable<ProviderEvent>`。cancellation 使用核心接口，由适配器转换为 AbortSignal。工具增量包含 index 及可选 id、name、args；完成事件包含规范消息、finishReason 和可空 usage。
+“快速”对应 effort=none，“标准”对应 high；高级设置提供 low/max。输出预算包含推理与正文。模型 ID、能力和核查日期使用版本化配置，记录实际响应 model，不自动改换用户选择。[推理参数][A2]、[模型说明][A3]
 
-Provider 不执行工具。规范消息保存模型所需字段，界面预览由独立投影生成。请求与响应均做运行时校验。
+不发送 Chat Completions 的 messages、thinking、reasoning_effort 或 max_tokens 字段，不实现该协议的兼容分支。网络适配与协议适配分开，Tauri Client 不请求模型 API。首版固定 DeepSeek 官方地址，关闭 HTTP 重定向并保持 TLS 校验；模型不能更改 endpoint。
 
-## 3. 消息回放
+## 2. Provider 契约与兼容边界
 
-请求带 `tools` 时，保留上下文中所有历史 assistant 的 `reasoning_content`，包括未实际调用工具的轮次；无 tools 的请求不要求回传该字段。[Thinking Mode][A2]
+| 对象 | 内容 |
+| --- | --- |
+| ModelRequest | 配置快照、系统策略、规范历史、工具 schema、预算 |
+| ModelTurn | turnId、文本投影、toolCalls、providerState |
+| providerState | protocol、schemaVersion、responseId、按原顺序保存的完整 output |
+| ToolCall | 输出项 itemId、原 call_id、name、argumentsJson |
+| ProviderEvent | text_delta、reasoning_delta、tool_delta、completed、failed |
+| Completion | ModelTurn、响应状态、可空 usage、返回模型及请求标识 |
 
-实现规则：
+入口为 `stream(request, cancellation): AsyncIterable<ProviderEvent>`。Runtime 将 Core 的 Cancellation 转为 HTTP AbortSignal。Provider 不执行工具，不依赖 Client，不把原始 API 对象作为 UI 状态。
 
-1. 保存实际返回的 reasoning，区分字段缺失和空值。
-2. 新用户轮次、切换推理模式及界面折叠均不删除回放字段。
-3. 工具批次保持 assistant → 各 tool result 的完整配对，结果按声明顺序和原调用 ID 保存。
-4. 已提交调用的拒绝、错误与取消产生结构化结果；半截流式调用不进入规范历史。
-5. 旧历史缺少必要字段时，通过摘要建立新请求序列；不伪造推理或调用记录。
+DeepSeek 的实现无服务端会话存储，不支持 previous_response_id、conversation 或 background。每次请求从本地记录重建所需 input；responseId 仅用于追踪，不能作为服务端恢复凭据。[无状态约束][A1]
 
-Chat Completions 不支持任意插入模型未生成的工具调用。运行时摘要与上下文补充使用独立消息，不包装为虚构 tool call。[Tool Calls][A4]
+parallel_tool_calls 和 max_tool_calls 被服务忽略，调用数量及串行策略必须在 Runtime 执行。instructions 用于系统策略；该实现将 developer 角色作为 user 处理，不能靠它承载更高优先级指令。[兼容表][A4]
+
+首版只声明五个 function 工具，不使用 custom apply_patch 或服务端内置工具。对未支持的参数主动拒绝或省略，不以“服务端未报错”判断功能生效。
+
+## 3. 输出项与工具回放
+
+### 保存与投影
+
+保存完整 response.output、原始顺序、推理正文、arguments 字符串和两个不同的 ID：
+
+- itemId 是输出项的 id，用于匹配流式事件。
+- call_id 连接 function_call 与 function_call_output，用于模型工具回放。
+
+不得将所有输出项压成一条 assistant 文本，也不能把 itemId 当作 call_id。UI 仅从保存记录生成展示投影。
+
+发起下一步请求时，Provider 将已提交输出映射为 input 支持的字段，保留消息、reasoning.content、调用及结果的顺序。输出专用状态字段不用于控制权限。原始输出保留用于诊断，投影不能覆盖原记录。
+
+### 工具声明与结果
+
+Responses 的 function 字段位于工具对象顶层。以下仅示意读取工具：
+
+```json
+{
+  "type": "function",
+  "name": "read_file",
+  "description": "读取授权项目中的代码文件",
+  "parameters": {
+    "type": "object",
+    "properties": {
+      "projectId": { "type": "string" },
+      "path": { "type": "string" }
+    },
+    "required": ["projectId", "path"],
+    "additionalProperties": false
+  }
+}
+```
+
+Runtime 校验完整参数、授权和文件版本，执行后的结果按原 call_id 回传：
+
+```json
+{
+  "type": "function_call_output",
+  "call_id": "call_example",
+  "output": "{\"status\":\"ok\",\"data\":{\"path\":\"src/main.ts\",\"content\":\"...\"}}"
+}
+```
+
+对一个模型响应中的全部调用，按声明顺序补齐结果后再请求模型。拒绝、错误、未执行和取消也必须有结构化结果；未知副作用先恢复核对，不能当作成功。内部执行 ID 与模型 call_id 分别保存。[调用配对][A1]
+
+### 上下文回放规则
+
+1. 保留待回放响应中的 reasoning 项及其正文，不以 summary 或 encrypted_content 替代。
+2. 新用户轮次、界面折叠或重连不删除 Provider 所需字段。
+3. 以一个 ModelTurn 及其全部工具结果为完整消息组；禁止保留孤立调用或结果。
+4. 新请求先校验配对、ID 和类型。缺失必要历史时建立有明确摘要的新上下文，不伪造推理或执行记录。
+5. 协议允许补入宿主实际执行的工具记录，但首版不主动使用这一能力，不虚构模型调用。[工具历史说明][A5]
 
 ## 4. 流式处理
 
-HttpTransport 返回状态、响应头和 AsyncIterable<Uint8Array>。Tauri 适配器读取 response.body，不先调用 text/json 等待全量结果；RuntimeServices 提供流式 UTF-8 解码器，eventsource-parser 识别 SSE 帧，聚合器按 choice index、tool index 累积内容。跨字节分片不得分别解码，v0.1 仅请求一个 choice。[SSE 解析器][A9]
+HttpTransport 返回响应状态、头和异步字节流。使用流式 UTF-8 解码，处理跨字节分片，再由 SSE 解析器交给 Provider 聚合。不能先调用 text/json 等待整个响应。[SSE 解析器][A6]
 
-结束、失败或取消均释放响应体 reader。插件错误统一转换为 Provider 错误，不假设取消一定表现为浏览器 DOMException。当前插件实现支持响应流和取消，但实际行为须在锁定版本的 Windows WebView2 中验收。[HTTP 实现][A11]
-
-- 正文、reasoning、工具参数分别聚合，同一帧的各字段独立处理。
-- ID 和名称可仅出现在早期帧；参数完整后才解析 JSON 并校验 schema。
-- 心跳、空内容与 usage 帧不产生正文。
-- 完成标志、结束原因和消息结构全部合法后，提交 assistant 与工具意图。
-- 断流或重试使用独立 attemptId，重置预览，不拼接旧 Attempt。
-- usage 缺失标记未知。
-
-| finish_reason | 行为 |
+| API 事件 | 处理 |
 | --- | --- |
-| stop | 无工具时提交回答并检查交付 |
-| tool_calls | 完整调用提交后交执行器 |
-| length | 标记截断，不执行本次工具；可调整预算后有限重试 |
-| content_filter | 停止并报告 |
-| insufficient_system_resource | 按 Provider 策略有限重试 |
-| aborted、未知值、结构不一致 | 记录中断或协议错误，不派发工具 |
+| response.created / in_progress | 建立响应标识，确认本次 Attempt |
+| output_item.added / done | 按 output_index、itemId 登记和完成输出项 |
+| content_part.added / done | 跟踪正文或推理的内容块 |
+| output_text.delta / reasoning_text.delta | 更新独立预览缓冲 |
+| function_call_arguments.delta / done | 按输出项聚合参数，done 仍不触发执行 |
+| response.completed | 校验最终 response.status、完整 output 和 usage |
+| response.incomplete | 记录截断或过滤，不执行本次工具 |
+| response.failed | 按错误类别结束或有限重试，不执行本次工具 |
 
-字段及结束原因见 [Chat Completions][A5]。连接关闭本身不构成成功条件。
+表中省略前缀的事件均以 `response.` 开头。该流以终态事件结束，没有 `data: [DONE]`。连接关闭、item.done 或参数 done 均不能代替最终成功事件。[事件定义][A4]
 
-## 5. 超时与重试
+聚合规则：
 
-| 超时 | 初始值 |
+- sequence_number 在每个 Attempt 内递增，可有间隔；不充当任务事件 seq。重复号仅在内容完全相同时去重，冲突或倒序视为协议错误。
+- 正文、推理和工具参数独立累积；多个工具交错时按 itemId/output_index 区分。
+- done 与最终 output 是完整值，核对或替换对应缓冲，不能再次追加造成重复。
+- 只有最终状态 completed、输出结构完整且调用 ID 合法，才提交 ModelTurn 和工具意图；随后校验工具参数。参数失败产生结构化错误结果，不派发实际操作。
+- completed 仍可能携带 function_call。此时进入工具执行和下一次模型请求，不结束 Run。
+- incomplete、failed、断流及本地取消的部分 output 只保存为 Attempt 诊断，不进入可执行历史。
+- usage 缺失标为未知。未知且影响执行的输出类型按协议错误处理，不静默丢弃后继续。
+
+每次重试建立新 attemptId、清空临时缓冲，复用冻结请求；不把新流接在旧流尾部。结束、失败和取消均释放 reader 及连接资源。
+
+## 5. 超时、重试与恢复
+
+| 预算 | 初始值 |
 | --- | --- |
 | 连接或响应头等待 | 30 秒 |
-| 已连接但无有效模型输出 | 180 秒 |
+| 无有效模型输出 | 180 秒 |
 | 单请求总时长 | 600 秒 |
+| 自动重试 | 最多 2 次 |
 
-服务可能发送 keep-alive；心跳不延长应用的无输出上限。[连接行为][A6] 计时器按实际传输阶段实现，取消优先于重试。
+心跳不延长无输出上限。Provider 为唯一重试入口，使用抖动退避与合理的 Retry-After，并服从 Run 预算。Node 传输层不叠加另一套自动重试。
 
-Provider 是唯一重试入口，传输层不叠加重试策略。最多两次自动重试，使用抖动退避、合理的 Retry-After，并服从 Run 预算。
-
-| 错误 | 策略 |
+| 情况 | 行为 |
 | --- | --- |
-| 400/422 | 修复参数或协议后再请求 |
-| 401/402 | 提示凭据或余额问题 |
+| 400/422 | 修正请求或上下文后再发起 |
+| 401/402 | 停止，提示密钥或余额问题 |
 | 429、可恢复 5xx | 有限重试 |
-| 连接失败、断流 | 仅重试未提交的模型 Attempt |
+| response.failed | 依据 error 分类，不能一律重试 |
+| response.incomplete | 按原因处理；输出预算不足可受控调整，过滤不自动重试 |
+| 断流 | 仅重试未提交模型 Attempt |
 | 用户取消 | 停止，不重试 |
-| 文件操作结果未知 | 转工具恢复流程 |
+| 工具已成功、后续模型失败 | 复用结果，不重新执行工具 |
+| 文件写入结果未知 | 按 Runtime 操作记录核对后再继续 |
 
-错误类别参考 [Error Codes][A7]。每次重试复用冻结上下文并创建新 attemptId；已成功工具不重复执行。断流请求的服务费用可能未知。WebView 重载或崩溃不等于服务端请求已取消；丢失取消句柄时，不把请求标记为未计费，原生 HTTP 资源释放在 M0 验证。
+错误分类参考 [服务错误][A7]。Runtime 重启后重新构造 input，不依赖服务端响应存储。Client 刷新只影响订阅，不中断 Runtime 的模型请求。取消或断流请求仍可能产生服务费用，无法确认时单列未知。
 
 ## 6. 上下文管理
 
-### 预算
-
-`B = min(服务上下文上限, 应用预算)`，发送前满足：
+发送前满足：
 
 ```text
-估算输入 token + 最大输出 token + 安全余量 <= B
+估算输入 token + 最大输出 token + 安全余量
+    <= min(模型上下文上限, 应用预算)
 ```
 
-输入包含系统提示、工具 schema、正文、工具结果及需回放的 reasoning。默认配置的输入预算为 45,056 token。
+输入包括 instructions、工具 schema、消息、推理和工具结果。默认可用输入预算为 45,056 token；无可靠 tokenizer 时保守估算并用 usage 校准。
 
-无可靠 tokenizer 时采用保守估算并用真实 usage 校准。超长请求触发一次受控压缩；模型不能自行提高预算。
+先分页和截断工具结果，再压缩旧历史。仅在工具结果组完整后压缩，保留目标、约束、文件版本、已完成修改、待办和未知项。授权始终由 Runtime 的独立记录决定。
 
-### 压缩
+原始历史保留；摘要记录覆盖边界，构造新的请求序列。被保留的输出项继续携带必要推理及配对结果，已整体摘要的旧组不再回放。摘要使用独立的无工具 Responses 请求，其 usage 计入 Run；失败保留旧上下文并暂停或有限修复。
 
-先限制工具输出、保存大结果引用，再摘要旧历史。压缩仅在工具批次结束后进行，以完整消息组为边界。
-
-摘要保存目标、约束、已完成修改、待办、文件路径与版本、行号、错误及未知项。权限仍以独立项目授权和修改确认记录为准。
-
-保存原始历史与覆盖/保留边界，建立新的请求序列。保留的 assistant 继续携带必要 reasoning；已整体摘要的旧消息不再回放。最新消息组仍超限时，改用分页或缩小输入范围。
-
-摘要采用独立无工具请求，usage 计入 Run。失败保留原历史，最多一次自动修复；继续失败则暂停。
+不发送 truncation 或 context_management 期待服务自动处理超限；超限处理属于 Runtime 策略。[兼容限制][A4]
 
 ## 7. 缓存与费用
 
-固定系统提示和工具 schema 排序，按需追加任务上下文。服务端前缀缓存不承担本地历史存储。[Context Caching][A8]
+保持系统策略及工具 schema 顺序稳定。前缀缓存由 DeepSeek 管理，不代替本地历史存储。[缓存说明][A8]
 
-```text
-费用 = (缓存命中输入 × 命中价
-      + 未命中输入 × 未命中价
-      + 输出 × 输出价) / 1,000,000
-```
+使用 Responses 的 usage 字段归一化：
 
-使用有日期的价格配置，预算按高峰价保守估算。prompt_tokens 若含缓存量，应拆分后计费；输出按 completion tokens 计，不重复累加 reasoning 子项。
+- 输入总量：input_tokens。
+- 缓存命中输入：input_tokens_details.cached_tokens。
+- 未命中输入：输入总量减缓存命中量。
+- 输出总量：output_tokens；其中 reasoning_tokens 是子项，不重复计费。
 
-每次请求前估计下一步成本。无 usage 或断流费用单列未知，因此 Run 费用限制属于应用软预算。
+费用按有日期的模型价格配置计算。缺失 usage 不按零处理，断流费用单列未知；请求前成本估算和 Run 费用限制属于软预算。
 
 ## 8. 契约测试
 
 | 编号 | 场景 | 断言 |
 | --- | --- | --- |
-| DS-01 | 中文文本跨 UTF-8 字节分片 | 编码、完成状态、usage 正确 |
-| DS-02 | 多工具参数交错分片 | 调用独立，各执行一次，结果顺序正确 |
-| DS-03/04 | 跨用户轮次及无工具调用轮次 | reasoning 字段完整回放 |
-| DS-05/06 | 半截或非法参数、未知工具 | 不派发无效动作，错误结构明确 |
-| DS-07/08 | 截断、异常结束、心跳、空帧 | 不误判完成，不无限等待 |
-| DS-09/10 | 限流、鉴权失败、响应头前/响应流中取消 | 分类正确，释放连接，遵守重试上限 |
-| DS-11 | 压缩后继续 | 消息配对、文件版本和待办保留 |
-| DS-12 | 工具成功后模型断流 | 仅重试模型 |
+| DS-01 | UTF-8 跨字节分片、SSE 多帧 | 文本与事件解析正确 |
+| DS-02 | 文本、推理、多个工具交错 | 输出项独立，done 不重复追加 |
+| DS-03 | completed 包含 function_call | 执行工具并继续，Run 不提前完成 |
+| DS-04 | 工具配对 | 区分 itemId/call_id，每个调用恰有一个结果 |
+| DS-05 | 跨轮次及重启回放 | 完整 input、推理和工具结果保留 |
+| DS-06 | 非法参数、未知工具、越权路径 | 不执行，产生明确错误结果 |
+| DS-07 | incomplete、failed、无终态断流 | 部分调用不执行，无 DONE 依赖 |
+| DS-08 | 重复/倒序事件、冲突终态 | 不重复提交，冲突显式失败 |
+| DS-09 | 限流、鉴权及响应头前/流中取消 | 分类、重试和资源释放正确 |
+| DS-10 | 请求多工具及超出工具预算 | Runtime 仍串行执行并约束数量 |
+| DS-11 | 压缩后继续 | 摘要边界、推理及调用配对有效 |
+| DS-12 | 工具成功后模型断流 | 只重试模型，无重复文件修改 |
+| DS-13 | usage 含缓存和 reasoning 子项 | 归一化正确，不重复计数 |
+| DS-14 | 持久历史缺损、Provider schema 变化 | 拒绝盲目回放，建立可核对的新上下文 |
 
-测试包含核心固定响应回放、Tauri HTTP 真实传输及 DeepSeek 服务契约。后两者不能仅用浏览器 mock 替代；真实 API 测试单独启用，记录模型配置、插件版本、WebView2 版本和日期。
+测试分为固定事件回放、Node HTTP 集成和真实服务契约。真实 API 测试单独启用，记录模型、Node、Provider 版本和日期；文档核查不代替服务实测。
 
-[A1]: https://api-docs.deepseek.com/
+[A1]: https://api-docs.deepseek.com/api/create-response/
 [A2]: https://api-docs.deepseek.com/guides/thinking_mode/
 [A3]: https://api-docs.deepseek.com/quick_start/pricing/
-[A4]: https://api-docs.deepseek.com/guides/tool_calls/
-[A5]: https://api-docs.deepseek.com/api/create-chat-completion/
-[A6]: https://api-docs.deepseek.com/quick_start/rate_limit/
+[A4]: https://api-docs.deepseek.com/guides/responses_api/
+[A5]: https://api-docs.deepseek.com/guides/tool_calls/
+[A6]: https://github.com/rexxars/eventsource-parser
 [A7]: https://api-docs.deepseek.com/quick_start/error_codes/
 [A8]: https://api-docs.deepseek.com/guides/kv_cache/
-
-[A9]: https://github.com/rexxars/eventsource-parser
-
-[A10]: https://v2.tauri.app/plugin/http-client/
-[A11]: https://github.com/tauri-apps/plugins-workspace/blob/v2/plugins/http/guest-js/index.ts
