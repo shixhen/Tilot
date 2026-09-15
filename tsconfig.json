@@ -1,0 +1,10 @@
+{
+  "extends": "./tsconfig.base.json",
+  "compilerOptions": {
+    "noEmit": true,
+    "types": ["node"],
+    "skipLibCheck": true,
+    "paths": { "@tilot/agent-core": ["./packages/agent-core/src/index.ts"] }
+  },
+  "include": ["packages/agent-core/src/**/*.ts", "packages/runtime/src/**/*.ts", "tests/**/*.ts", "vitest.config.ts"]
+}

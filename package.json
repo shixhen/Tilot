@@ -1,0 +1,40 @@
+{
+  "name": "tilot",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Windows coding agent with a TypeScript core and Node.js runtime",
+  "workspaces": ["apps/desktop", "packages/*"],
+  "engines": {
+    "node": ">=24.14.0 <25",
+    "npm": ">=11 <12"
+  },
+  "packageManager": "npm@11.9.0",
+  "scripts": {
+    "typecheck": "node scripts/check-core-boundary.mjs && tsc -p packages/agent-core/tsconfig.json --noEmit && tsc -p tsconfig.json",
+    "build": "tsc -p packages/agent-core/tsconfig.json && tsc -p packages/runtime/tsconfig.json",
+    "test": "vitest run",
+    "demo:core": "npm run build && node packages/runtime/dist/demo.js"
+  },
+  "devDependencies": {
+    "@types/node": "24.13.4",
+    "@wdio/cli": "9.31.9",
+    "@wdio/local-runner": "9.31.9",
+    "@wdio/jasmine-framework": "9.31.9",
+    "@wdio/spec-reporter": "9.31.2",
+    "@wdio/tauri-service": "1.4.0",
+    "tsx": "4.23.13",
+    "typescript": "7.0.2",
+    "vitest": "5.0.0",
+    "webdriverio": "9.31.9"
+  },
+  "overrides": {
+    "@wdio/tauri-service": {
+      "webdriverio": "$webdriverio",
+      "@wdio/globals": "9.31.3"
+    },
+    "@wdio/utils": {
+      "@puppeteer/browsers": "3.2.2"
+    }
+  }
+}

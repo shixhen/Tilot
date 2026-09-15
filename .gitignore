@@ -1,2 +1,14 @@
 /AGENTS.md
 
+node_modules/
+dist/
+target/
+coverage/
+*.tsbuildinfo
+*.log
+.env
+.env.*
+!.env.example
+/apps/desktop/src-tauri/gen/
+/test-results/
+/.tools/
