@@ -1,0 +1,10 @@
+{
+  "name": "@tilot/responses",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "exports": "./src/client.ts",
+  "dependencies": {
+    "openai": "7.18.0"
+  }
+}

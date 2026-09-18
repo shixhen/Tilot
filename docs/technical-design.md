@@ -4,8 +4,6 @@
 
 ## 项目目标
 
-Tilot 是一个本地桌面 Agent。桌面 UI 负责用户交互，Node.js Agent Runtime 负责 Agent 执行、上下文构造、工具调用、MCP、持久化以及模型请求。
-
 整体设计遵循几个原则：
 
 1. UI 不直接运行 Agent Loop。
@@ -15,7 +13,7 @@ Tilot 是一个本地桌面 Agent。桌面 UI 负责用户交互，Node.js Agent
 5. Tool 负责“模型可以做什么”，MCP 也属于 Tool。
 6. Store 负责“应用长期保存什么”。
 7. 仅支持 Responses API，不设计通用多协议 Provider 抽象。
-8. UI 与 Runtime 通过 RPC 通信，并通过事件实现流式输出。
+8. UI 与 Server 通过 RPC 通信，并通过事件实现流式输出。
 
 ---
 
@@ -64,15 +62,15 @@ Store
 Responses
 ```
 
-其中 Agent Core 是整个 Agent Runtime 的调度中心。
+其中 Agent Core 是 Agent 执行流程的调度中心。各模块分别位于 `packages/` 下，Server 同时提供 Node.js 服务的启动入口；不设独立的 runtime 包。
 
 ---
 
 # Server
 
-Server 是 UI 与 Agent Runtime 之间的边界。
+Server 是 UI 与 Agent Core 之间的边界。
 
-它负责 RPC 通信，但不负责 Agent 业务逻辑。
+它负责 RPC 通信，并在服务入口组装模块、管理启动和关闭；Agent 业务逻辑由 Agent Core 调度。
 
 例如 UI 调用：
 
@@ -131,7 +129,7 @@ RPC 请求对应的结果：
 
 ### Event
 
-Agent Runtime 主动推送给 UI：
+Server 主动推送给 UI：
 
 ```text
 turn.started
@@ -151,7 +149,7 @@ turn.completed
 error
 ```
 
-因此 UI 与 Runtime 的通信模型是：
+因此 UI 与 Server 的通信模型是：
 
 ```text
 Request / Response
