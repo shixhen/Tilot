@@ -1,4 +1,5 @@
 import OpenAI from "openai";
+import { ResponseStreamValidator } from "./stream-validator.ts";
 import type {
   ResponseCreateParamsStreaming,
   ResponseStreamEvent,
@@ -39,7 +40,7 @@ export function createResponsesClient(options: ResponsesClientOptions): OpenAI {
 }
 
 /**
- * 发起一次流式请求，原样传递 SDK 事件，包括推理与工具调用。
+ * 发起一次流式请求，校验并传递 SDK 事件，包括推理与工具调用；完全相同的重复事件只传递一次。
  * completed、failed、incomplete 均作为终态交给调用方判断；无终态断流则抛错。
  * 支持 AbortSignal 取消，调用方提前停止遍历时也会关闭请求；此处不执行工具或重试。
  */
@@ -50,10 +51,14 @@ export async function* streamResponse(
 ): AsyncGenerator<ResponseStreamEvent> {
   signal?.throwIfAborted();
   const stream = await client.responses.create({ ...request, stream: true }, { signal });
+  const validator = new ResponseStreamValidator();
 
   try {
     for await (const event of stream) {
       signal?.throwIfAborted();
+      if (!validator.accept(event)) {
+        continue;
+      }
       yield event;
 
       if (

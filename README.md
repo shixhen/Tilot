@@ -1,7 +1,9 @@
 # Tilot
 
 基于 Tauri、React、TypeScript 和 Node.js 的本地桌面 Agent。
-当前仅建立工程基础，实现项目目录验证，尚未接入界面和模型。
+当前已建立工程基础、项目目录验证和 Responses 客户端及流式请求，尚未接入桌面界面或进行真实模型联调。
+
+分批开发顺序与验收方式见 [开发计划](docs/development-plan.md)。
 
 ## 本地开发
 
@@ -33,8 +35,8 @@ npm test
 | `packages/responses` | 通过 OpenAI SDK 调用 Responses API |
 | `packages/protocol` | 桌面端与 Server 共用的 RPC 请求、响应和事件类型 |
 
-当前各包只建立清单，随实现增加入口和实际依赖，不预写空函数。
-根目录的类型检查目前覆盖 `packages` 中的代码；桌面端实现时再添加 React 配置。
+Server 和 Responses 已有部分实现，其余包目前只建立清单，随实现增加入口和实际依赖，不预写空函数。
+根目录的类型检查目前覆盖 `packages` 和 `tests` 中的代码；桌面端实现时再添加 React 配置。
 
 ## 已确认的设计决定
 

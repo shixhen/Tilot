@@ -3,7 +3,10 @@
   "version": "0.1.0",
   "private": true,
   "type": "module",
-  "exports": "./src/client.ts",
+  "exports": {
+    ".": "./src/client.ts",
+    "./output": "./src/output.ts"
+  },
   "dependencies": {
     "openai": "7.18.0"
   }
