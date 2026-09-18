@@ -6,14 +6,19 @@ import type { AppConfig } from "./config.ts";
 import { migrateDatabase } from "./database.ts";
 import type { Thread } from "./thread.ts";
 import type { Turn, TurnFinalStatus, TurnInput } from "./turn.ts";
+import { ModelHistoryStore } from "./history.ts";
+import { validatePagination } from "./pagination.ts";
 
 export type { AppConfig } from "./config.ts";
 export type { Thread } from "./thread.ts";
 export type { Turn, TurnFinalStatus, TurnInput } from "./turn.ts";
+export type { AttemptStatus, ModelAttempt, AttemptCompletion, ToolResult, StoredToolCall } from "./history-types.ts";
 
-/** 本地 SQLite 存储；由 Server 创建和关闭，负责配置、任务、轮次和用户输入。 */
+/** 本地 SQLite 存储；由 Server 创建和关闭，负责配置、任务及对话历史。 */
 export class Store {
   private readonly database: Database.Database;
+  /** 模型请求和工具结果的存储入口，与配置、任务共用同一数据库。 */
+  readonly history: ModelHistoryStore;
 
   /** 打开指定绝对目录下的 tilot.sqlite 并迁移结构；初始化失败时关闭连接。 */
   constructor(dataDirectory: string) {
@@ -26,6 +31,7 @@ export class Store {
       this.database.pragma("foreign_keys = ON");
       migrateDatabase(this.database);
       this.database.pragma("journal_mode = WAL");
+      this.history = new ModelHistoryStore(this.database);
     } catch (error) {
       this.database.close();
       throw error;
@@ -172,6 +178,19 @@ export class Store {
   /** 结束运行中的轮次；失败需提供错误信息，已结束的轮次不能被再次改写。 */
   finishTurn(id: string, status: TurnFinalStatus, error: string | null = null): Turn {
     return this.database.transaction(() => {
+      const running = this.database.prepare("SELECT 1 FROM model_attempts WHERE turnId = ? AND status = 'running'").get(id);
+      if (running) {
+        throw new Error("请先结束轮次中仍在运行的模型请求。");
+      }
+      if (status === "completed") {
+        const pending = this.database.prepare(`
+          SELECT 1 FROM tool_calls JOIN model_attempts ON model_attempts.id = tool_calls.attemptId
+          WHERE model_attempts.turnId = ? AND tool_calls.resultJson IS NULL LIMIT 1
+        `).get(id);
+        if (pending) {
+          throw new Error("工具结果尚未补齐，轮次不能标记为完成。");
+        }
+      }
       const turn = this.database.prepare<[TurnFinalStatus, number, string | null, string], Turn>(`
         UPDATE turns SET status = ?, finishedAt = ?, error = ? WHERE id = ? AND status = 'running'
         RETURNING id, threadId, sequence, status, createdAt, finishedAt, error
@@ -184,10 +203,13 @@ export class Store {
     })();
   }
 
-  /** 由 Server 确认旧执行已停止后调用，标记遗留轮次为中断；打开连接本身不会触发恢复。 */
+  /** 由 Server 确认旧执行已停止后调用，中断遗留轮次和请求；不补造工具结果，打开连接不触发恢复。 */
   recoverInterruptedTurns(): number {
     return this.database.transaction(() => {
       const now = Date.now();
+      this.database.prepare(`
+        UPDATE model_attempts SET status = 'interrupted', finishedAt = ? WHERE status = 'running'
+      `).run(now);
       this.database.prepare(`
         UPDATE threads SET updatedAt = ? WHERE id IN (SELECT threadId FROM turns WHERE status = 'running')
       `).run(now);
@@ -200,12 +222,5 @@ export class Store {
   /** 释放 SQLite 连接，由 Server 在应用退出时调用。 */
   close(): void {
     this.database.close();
-  }
-}
-
-/** 检查列表页大小和起始位置；位置可表示偏移量或递增记录游标。 */
-function validatePagination(limit: number, position: number): void {
-  if (!Number.isSafeInteger(limit) || limit < 1 || limit > 100 || !Number.isSafeInteger(position) || position < 0) {
-    throw new Error("每页需为 1 至 100 条，起始位置需为非负整数。");
   }
 }

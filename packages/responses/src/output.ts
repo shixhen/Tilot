@@ -1,4 +1,5 @@
 import type {
+  Response,
   ResponseCompletedEvent,
   ResponseFailedEvent,
   ResponseFunctionToolCall,
@@ -27,6 +28,11 @@ export function getResponseToolCalls(event: ResponseTerminalEvent): ResponseFunc
   if (!expectedStatus || !response || response.status !== expectedStatus) {
     throw new Error("模型终态事件与响应状态不一致。");
   }
+  return getResponseToolCallsFromResponse(response);
+}
+
+/** 校验持久化的完整响应并提取成功调用，供 Context 回放使用；与流式终态共用校验规则。 */
+export function getResponseToolCallsFromResponse(response: Response): ResponseFunctionToolCall[] {
   if (typeof response.id !== "string" || !response.id.trim() || !Array.isArray(response.output)) {
     throw new Error("模型响应缺少有效的 id 或 output 数组。");
   }

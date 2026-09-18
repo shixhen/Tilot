@@ -65,7 +65,7 @@ parallel_tool_calls 和 max_tool_calls 被服务忽略，调用数量及串行�
 
 不得将所有输出项压成一条 assistant 文本，也不能把 itemId 当作 call_id。UI 仅从保存记录生成展示投影。
 
-发起下一步请求时，Context 将已提交输出组织为 input，保留消息、reasoning.content、调用及结果的顺序。参考 demo 使用 SDK 的 `toResponseInputItems`，接入时核对选用 SDK 版本的导出及字段保留行为。demo 中过滤 reasoning 仅用于测试，正式实现直接保留 reasoning 项及其正文。输出专用状态字段不用于控制权限。原始输出保留用于诊断，投影不能覆盖原记录。
+发起下一步请求时，Context 将已提交输出组织为 input，保留消息、reasoning.content、调用及结果的顺序。当前实现使用 OpenAI SDK 7.18.0 的 `openai/lib/responses/ResponseInputItems` 导出的 `toResponseInputItems`；已通过本地源码和测试核对推理正文保留行为。demo 中过滤 reasoning 仅用于测试，正式实现直接保留 reasoning 项及其正文。输出专用状态字段不用于控制权限。原始输出保留用于诊断，投影不能覆盖原记录。
 
 ### 工具声明与结果
 

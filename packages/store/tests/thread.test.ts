@@ -61,7 +61,7 @@ test("版本 1 数据库升级后保留配置；迁移失败时版本号不会�
   // 仅在测试目录中恢复旧版结构，模拟已保存配置的版本 1 数据库。
   const legacy = new Database(join(directory, "tilot.sqlite"));
   try {
-    legacy.exec("DROP TABLE turn_inputs; DROP TABLE turns; DROP TABLE threads; PRAGMA user_version = 1;");
+    legacy.exec("DROP TABLE tool_calls; DROP TABLE model_attempts; DROP TABLE turn_inputs; DROP TABLE turns; DROP TABLE threads; PRAGMA user_version = 1;");
     legacy.exec("CREATE TABLE threads (conflict TEXT);");
     assert.throws(() => new Store(directory));
     assert.equal(legacy.pragma("user_version", { simple: true }), 1);

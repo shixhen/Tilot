@@ -103,7 +103,7 @@ test("版本 2 升级保留配置和任务，新增轮次表可用", (context) =
   // 仅移除测试数据库的新表，恢复版本 2 的真实结构。
   const legacy = new Database(join(directory, "tilot.sqlite"));
   try {
-    legacy.exec("DROP TABLE turn_inputs; DROP TABLE turns; PRAGMA user_version = 2;");
+    legacy.exec("DROP TABLE tool_calls; DROP TABLE model_attempts; DROP TABLE turn_inputs; DROP TABLE turns; PRAGMA user_version = 2;");
   } finally {
     legacy.close();
   }
