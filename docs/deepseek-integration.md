@@ -9,9 +9,6 @@ Responses 模块位于 `packages/responses`，使用 OpenAI SDK 的 `client.resp
 应用配置示例：
 ```json
 {
-  "schemaVersion": 1,
-  "provider": "deepseek",
-  "api": "responses",
   "baseURL": "https://api.deepseek.com",
   "model": "deepseek-flash",
   "reasoningEffort": "high",
@@ -22,6 +19,8 @@ Responses 模块位于 `packages/responses`，使用 OpenAI SDK 的 `client.resp
   "maxAutomaticRetries": 2
 }
 ```
+
+普通配置保存在 SQLite 的 app_config 表中，数据库结构版本由 `PRAGMA user_version` 管理。首版协议固定为 Responses，不重复保存 provider/api 标记；凭据不包含在此配置中。
 
 | 应用数据 | 请求字段 |
 | --- | --- |

@@ -1,7 +1,7 @@
 # Tilot
 
 基于 Tauri、React、TypeScript 和 Node.js 的本地桌面 Agent。
-当前已建立工程基础、项目目录验证和 Responses 客户端及流式请求，尚未接入桌面界面或进行真实模型联调。
+当前已建立工程基础、项目目录验证、Responses 客户端及流式请求，以及 SQLite 配置、任务、执行轮次和用户输入存储，尚未接入桌面界面或进行真实模型联调。
 
 分批开发顺序与验收方式见 [开发计划](docs/development-plan.md)。
 
@@ -17,6 +17,7 @@ npm test
 
 `typecheck` 检查 TypeScript 类型，不生成文件，也不启动应用。
 `test` 运行本地自动化测试；模型请求使用模拟数据，不连接真实模型服务。
+测试与实现放在同一个包中，分别位于 `tests/` 和 `src/`。根目录 `npm test` 汇总运行各包测试，也可用 `npm test --workspace @tilot/responses` 单独运行一个包。
 `packages/server/src/workspace.ts` 定义项目目录及其打开逻辑。
 打开目录只验证目录本身；后续文件工具还需要独立检查文件访问范围和忽略规则。
 
@@ -35,8 +36,20 @@ npm test
 | `packages/responses` | 通过 OpenAI SDK 调用 Responses API |
 | `packages/protocol` | 桌面端与 Server 共用的 RPC 请求、响应和事件类型 |
 
-Server 和 Responses 已有部分实现，其余包目前只建立清单，随实现增加入口和实际依赖，不预写空函数。
-根目录的类型检查目前覆盖 `packages` 和 `tests` 中的代码；桌面端实现时再添加 React 配置。
+Server、Responses 和 Store 已有部分实现，其余包目前只建立清单，随实现增加入口和实际依赖，不预写空函数。
+根目录的类型检查覆盖各包的 `src/` 和 `tests/`；桌面端实现时再添加 React 配置。
+
+## 数据存储
+
+配置和后续对话历史统一存入 SQLite。默认数据库路径为 `%LOCALAPPDATA%\Tilot\tilot.sqlite`：Server 的 `getDefaultDataDirectory` 解析目录，创建 Store 时传入绝对路径。当前已创建配置、任务、轮次和用户输入表；API Key 等凭据单独处理，尚未实现凭据存储。
+
+任务支持创建、读取、分页列表和重命名。创建时可不绑定项目；已绑定项目不能通过重命名改变。Store 只保存项目路径，Server 负责验证目录，无项目任务后续不得调用项目文件工具。任务列表默认每页 50 条，最多 100 条。
+
+每个任务最多有一个运行中的轮次。`startTurn` 同时保存轮次和首条输入，`appendTurnInput` 保存运行中的补充输入，`finishTurn` 记录完成、失败或取消。输入原文不会被裁剪；轮次列表按 sequence、输入列表按 id 顺序分页。补充输入何时发送给模型由后续 Core 决定。
+
+Server 在启动时确认旧执行已停止后，应显式调用 `recoverInterruptedTurns`，把遗留运行轮次标记为中断。创建 Store 或关闭连接不会自动修改轮次状态；当前只有恢复接口，尚未接入服务启动流程。模型响应和工具结果的保存留待下一批实现。
+
+Store 使用 [better-sqlite3](https://github.com/WiseLibs/better-sqlite3)，数据库操作在 Node.js 服务中执行。打包时需携带与目标 Node.js 版本及 Windows 架构匹配的原生模块。数据库使用 `user_version` 标记结构版本，后续增加表时显式迁移；未知版本直接报错，不自动重建数据库。
 
 ## 已确认的设计决定
 
