@@ -1,7 +1,7 @@
 # Tilot
 
 基于 Tauri、React、TypeScript 和 Node.js 的本地桌面 Agent。
-当前已建立工程基础、项目目录验证、Responses 客户端及流式请求、SQLite 历史存储，以及 Context 历史上下文构建，尚未接入桌面界面或进行真实模型联调。
+当前已建立工程基础、项目目录验证、Responses 客户端、SQLite 历史存储、Context 上下文构建，以及 Core 无工具单轮执行，尚未接入桌面界面或进行真实模型联调。
 
 分批开发顺序与验收方式见 [开发计划](docs/development-plan.md)。
 
@@ -36,7 +36,7 @@ npm test
 | `packages/responses` | 通过 OpenAI SDK 调用 Responses API |
 | `packages/protocol` | 桌面端与 Server 共用的 RPC 请求、响应和事件类型 |
 
-Server、Responses、Store 和 Context 已有部分实现，其余包目前只建立清单，随实现增加入口和实际依赖，不预写空函数。
+Server、Responses、Store、Context 和 Agent Core 已有部分实现，其余包目前只建立清单，随实现增加入口和实际依赖，不预写空函数。
 根目录的类型检查覆盖各包的 `src/` 和 `tests/`；桌面端实现时再添加 React 配置。
 
 ## 数据存储
@@ -62,6 +62,16 @@ Store 使用 [better-sqlite3](https://github.com/WiseLibs/better-sqlite3)，数�
 Context 读完该任务截至目标轮次的历史，按成功请求记录的输入边界插入用户消息，再放入完整响应及其全部工具结果。失败诊断不参与回放，reasoning 正文和原始工具参数保留，转换使用 SDK 的 `toResponseInputItems`。缺失结果、标识冲突或输入边界倒退直接报错，不返回残缺上下文。
 
 当前默认保留旧轮次中取消或中断前尚未发送的输入，将其放在该轮次最后一个完整消息组之后；当前轮次只纳入指定边界以内的输入。Context 不写数据库，不发起模型请求；系统策略由调用方传入，预算、摘要压缩及 Skills 加载尚未实现。
+
+## 无工具单轮执行
+
+`@tilot/agent-core` 的 `runTurn(store, client, options)` 创建轮次、保存首条输入、构建上下文并调用 Responses，最后返回已保存的轮次终态。`options` 包含 threadId、input、instructions，以及可选的 signal 和同步 onEvent 回调。Server 负责创建使用已配置 baseURL 和凭据的 SDK 客户端；Core 不读取密钥。
+
+同一任务由 Store 阻止并行轮次，目前不同任务可以并行。每次请求冻结普通配置与首条输入边界；执行期间追加的输入不会改变正在发送的请求，本批在下一轮回放这些输入。系统提示词由调用方传入，每次请求发送，不内置默认提示词。
+
+`turn.started` 提供轮次标识，`response.event` 携带轮次、请求尝试标识和原始 SDK 事件。完整终态先保存再交付；函数返回值是本轮本地最终状态。模型失败、截断、断流或处理事件抛错会停止请求，截断尝试保存为 incomplete，所属轮次记为 failed。取消前已中止的调用不创建轮次；流中取消会结束尝试和轮次并释放请求。终态通知或数据库写入异常直接抛给调用方，不伪装成模型失败。
+
+本批发送空 tools 和 tool_choice=none；意外返回工具调用会保存为失败诊断，不登记工具执行。本批不自动重试、不执行工具、不做上下文预算与压缩。断流诊断保留最近收到的响应对象，不把预览增量拼成正式响应；终态保存中途若进程退出，由启动恢复标记仍运行的记录。
 
 ## 已确认的设计决定
 

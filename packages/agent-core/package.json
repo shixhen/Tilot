@@ -2,5 +2,15 @@
   "name": "@tilot/agent-core",
   "version": "0.1.0",
   "private": true,
-  "type": "module"
+  "type": "module",
+  "exports": "./src/run-turn.ts",
+  "scripts": {
+    "test": "node --test tests/*.test.ts"
+  },
+  "dependencies": {
+    "@tilot/context": "0.1.0",
+    "@tilot/responses": "0.1.0",
+    "@tilot/store": "0.1.0",
+    "openai": "7.18.0"
+  }
 }
