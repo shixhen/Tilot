@@ -1,7 +1,8 @@
 import { runTurn, type TurnEvent } from "@tilot/agent-core";
 import { createResponsesClient } from "@tilot/responses";
 import type { Store, Turn } from "@tilot/store";
-import type { MessagePart, ServerEvent, TurnNotification } from "@tilot/protocol";
+import type { ServerEvent, TurnNotification } from "@tilot/protocol";
+import { projectMessages } from "./history.ts";
 
 /** 当前进程持有的执行句柄，关闭连接时取消并等待 Core 完成落库。 */
 interface ActiveTurn {
@@ -93,19 +94,5 @@ function projectResponseEvent(threadId: string, notification: Extract<TurnEvent,
     }];
   }
   if (event.type !== "response.completed") return [];
-  const messages: TurnNotification[] = [];
-  for (const [outputIndex, item] of event.response.output.entries()) {
-    const parts: MessagePart[] = [];
-    if (item.type === "message") {
-      for (const part of item.content) {
-        parts.push(part.type === "refusal" ? { kind: "refusal", text: part.refusal } : { kind: "text", text: part.text });
-      }
-    } else if (item.type === "reasoning") {
-      for (const part of item.content!) parts.push({ kind: "reasoning", text: part.text });
-    } else {
-      continue;
-    }
-    messages.push({ event: "message.completed", threadId, turnId, itemId: item.id, outputIndex, parts });
-  }
-  return messages;
+  return projectMessages(event.response).map((message) => ({ event: "message.completed", threadId, turnId, ...message }));
 }

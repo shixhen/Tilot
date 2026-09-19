@@ -5,14 +5,14 @@ import Database from "better-sqlite3";
 import type { AppConfig } from "./config.ts";
 import { migrateDatabase } from "./database.ts";
 import type { Thread } from "@tilot/protocol";
-import type { Turn, TurnFinalStatus, TurnInput } from "./turn.ts";
+import type { Turn, TurnFinalStatus, TurnInput } from "@tilot/protocol";
 import { ModelHistoryStore } from "./history.ts";
 import { validatePagination } from "./pagination.ts";
 import { CredentialStore, normalizeBaseURL } from "./credentials.ts";
 
 export type { AppConfig } from "./config.ts";
 export type { Thread } from "@tilot/protocol";
-export type { Turn, TurnFinalStatus, TurnInput } from "./turn.ts";
+export type { Turn, TurnFinalStatus, TurnInput } from "@tilot/protocol";
 export type { AttemptStatus, ModelAttempt, AttemptCompletion, ToolResult, StoredToolCall } from "./history-types.ts";
 
 /** 本地 SQLite 存储；由 Server 创建和关闭，负责配置、任务及对话历史。 */

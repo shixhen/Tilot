@@ -76,6 +76,8 @@ Server 是 UI 与 Agent Core 之间的边界。
 
 turn.start 取得轮次标识即返回，运行过程由 Server 的 TurnManager 管理取消信号和异步任务。Core 仍负责模型执行及状态保存。连接关闭时先取消并等待活动轮次，再关闭 Store；事件按连接内 seq 排序，完成文本替换预览，失败不会伪造成功消息。
 
+历史展示通过 turn.list/read/inputs/attempts 查询。Server 把 Store 的已保存响应投影为界面消息，与实时完成事件共用转换函数；Protocol 只定义展示结构，不依赖 SDK。失败请求返回状态和错误，不回传诊断片段。用户输入与请求分别分页，以 inputThroughId 表达已消费的输入边界；模型上下文仍由 Context 构造，不能使用界面投影代替原始回放历史。
+
 例如 UI 调用：
 
 ```ts

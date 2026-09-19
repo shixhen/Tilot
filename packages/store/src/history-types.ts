@@ -1,7 +1,7 @@
 import type { Response, ResponseInputItem } from "openai/resources/responses/responses";
+import type { AttemptStatus } from "@tilot/protocol";
 
-/** 一次模型请求的状态；只有 completed 记录可以进入正式模型历史。 */
-export type AttemptStatus = "running" | "completed" | "failed" | "incomplete" | "cancelled" | "interrupted";
+export type { AttemptStatus } from "@tilot/protocol";
 
 /** 模型请求的持久记录；inputThroughId 记录本次已纳入上下文的用户输入边界。 */
 export interface ModelAttempt {

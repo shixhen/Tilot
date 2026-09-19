@@ -118,7 +118,20 @@ node packages/server/src/main.ts
 | message.completed | 成功落库后的完整 parts，按 itemId 替换预览，不能再次追加 |
 | turn.finished | 已保存的最终 turn，包含完成、失败或取消状态 |
 
-事件 seq 在当前连接内从 1 递增，重启后重新计数。失败或取消不会产生成功的 message.completed，界面应结合 turn.finished 标记预览状态。应答和事件通过同一写入队列发送，Core 等待事件写入完成；无法交付事件或保存状态时结束连接，不伪造成功。当前没有断线事件重放，历史读取接口下一批补充。
+事件 seq 在当前连接内从 1 递增，重启后重新计数。失败或取消不会产生成功的 message.completed，界面应结合 turn.finished 标记预览状态。应答和事件通过同一写入队列发送，Core 等待事件写入完成；无法交付事件或保存状态时结束连接，不伪造成功。当前没有断线事件重放，可通过历史查询恢复已保存内容。
+
+历史展示接口如下，所有列表默认每页 50 条、最多 100 条，按保存顺序返回：
+
+| 方法 | params | 结果 |
+| --- | --- | --- |
+| turn.list | `{threadId, afterSequence?, limit?}` | 任务的轮次列表 |
+| turn.read | `{turnId}` | 单个轮次及状态，不存在时为 null |
+| turn.inputs | `{turnId, afterId?, limit?}` | 该轮次的用户输入，保留原文 |
+| turn.attempts | `{turnId, afterSequence?, limit?}` | 请求状态、输入边界及成功消息的展示数据 |
+
+首批查询省略游标，后续传入上一页最后一个 id 或 sequence；查不到记录的列表返回空数组，不创建任务或轮次。请求消息采用与 message.completed 相同的 itemId、outputIndex 和 parts，保留推理、正文和拒绝文本。失败、取消、中断及运行中的请求 messages 为空，不把诊断响应伪装成回答；SDK 原始响应和系统策略不会传给界面。工具调用和结果仍保存在 Store，工具展示随工具执行阶段接入。
+
+历史查询只包含已保存内容，不包含尚未落库的流式预览。界面应按 turnId、请求 id 和 itemId 合并历史与事件；收到 turn.finished 后重新读取该轮次及请求记录。afterSequence 只用于翻页，不能用它查询已有运行记录的状态变化。按 inputThroughId 可判断每次响应之前已纳入哪些用户输入。
 
 Protocol 只包含通信类型、展示数据及共享任务、轮次与配置数据，没有 Node.js、数据库或 SDK 依赖。Store 复用其中的 Thread、Turn 和 AppConfig 类型，避免桌面通过 Store 导入数据库代码。
 

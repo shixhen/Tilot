@@ -2,6 +2,7 @@ import type { AppConfig, RpcRequest, RpcResponse, RpcResult } from "@tilot/proto
 import type { Store } from "@tilot/store";
 import { openWorkspace } from "./workspace.ts";
 import type { TurnManager } from "./turn-manager.ts";
+import { listAttemptViews } from "./history.ts";
 
 /** 识别普通对象，供进程通信边界读取字段；数组及 null 不是请求对象。 */
 function isObject(value: unknown): value is Record<string, unknown> {
@@ -15,11 +16,45 @@ function parseRequest(value: unknown): RpcRequest {
   }
   const params = value.params;
   switch (value.method) {
+    case "turn.list":
+      if (typeof params.threadId === "string" &&
+          (params.afterSequence === undefined || typeof params.afterSequence === "number") &&
+          (params.limit === undefined || typeof params.limit === "number")) {
+        return { id: value.id, method: value.method, params: {
+          threadId: params.threadId,
+          ...(params.afterSequence === undefined ? {} : { afterSequence: params.afterSequence }),
+          ...(params.limit === undefined ? {} : { limit: params.limit }),
+        } };
+      }
+      break;
+    case "turn.attempts":
+      if (typeof params.turnId === "string" &&
+          (params.afterSequence === undefined || typeof params.afterSequence === "number") &&
+          (params.limit === undefined || typeof params.limit === "number")) {
+        return { id: value.id, method: value.method, params: {
+          turnId: params.turnId,
+          ...(params.afterSequence === undefined ? {} : { afterSequence: params.afterSequence }),
+          ...(params.limit === undefined ? {} : { limit: params.limit }),
+        } };
+      }
+      break;
+    case "turn.inputs":
+      if (typeof params.turnId === "string" &&
+          (params.afterId === undefined || typeof params.afterId === "number") &&
+          (params.limit === undefined || typeof params.limit === "number")) {
+        return { id: value.id, method: value.method, params: {
+          turnId: params.turnId,
+          ...(params.afterId === undefined ? {} : { afterId: params.afterId }),
+          ...(params.limit === undefined ? {} : { limit: params.limit }),
+        } };
+      }
+      break;
     case "turn.start":
       if (typeof params.threadId === "string" && typeof params.input === "string" && typeof params.instructions === "string") {
         return { id: value.id, method: value.method, params: { threadId: params.threadId, input: params.input, instructions: params.instructions } };
       }
       break;
+    case "turn.read":
     case "turn.interrupt":
       if (typeof params.turnId === "string") {
         return { id: value.id, method: value.method, params: { turnId: params.turnId } };
@@ -102,6 +137,18 @@ export async function handleRpcLine(store: Store, line: string, turns: TurnManag
   try {
     let result: RpcResult;
     switch (request.method) {
+      case "turn.list":
+        result = store.listTurns(request.params.threadId, request.params.afterSequence, request.params.limit);
+        break;
+      case "turn.read":
+        result = store.getTurn(request.params.turnId) ?? null;
+        break;
+      case "turn.inputs":
+        result = store.listTurnInputs(request.params.turnId, request.params.afterId, request.params.limit);
+        break;
+      case "turn.attempts":
+        result = listAttemptViews(store, request.params.turnId, request.params.afterSequence, request.params.limit);
+        break;
       case "turn.start":
         result = await turns.start(request.params.threadId, request.params.input, request.params.instructions);
         break;
