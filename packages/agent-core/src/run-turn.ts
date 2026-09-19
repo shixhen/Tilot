@@ -15,8 +15,8 @@ export interface RunTurnOptions {
   input: string;
   instructions: string;
   signal?: AbortSignal;
-  /** 同步交付事件；普通事件处理抛错会停止请求，终态事件在落库后交付。 */
-  onEvent?: (event: TurnEvent) => void;
+  /** 等待事件处理完成后继续读取；普通事件处理抛错会停止请求，终态事件在落库后交付。 */
+  onEvent?: (event: TurnEvent) => void | Promise<void>;
 }
 
 /**
@@ -35,7 +35,7 @@ export async function runTurn(store: Store, client: OpenAI, options: RunTurnOpti
     // 首条输入在交付 started 之前冻结；回调追加的输入留到下一次请求。
     const input = store.listTurnInputs(turn.id, 0, 1)[0]!;
     const config = store.getConfig();
-    options.onEvent?.({ type: "turn.started", turn });
+    await options.onEvent?.({ type: "turn.started", turn });
     options.signal?.throwIfAborted();
     const context = buildContext(store, {
       turnId: turn.id, inputThroughId: input.id, instructions: options.instructions,
@@ -70,7 +70,7 @@ export async function runTurn(store: Store, client: OpenAI, options: RunTurnOpti
         terminal = event;
         break;
       }
-      options.onEvent?.({ type: "response.event", turnId: turn.id, attemptId, event });
+      await options.onEvent?.({ type: "response.event", turnId: turn.id, attemptId, event });
       options.signal?.throwIfAborted();
     }
   } catch (error) {
@@ -88,7 +88,7 @@ export async function runTurn(store: Store, client: OpenAI, options: RunTurnOpti
   const finished = store.finishTurn(turn.id, status, status === "failed" ? outcome.error! : null);
   // 先保存再通知，终态通知失败不能把已经保存的成功响应改成失败。
   if (terminal && attemptId) {
-    options.onEvent?.({ type: "response.event", turnId: turn.id, attemptId, event: terminal });
+    await options.onEvent?.({ type: "response.event", turnId: turn.id, attemptId, event: terminal });
   }
   return finished;
 }

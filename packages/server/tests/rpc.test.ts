@@ -10,6 +10,7 @@ import type { RpcResponse } from "@tilot/protocol";
 import { Store } from "@tilot/store";
 import { handleRpcLine } from "../src/rpc.ts";
 import { serveStdio } from "../src/stdio.ts";
+import { TurnManager } from "../src/turn-manager.ts";
 
 /** 分配独立测试目录，删除前确认它属于系统临时目录。 */
 function temporaryDirectory(context: TestContext): string {
@@ -52,7 +53,7 @@ test("真实服务按 UTF-8 行协议处理任务请求，坏请求不影响后�
   const createdResponse = first[1]!;
   assert.ok(createdResponse.success);
   const created = createdResponse.result;
-  assert.ok(created && !Array.isArray(created) && "id" in created);
+  assert.ok(created && !Array.isArray(created) && "title" in created);
   assert.equal(created.title, "中文\n任务");
   assert.equal(created.projectPath, null);
   const second = await runServer(directory, [
@@ -68,23 +69,24 @@ test("真实服务按 UTF-8 行协议处理任务请求，坏请求不影响后�
 test("RPC 校验参数与项目目录，未知方法和无效操作不会创建任务", async (context) => {
   const directory = temporaryDirectory(context);
   const store = new Store(directory);
+  const turns = new TurnManager(store, async () => {}, (error) => { throw error; });
   try {
     const samples = [
-      { id: "unknown", method: "turn.start", params: {} },
+      { id: "unknown", method: "unknown", params: {} },
       { id: "type", method: "thread.create", params: { title: 12 } },
       { id: "path", method: "thread.create", params: { title: "无效目录", projectPath: "relative" } },
       { id: "limit", method: "thread.list", params: { limit: -1 } },
     ];
     for (const request of samples) {
-      const result = await handleRpcLine(store, JSON.stringify(request));
+      const result = await handleRpcLine(store, JSON.stringify(request), turns);
       assert.equal(result.id, request.id);
       assert.equal(result.success, false);
     }
     assert.deepEqual(store.listThreads(), []);
-    const result = await handleRpcLine(store, JSON.stringify({ id: "valid", method: "thread.create", params: { title: "项目", projectPath: directory } }));
+    const result = await handleRpcLine(store, JSON.stringify({ id: "valid", method: "thread.create", params: { title: "项目", projectPath: directory } }), turns);
     assert.equal(result.success, true);
     assert.equal(store.listThreads()[0]?.projectPath, realpathSync(directory));
-    assert.deepEqual(await handleRpcLine(store, JSON.stringify({ id: "missing", method: "thread.read", params: { threadId: "missing" } })),
+    assert.deepEqual(await handleRpcLine(store, JSON.stringify({ id: "missing", method: "thread.read", params: { threadId: "missing" } }), turns),
       { id: "missing", success: true, result: null });
   } finally {
     store.close();

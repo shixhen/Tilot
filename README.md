@@ -67,7 +67,7 @@ Context 读完该任务截至目标轮次的历史，按成功请求记录的输
 
 ## 无工具单轮执行
 
-`@tilot/agent-core` 的 `runTurn(store, client, options)` 创建轮次、保存首条输入、构建上下文并调用 Responses，最后返回已保存的轮次终态。`options` 包含 threadId、input、instructions，以及可选的 signal 和同步 onEvent 回调。Server 负责创建使用已配置 baseURL 和凭据的 SDK 客户端；Core 不读取密钥。
+`@tilot/agent-core` 的 `runTurn(store, client, options)` 创建轮次、保存首条输入、构建上下文并调用 Responses，最后返回已保存的轮次终态。`options` 包含 threadId、input、instructions，以及可选的 signal 和 onEvent 回调。回调支持返回 Promise，Core 等待事件处理完成后再继续读取。Server 使用已配置 baseURL 和对应的文件凭据创建 SDK 客户端；Core 不读取密钥。
 
 同一任务由 Store 阻止并行轮次，目前不同任务可以并行。每次请求冻结普通配置与首条输入边界；执行期间追加的输入不会改变正在发送的请求，本批在下一轮回放这些输入。系统提示词由调用方传入，每次请求发送，不内置默认提示词。
 
@@ -77,7 +77,7 @@ Context 读完该任务截至目标轮次的历史，按成功请求记录的输
 
 ## 本地服务与通信
 
-已确认使用子进程标准输入/输出，采用 UTF-8 JSON Lines：每行一个 JSON 请求，每行返回一个 JSON 结果。JSON 字符串内的换行由序列化转义，标准输出只放协议，启动和传输错误写到标准错误。Tauri 启动和管理 Node.js 服务的连接仍待实现；传输方式参考 [Tauri sidecar 文档](https://v2.tauri.app/learn/sidecar-nodejs/)。
+已确认使用子进程标准输入/输出，采用 UTF-8 JSON Lines：每行一个 JSON 请求，输出每行一个应答或事件。JSON 字符串内的换行由序列化转义，标准输出只放协议，启动和传输错误写到标准错误。Tauri 启动和管理 Node.js 服务的连接仍待实现；传输方式参考 [Tauri sidecar 文档](https://v2.tauri.app/learn/sidecar-nodejs/)。
 
 在根目录启动开发服务：
 
@@ -85,7 +85,7 @@ Context 读完该任务截至目标轮次的历史，按成功请求记录的输
 node packages/server/src/main.ts
 ```
 
-首个命令行参数可传入绝对数据目录；省略时使用默认目录。输入结束后，服务处理完已收到的请求并关闭数据库。当前入口不自动恢复遗留轮次，需待宿主确保旧执行停止后接入恢复。
+首个命令行参数可传入绝对数据目录；省略时使用默认目录。输入结束后，服务处理完已收到的请求，取消活动轮次，等待 Core 保存终态后关闭数据库。输入或输出异常也会停止连接并取消活动轮次。当前入口不自动恢复遗留轮次，需待宿主确保旧执行停止后接入恢复。
 
 当前支持 thread.create、thread.read、thread.list 和 thread.rename。例如发送：
 
@@ -105,9 +105,22 @@ node packages/server/src/main.ts
 
 配置类型与数值范围分别在 RPC 边界和 Store 校验，失败不会覆盖旧值。保存配置不会连带修改密钥；保存密钥不会修改当前服务地址。
 
-响应使用 `{id, success, result}` 或 `{id, success, error}`；找不到任务时 read 返回 null，格式错误且无法识别请求时 id 为 null。创建有项目的任务时，Server 先验证并解析真实目录。请求按到达顺序处理；当前不提供重试去重、对话启动或事件推送。
+响应使用 `{id, success, result}` 或 `{id, success, error}`；找不到任务时 read 返回 null，格式错误且无法识别请求时 id 为 null。创建有项目的任务时，Server 先验证并解析真实目录。请求按到达顺序处理；当前不提供重试去重。
 
-Protocol 只包含通信类型、共享任务与配置数据，没有 Node.js、数据库或 SDK 依赖。Store 复用其中的 Thread 和 AppConfig 类型，避免桌面通过 Store 导入数据库代码。
+`turn.start` 的参数为 `{threadId, input, instructions}`，取得轮次标识后返回 Turn，不等待模型结束；同一任务的重复启动会失败。`turn.interrupt` 接收 `{turnId}`，返回 `{interrupted: boolean}`：true 表示已请求取消，最终状态以 turn.finished 为准；轮次已结束或不属于当前连接时返回 false。不同任务可以并行，流式执行不阻塞后续管理请求。
+
+服务会交错推送以下事件：
+
+| event | 内容和处理方式 |
+| --- | --- |
+| turn.started | turn 包含轮次与任务标识；可能先于启动应答到达 |
+| message.delta | 按 turnId、itemId、contentIndex 追加对应 kind 的正文、推理或拒绝预览 |
+| message.completed | 成功落库后的完整 parts，按 itemId 替换预览，不能再次追加 |
+| turn.finished | 已保存的最终 turn，包含完成、失败或取消状态 |
+
+事件 seq 在当前连接内从 1 递增，重启后重新计数。失败或取消不会产生成功的 message.completed，界面应结合 turn.finished 标记预览状态。应答和事件通过同一写入队列发送，Core 等待事件写入完成；无法交付事件或保存状态时结束连接，不伪造成功。当前没有断线事件重放，历史读取接口下一批补充。
+
+Protocol 只包含通信类型、展示数据及共享任务、轮次与配置数据，没有 Node.js、数据库或 SDK 依赖。Store 复用其中的 Thread、Turn 和 AppConfig 类型，避免桌面通过 Store 导入数据库代码。
 
 ## 已确认的设计决定
 

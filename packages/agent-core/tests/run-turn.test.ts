@@ -158,7 +158,8 @@ test("事件处理错误会停止请求，终态通知错误不会改写已保�
   const options = { threadId: thread.id, input: "输入", instructions: "" };
   const first = await runTurn(store, client, {
     ...options,
-    onEvent: (event) => {
+    onEvent: async (event) => {
+      await Promise.resolve();
       if (event.type === "response.event") throw new Error("预览通知失败");
     },
   });

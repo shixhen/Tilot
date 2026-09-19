@@ -1,6 +1,7 @@
 import type { AppConfig, RpcRequest, RpcResponse, RpcResult } from "@tilot/protocol";
 import type { Store } from "@tilot/store";
 import { openWorkspace } from "./workspace.ts";
+import type { TurnManager } from "./turn-manager.ts";
 
 /** 识别普通对象，供进程通信边界读取字段；数组及 null 不是请求对象。 */
 function isObject(value: unknown): value is Record<string, unknown> {
@@ -14,6 +15,16 @@ function parseRequest(value: unknown): RpcRequest {
   }
   const params = value.params;
   switch (value.method) {
+    case "turn.start":
+      if (typeof params.threadId === "string" && typeof params.input === "string" && typeof params.instructions === "string") {
+        return { id: value.id, method: value.method, params: { threadId: params.threadId, input: params.input, instructions: params.instructions } };
+      }
+      break;
+    case "turn.interrupt":
+      if (typeof params.turnId === "string") {
+        return { id: value.id, method: value.method, params: { turnId: params.turnId } };
+      }
+      break;
     case "config.get":
     case "credentials.status":
     case "credentials.delete":
@@ -76,7 +87,7 @@ function parseConfig(value: unknown): AppConfig {
 }
 
 /** 处理一条 JSON 请求并返回对应结果；输入错误不会终止服务或回显原始内容。 */
-export async function handleRpcLine(store: Store, line: string): Promise<RpcResponse> {
+export async function handleRpcLine(store: Store, line: string, turns: TurnManager): Promise<RpcResponse> {
   let id: string | null = null;
   let request: RpcRequest;
   try {
@@ -91,6 +102,12 @@ export async function handleRpcLine(store: Store, line: string): Promise<RpcResp
   try {
     let result: RpcResult;
     switch (request.method) {
+      case "turn.start":
+        result = await turns.start(request.params.threadId, request.params.input, request.params.instructions);
+        break;
+      case "turn.interrupt":
+        result = { interrupted: turns.interrupt(request.params.turnId) };
+        break;
       case "config.get":
         result = store.getConfig();
         break;
