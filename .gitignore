@@ -1,2 +1,4 @@
 /AGENTS.md
 node_modules/
+credentials.json
+credentials.json.*.tmp

@@ -36,12 +36,14 @@ npm test
 | `packages/responses` | 通过 OpenAI SDK 调用 Responses API |
 | `packages/protocol` | 桌面端与 Server 共用的 RPC 请求、响应和事件类型 |
 
-Server、Responses、Store、Context 和 Agent Core 已有部分实现，其余包目前只建立清单，随实现增加入口和实际依赖，不预写空函数。
+Server、Protocol、Responses、Store、Context 和 Agent Core 已有部分实现，桌面应用和 Tool 目前只建立清单，随实现增加入口和实际依赖，不预写空函数。
 根目录的类型检查覆盖各包的 `src/` 和 `tests/`；桌面端实现时再添加 React 配置。
 
 ## 数据存储
 
-配置和对话历史统一存入 SQLite。默认数据库路径为 `%LOCALAPPDATA%\Tilot\tilot.sqlite`：Server 的 `getDefaultDataDirectory` 解析目录，创建 Store 时传入绝对路径。当前已创建配置、任务、轮次、用户输入、模型请求和工具调用表；API Key 等凭据单独处理，尚未实现凭据存储。
+配置和对话历史统一存入 SQLite。默认数据库路径为 `%LOCALAPPDATA%\Tilot\tilot.sqlite`：Server 的 `getDefaultDataDirectory` 解析目录，创建 Store 时传入绝对路径。当前已创建配置、任务、轮次、用户输入、模型请求和工具调用表。
+
+按开发者选择，API Key 以明文 JSON 保存在同目录的 `credentials.json`，包含一组 baseURL 和 apiKey，不写入 SQLite。`Store.credentials` 提供 getApiKey、saveApiKey 和 deleteApiKey；保存时通过临时文件替换，空密钥不会覆盖旧值。读取时核对规范化后的完整服务地址，地址不同返回未配置；保存新地址的密钥会替换旧凭据。Server 已提供凭据设置、删除和状态接口，不提供密钥原文读取接口；测试仅使用临时目录中的模拟密钥。
 
 任务支持创建、读取、分页列表和重命名。创建时可不绑定项目；已绑定项目不能通过重命名改变。Store 只保存项目路径，Server 负责验证目录，无项目任务后续不得调用项目文件工具。任务列表默认每页 50 条，最多 100 条。
 
@@ -72,6 +74,40 @@ Context 读完该任务截至目标轮次的历史，按成功请求记录的输
 `turn.started` 提供轮次标识，`response.event` 携带轮次、请求尝试标识和原始 SDK 事件。完整终态先保存再交付；函数返回值是本轮本地最终状态。模型失败、截断、断流或处理事件抛错会停止请求，截断尝试保存为 incomplete，所属轮次记为 failed。取消前已中止的调用不创建轮次；流中取消会结束尝试和轮次并释放请求。终态通知或数据库写入异常直接抛给调用方，不伪装成模型失败。
 
 本批发送空 tools 和 tool_choice=none；意外返回工具调用会保存为失败诊断，不登记工具执行。本批不自动重试、不执行工具、不做上下文预算与压缩。断流诊断保留最近收到的响应对象，不把预览增量拼成正式响应；终态保存中途若进程退出，由启动恢复标记仍运行的记录。
+
+## 本地服务与通信
+
+已确认使用子进程标准输入/输出，采用 UTF-8 JSON Lines：每行一个 JSON 请求，每行返回一个 JSON 结果。JSON 字符串内的换行由序列化转义，标准输出只放协议，启动和传输错误写到标准错误。Tauri 启动和管理 Node.js 服务的连接仍待实现；传输方式参考 [Tauri sidecar 文档](https://v2.tauri.app/learn/sidecar-nodejs/)。
+
+在根目录启动开发服务：
+
+```sh
+node packages/server/src/main.ts
+```
+
+首个命令行参数可传入绝对数据目录；省略时使用默认目录。输入结束后，服务处理完已收到的请求并关闭数据库。当前入口不自动恢复遗留轮次，需待宿主确保旧执行停止后接入恢复。
+
+当前支持 thread.create、thread.read、thread.list 和 thread.rename。例如发送：
+
+```json
+{"id":"req-1","method":"thread.create","params":{"title":"新任务"}}
+```
+
+连接设置使用以下接口，每次请求都包含 params 对象：
+
+| 方法 | params | 成功结果 |
+| --- | --- | --- |
+| config.get | `{}` | 普通配置 |
+| config.set | `{config: 完整配置}` | 保存后的普通配置 |
+| credentials.status | `{}` | `{configured: boolean}`，对应当前配置的 baseURL |
+| credentials.set | `{baseURL, apiKey}` | null |
+| credentials.delete | `{}` | null |
+
+配置类型与数值范围分别在 RPC 边界和 Store 校验，失败不会覆盖旧值。保存配置不会连带修改密钥；保存密钥不会修改当前服务地址。
+
+响应使用 `{id, success, result}` 或 `{id, success, error}`；找不到任务时 read 返回 null，格式错误且无法识别请求时 id 为 null。创建有项目的任务时，Server 先验证并解析真实目录。请求按到达顺序处理；当前不提供重试去重、对话启动或事件推送。
+
+Protocol 只包含通信类型、共享任务与配置数据，没有 Node.js、数据库或 SDK 依赖。Store 复用其中的 Thread 和 AppConfig 类型，避免桌面通过 Store 导入数据库代码。
 
 ## 已确认的设计决定
 

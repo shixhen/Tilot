@@ -4,13 +4,14 @@ import { isAbsolute, join } from "node:path";
 import Database from "better-sqlite3";
 import type { AppConfig } from "./config.ts";
 import { migrateDatabase } from "./database.ts";
-import type { Thread } from "./thread.ts";
+import type { Thread } from "@tilot/protocol";
 import type { Turn, TurnFinalStatus, TurnInput } from "./turn.ts";
 import { ModelHistoryStore } from "./history.ts";
 import { validatePagination } from "./pagination.ts";
+import { CredentialStore, normalizeBaseURL } from "./credentials.ts";
 
 export type { AppConfig } from "./config.ts";
-export type { Thread } from "./thread.ts";
+export type { Thread } from "@tilot/protocol";
 export type { Turn, TurnFinalStatus, TurnInput } from "./turn.ts";
 export type { AttemptStatus, ModelAttempt, AttemptCompletion, ToolResult, StoredToolCall } from "./history-types.ts";
 
@@ -19,6 +20,8 @@ export class Store {
   private readonly database: Database.Database;
   /** 模型请求和工具结果的存储入口，与配置、任务共用同一数据库。 */
   readonly history: ModelHistoryStore;
+  /** 单独文件保存的本地凭据，不随普通配置读取返回。 */
+  readonly credentials: CredentialStore;
 
   /** 打开指定绝对目录下的 tilot.sqlite 并迁移结构；初始化失败时关闭连接。 */
   constructor(dataDirectory: string) {
@@ -32,6 +35,7 @@ export class Store {
       migrateDatabase(this.database);
       this.database.pragma("journal_mode = WAL");
       this.history = new ModelHistoryStore(this.database);
+      this.credentials = new CredentialStore(dataDirectory);
     } catch (error) {
       this.database.close();
       throw error;
@@ -53,10 +57,7 @@ export class Store {
 
   /** 校验服务地址后整份保存配置；单条 UPDATE 保证失败时不会留下部分修改。 */
   saveConfig(config: AppConfig): void {
-    const url = new URL(config.baseURL);
-    if ((url.protocol !== "http:" && url.protocol !== "https:") || url.username || url.password || url.search || url.hash) {
-      throw new Error("模型服务地址必须使用 HTTP/HTTPS，且不能包含凭据、查询参数或片段。");
-    }
+    normalizeBaseURL(config.baseURL);
     const result = this.database.prepare(`
       UPDATE app_config SET
         baseURL = @baseURL, model = @model, reasoningEffort = @reasoningEffort,

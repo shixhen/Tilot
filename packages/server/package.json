@@ -2,5 +2,12 @@
   "name": "@tilot/server",
   "version": "0.1.0",
   "private": true,
-  "type": "module"
+  "type": "module",
+  "scripts": {
+    "test": "node --test tests/*.test.ts"
+  },
+  "dependencies": {
+    "@tilot/protocol": "0.1.0",
+    "@tilot/store": "0.1.0"
+  }
 }
