@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
-import { mkdtempSync, rmSync, realpathSync } from "node:fs";
+import { mkdtempSync, rmSync, realpathSync, mkdirSync, writeFileSync, symlinkSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { PassThrough, Writable } from "node:stream";
@@ -106,6 +106,37 @@ test("输出连接失败结束服务循环，不吞掉传输错误", async (cont
     output.destroy();
     store.close();
   }
+});
+
+// 选择目录仅是 UI 操作；创建时验证真实目录，已绑定路径在重命名和重开后保持固定。
+test("项目任务解析目录链接并持久化，文件和失效目录不会创建任务", async (context) => {
+  const directory = temporaryDirectory(context);
+  const project = join(directory, "project");
+  const alias = join(directory, "alias");
+  mkdirSync(project);
+  symlinkSync(project, alias, process.platform === "win32" ? "junction" : "dir");
+  const file = join(directory, "file.txt");
+  writeFileSync(file, "test", "utf8");
+  const store = new Store(join(directory, "data"));
+  const turns = new TurnManager(store, async () => {}, (error) => { throw error; });
+  let threadId: string;
+  try {
+    for (const path of [file, join(directory, "missing")]) {
+      const response = await handleRpcLine(store, JSON.stringify({ id: "invalid", method: "thread.create", params: { title: "无效项目", projectPath: path } }), turns);
+      assert.equal(response.success, false);
+    }
+    assert.equal(store.listThreads().length, 0);
+    const response = await handleRpcLine(store, JSON.stringify({ id: "valid", method: "thread.create", params: { title: "项目任务", projectPath: alias } }), turns);
+    assert.equal(response.success, true);
+    const thread = store.listThreads()[0]!;
+    threadId = thread.id;
+    assert.equal(thread.projectPath, realpathSync(project));
+    await handleRpcLine(store, JSON.stringify({ id: "rename", method: "thread.rename", params: { threadId, title: "新名称", projectPath: directory } }), turns);
+    assert.equal(store.getThread(threadId)?.projectPath, realpathSync(project));
+  } finally { store.close(); }
+  const reopened = new Store(join(directory, "data"));
+  try { assert.equal(reopened.getThread(threadId!)?.projectPath, realpathSync(project)); }
+  finally { reopened.close(); }
 });
 
 test("配置与凭据 RPC 保存并恢复设置，地址切换隔离密钥，响应不回显密钥", { timeout: 10000 }, async (context) => {

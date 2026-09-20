@@ -9,7 +9,9 @@
   },
   "scripts": {
     "test": "npm test --workspaces --if-present",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit && npm run typecheck --workspace @tilot/desktop",
+    "desktop": "npm run tauri --workspace @tilot/desktop -- dev",
+    "test:desktop": "cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml"
   },
   "devDependencies": {
     "@types/node": "24.13.5",

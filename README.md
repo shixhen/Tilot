@@ -1,7 +1,7 @@
 # Tilot
 
 基于 Tauri、React、TypeScript 和 Node.js 的本地桌面 Agent。
-当前已建立工程基础、项目目录验证、Responses 客户端、SQLite 历史存储、Context 上下文构建，以及 Core 无工具单轮执行，尚未接入桌面界面或进行真实模型联调。
+当前已建立 Responses 客户端、SQLite 历史存储、Context 上下文构建、Core 无工具单轮执行，以及桌面宿主与 Node 服务连接。桌面已支持连接配置、普通对话、流式正文与推理、取消和历史切换，尚未进行真实模型联调。
 
 分批开发顺序与验收方式见 [开发计划](docs/development-plan.md)。
 
@@ -21,6 +21,34 @@ npm test
 `packages/server/src/workspace.ts` 定义项目目录及其打开逻辑。
 打开目录只验证目录本身；后续文件工具还需要独立检查文件访问范围和忽略规则。
 
+启动 Windows 桌面开发版还需要 Rust、Visual Studio C++ Build Tools 和 WebView2：
+
+```sh
+npm run desktop
+```
+
+窗口通过 Rust 宿主启动本机 Node.js 24 服务，读取默认数据目录中的任务。刷新页面复用服务，重复启动会聚焦已有窗口；关闭应用时先通知服务取消执行并保存，超时再强制结束。
+
+`npm run build --workspace @tilot/desktop` 检查并构建前端；`npm run test:desktop` 验证 Rust 桥接与真实 Node 子进程的通信和退出。`npm test` 包含前端连接及历史/事件合并测试。前端交互已通过浏览器模拟服务验收，原生桌面端与真实模型的完整联调尚未完成。发布所需的 Node、服务代码及 SQLite 原生模块封装留到打包阶段，目前不生成安装包。
+
+## 桌面对话
+
+界面参考开发者提供的 Codex 截图，采用深色任务侧栏、蓝色用户消息和底部输入框。点击连接设置填写 Base URL、模型、推理强度和 API Key；密钥留空保留旧值，更换地址时需填写对应密钥。普通配置和密钥分开保存，部分失败会明确提示已经保存的部分。
+
+新对话在首次发送时建立任务；默认普通对话，也可以先通过“选择项目”选取本地目录。选择后不立即创建任务，取消系统选择器不会改变当前任务与草稿。首次发送时 Server 验证目录并保存解析后的真实路径，之后绑定固定；已有任务可在同项目中新建对话，不能更换绑定。侧栏按项目路径分组，同名目录展示完整路径。不同项目的新对话草稿分别保留在本次打开的界面中。
+
+Enter 发送，Shift + Enter 换行；中文输入法确认候选不会触发发送。当前系统提示词经开发者确认固定为“你是 Tilot，一个帮助用户理解和编写代码的助手。请使用用户的语言回答。”
+
+正文和推理使用 Markdown 排版，支持标题、列表、引用、表格与任务列表。代码块保留缩进，支持横向滚动和复制，流式未闭合代码块也能显示。网页链接经 Tauri Opener 交给系统默认浏览器，仅支持完整 HTTP(S) 地址；模型输出的 HTML 不执行，图片仅显示说明，不自动下载。代码语法着色暂未接入。
+
+完成消息替换临时预览，失败或取消片段标为临时预览；重新打开应用只恢复数据库中已保存的消息。历史读取覆盖全部分页，任务切换隔离消息与本次打开期间的草稿；向上阅读时不强制滚回底部。项目选择尚不代表模型可以访问文件，文件树、读取和搜索工具仍待接入。
+
+目录选择使用 Tauri Dialog 系统对话框，当前浏览器验收模拟了选择和取消的返回值；原生 Windows 目录选择器仍需人工交互验收。Server 测试覆盖无效目录、目录链接解析和项目绑定持久化。
+
+Markdown 使用 [react-markdown](https://github.com/remarkjs/react-markdown) 与 remark-gfm，未自行编写解析器。桌面测试使用 tsx 执行包含 React 组件的测试，其余包仍使用 Node 原生测试入口。Windows 开发版已编译通过，Rust 与真实 Node 服务的通信和退出测试通过；原生窗口内的发送、外部链接打开和关闭操作仍需人工验收。
+
+浏览器界面验收：运行 `npm run dev --workspace @tilot/desktop` 后打开 `http://127.0.0.1:1420/tests/preview.html`。该测试入口使用内存模拟服务，只供验证设置、流式预览、任务切换与停止；不调用模型、不读写真实凭据，也不进入生产构建。正式入口仍通过 Tauri 连接真实 Node 服务。
+
 ## 目录与职责
 
 采用 npm workspaces，在同一个仓库管理桌面应用和独立模块包。
@@ -36,8 +64,8 @@ npm test
 | `packages/responses` | 通过 OpenAI SDK 调用 Responses API |
 | `packages/protocol` | 桌面端与 Server 共用的 RPC 请求、响应和事件类型 |
 
-Server、Protocol、Responses、Store、Context 和 Agent Core 已有部分实现，桌面应用和 Tool 目前只建立清单，随实现增加入口和实际依赖，不预写空函数。
-根目录的类型检查覆盖各包的 `src/` 和 `tests/`；桌面端实现时再添加 React 配置。
+桌面应用、Server、Protocol、Responses、Store、Context 和 Agent Core 已有部分实现，Tool 目前只建立清单。
+根目录的类型检查覆盖各包和桌面的 `src/` 与 `tests/`；桌面使用独立 React 配置。
 
 ## 数据存储
 
@@ -77,7 +105,7 @@ Context 读完该任务截至目标轮次的历史，按成功请求记录的输
 
 ## 本地服务与通信
 
-已确认使用子进程标准输入/输出，采用 UTF-8 JSON Lines：每行一个 JSON 请求，输出每行一个应答或事件。JSON 字符串内的换行由序列化转义，标准输出只放协议，启动和传输错误写到标准错误。Tauri 启动和管理 Node.js 服务的连接仍待实现；传输方式参考 [Tauri sidecar 文档](https://v2.tauri.app/learn/sidecar-nodejs/)。
+已使用子进程标准输入/输出，采用 UTF-8 JSON Lines：每行一个 JSON 请求，输出每行一个应答或事件。JSON 字符串内的换行由序列化转义，标准输出只放协议，启动和传输错误写到标准错误。Tauri 宿主管理 Node 进程，通过命令发送请求、事件转发应答；React 按请求 id 配对应答，服务退出后结束全部等待。前端不能指定可执行程序或启动参数。
 
 在根目录启动开发服务：
 
