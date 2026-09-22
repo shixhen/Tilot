@@ -1,6 +1,6 @@
 import type { AppConfig, RpcRequest, RpcResponse, RpcResult } from "@tilot/protocol";
 import type { Store } from "@tilot/store";
-import { openWorkspace } from "./workspace.ts";
+import { openWorkspace } from "@tilot/tool";
 import type { TurnManager } from "./turn-manager.ts";
 import { listAttemptViews } from "./history.ts";
 

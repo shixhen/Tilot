@@ -5,6 +5,7 @@ import { renderToStaticMarkup } from "react-dom/server";
 import type { Thread } from "@tilot/protocol";
 import { groupThreads, projectName } from "../src/projects.ts";
 import { TaskList } from "../src/task-list.tsx";
+import { SidebarProvider } from "../src/components/ui/sidebar.tsx";
 
 // 同名项目必须按完整路径隔离，展示时保留可识别路径和任务顺序。
 test("侧栏区分同名目录和普通对话，保留项目内任务顺序", () => {
@@ -13,9 +14,11 @@ test("侧栏区分同名目录和普通对话，保留项目内任务顺序", ()
   assert.deepEqual(groups.map((group) => group.threads.map((thread) => thread.id)), [["0", "3"], ["1"], ["2"]]);
   assert.equal(projectName("D:\\"), "D:\\");
   assert.equal(projectName("D:\\one\\demo\\"), "demo");
-  const html = renderToStaticMarkup(createElement(TaskList, { threads, selected: "2", disabled: false, onSelect: () => {}, onNew: () => {} }));
+  const html = renderToStaticMarkup(createElement(SidebarProvider, {}, createElement(TaskList, { threads, selected: "2", disabled: false, onSelect: () => {}, onNew: () => {} })));
   assert.ok(html.includes("D:\\one\\demo"));
   assert.ok(html.includes("D:\\two\\demo"));
   assert.match(html, /普通对话/);
-  assert.match(html, /thread-button selected[^>]*title="任务 2"/);
+  const selectedButton = html.match(/<button\b(?=[^>]*title="任务 2")[^>]*>/)?.[0] ?? "";
+  assert.match(selectedButton, /data-active="true"/);
+  assert.match(selectedButton, /aria-current="page"/);
 });

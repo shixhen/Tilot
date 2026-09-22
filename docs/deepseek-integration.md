@@ -52,7 +52,7 @@ DeepSeek 的实现无服务端会话存储，不支持 previous_response_id、co
 
 parallel_tool_calls 和 max_tool_calls 被服务忽略，调用数量及串行策略由 Agent Core 控制，通过 Tool 执行。instructions 用于系统策略；该实现将 developer 角色作为 user 处理，不能靠它承载更高优先级指令。[兼容表][A4]
 
-首版只声明五个 function 工具，不使用 custom apply_patch 或服务端内置工具。对未支持的参数主动拒绝或省略，不以“服务端未报错”判断功能生效。
+首版按当前产品决定声明 read、write、edit、shell 四个 function 工具；shell 在 Windows 上使用 PowerShell。不使用 custom apply_patch 或服务端内置工具。对未支持的参数主动拒绝或省略，不以“服务端未报错”判断功能生效。
 
 ## 3. 输出项与工具回放
 
@@ -74,21 +74,20 @@ Responses 的 function 字段位于工具对象顶层。以下仅示意读取工
 ```json
 {
   "type": "function",
-  "name": "read_file",
+  "name": "read",
   "description": "读取授权项目中的代码文件",
   "parameters": {
     "type": "object",
     "properties": {
-      "projectId": { "type": "string" },
       "path": { "type": "string" }
     },
-    "required": ["projectId", "path"],
+    "required": ["path"],
     "additionalProperties": false
   }
 }
 ```
 
-Tool 校验完整参数、授权和文件版本，执行后的结果按原 call_id 回传：
+项目目录由宿主根据当前任务绑定传给 Tool，不由模型提供 projectId 或根目录。上面仅示意必要参数，实际分段读取参数随工具实现补齐。Tool 校验完整参数与执行策略，执行后的结果按原 call_id 回传：
 
 ```json
 {

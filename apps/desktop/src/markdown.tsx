@@ -1,3 +1,5 @@
+import { Check, Copy } from "lucide-react";
+import { Button } from "./components/ui/button";
 import { useRef, useState, type ComponentProps } from "react";
 import Markdown from "react-markdown";
 import remarkGfm from "remark-gfm";
@@ -21,7 +23,7 @@ function CodeBlock({ children }: ComponentProps<"pre">) {
     } catch { setStatus("复制失败，请手动选择代码"); }
   }
 
-  return <div className="code-block"><div className="code-toolbar"><span aria-live="polite">{status || "代码"}</span><button type="button" onClick={() => void copy()}>复制代码</button></div><pre ref={content}>{children}</pre></div>;
+  return <div className="code-block"><div className="code-toolbar"><span aria-live="polite">{status || "代码"}</span><Button variant="ghost" size="xs" type="button" onClick={() => void copy()}>{status === "已复制" ? <Check /> : <Copy />}复制代码</Button></div><pre ref={content}>{children}</pre></div>;
 }
 
 /** 点击网页链接时交给系统浏览器，保持当前对话窗口不发生导航。 */
