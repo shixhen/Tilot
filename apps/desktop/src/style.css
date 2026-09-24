@@ -1,115 +1,107 @@
 @import "tailwindcss";
 @custom-variant dark (&:is(.dark *));
+
+/* shadcn Neutral 深色主题。所有界面颜色由这组语义变量统一提供。 */
+:root {
+  --background: oklch(0.145 0 0);
+  --foreground: oklch(0.985 0 0);
+  --card: oklch(0.205 0 0);
+  --card-foreground: oklch(0.985 0 0);
+  --popover: oklch(0.205 0 0);
+  --popover-foreground: oklch(0.985 0 0);
+  --primary: oklch(0.922 0 0);
+  --primary-foreground: oklch(0.205 0 0);
+  --secondary: oklch(0.269 0 0);
+  --secondary-foreground: oklch(0.985 0 0);
+  --muted: oklch(0.269 0 0);
+  --muted-foreground: oklch(0.708 0 0);
+  --accent: oklch(0.269 0 0);
+  --accent-foreground: oklch(0.985 0 0);
+  --destructive: oklch(0.704 0.191 22.216);
+  --border: oklch(1 0 0 / 10%);
+  --input: oklch(1 0 0 / 15%);
+  --ring: oklch(0.556 0 0);
+  --sidebar: oklch(0.205 0 0);
+  --sidebar-foreground: oklch(0.985 0 0);
+  --sidebar-primary: oklch(0.922 0 0);
+  --sidebar-primary-foreground: oklch(0.205 0 0);
+  --sidebar-accent: oklch(0.269 0 0);
+  --sidebar-accent-foreground: oklch(0.985 0 0);
+  --sidebar-border: oklch(1 0 0 / 10%);
+  --sidebar-ring: oklch(0.556 0 0);
+  --radius: 0.625rem;
+  color-scheme: dark;
+  font-family: "Segoe UI", "Microsoft YaHei UI", sans-serif;
+  font-synthesis: none;
+}
+
 @theme inline {
   --color-background: var(--background);
   --color-foreground: var(--foreground);
+  --color-card: var(--card);
+  --color-card-foreground: var(--card-foreground);
+  --color-popover: var(--popover);
+  --color-popover-foreground: var(--popover-foreground);
   --color-primary: var(--primary);
   --color-primary-foreground: var(--primary-foreground);
   --color-secondary: var(--secondary);
-  --color-secondary-foreground: var(--foreground);
-  --color-muted: var(--secondary);
+  --color-secondary-foreground: var(--secondary-foreground);
+  --color-muted: var(--muted);
   --color-muted-foreground: var(--muted-foreground);
   --color-accent: var(--accent);
-  --color-accent-foreground: var(--foreground);
+  --color-accent-foreground: var(--accent-foreground);
+  --color-destructive: var(--destructive);
   --color-border: var(--border);
-  --color-input: var(--border);
+  --color-input: var(--input);
   --color-ring: var(--ring);
-  --color-destructive: #f0a294;
-  --color-sidebar: #202123;
-  --color-sidebar-foreground: #dedede;
-  --color-sidebar-accent: #303133;
-  --color-sidebar-accent-foreground: #fafafa;
-  --color-sidebar-border: var(--border);
-  --color-sidebar-ring: var(--ring);
+  --color-sidebar: var(--sidebar);
+  --color-sidebar-foreground: var(--sidebar-foreground);
+  --color-sidebar-primary: var(--sidebar-primary);
+  --color-sidebar-primary-foreground: var(--sidebar-primary-foreground);
+  --color-sidebar-accent: var(--sidebar-accent);
+  --color-sidebar-accent-foreground: var(--sidebar-accent-foreground);
+  --color-sidebar-border: var(--sidebar-border);
+  --color-sidebar-ring: var(--sidebar-ring);
+  --radius-sm: calc(var(--radius) - 4px);
+  --radius-md: calc(var(--radius) - 2px);
+  --radius-lg: var(--radius);
+  --radius-xl: calc(var(--radius) + 4px);
 }
-:root {
-  --background: #181818;
-  --foreground: #e8e8e8;
-  --primary: #ececec;
-  --primary-foreground: #181818;
-  --secondary: #303030;
-  --accent: #ffffff12;
-  --muted-foreground: #969696;
-  --border: #ffffff14;
-  --ring: #a1a1aa;
-  font-family: "Segoe UI", "Microsoft YaHei UI", sans-serif;
-  color-scheme: dark;
-  font-synthesis: none;
-  -webkit-font-smoothing: antialiased;
-}
-/* 参照用户提供的桌面截图；消息与输入框共用同一列宽，避免左右边线错位。 */
-.desktop-shell { --sidebar-width: 280px !important; background: #1c2228; }
-.app-sidebar [data-slot="sidebar-inner"], [data-mobile="true"] { background: linear-gradient(160deg, #1c2228 0%, #22211f 68%); }
-.workspace { border-left: 1px solid #ffffff0c; border-top-left-radius: 16px; }
-.thread-header { height: 56px; display: flex; flex-shrink: 0; align-items: center; justify-content: space-between; gap: 20px; padding: 0 24px; border-bottom: 1px solid #ffffff18; }
-.thread-header > button { color: #a0a0a0; font-weight: 400; }
-.desktop-shell:has([data-state="expanded"][data-slot="sidebar"]) .header-sidebar-trigger { display: none; }
-.conversation-column, .composer-column { width: 100%; max-width: 1080px; margin-inline: auto; padding-inline: 64px; }
-.conversation-column { padding-block: 48px 24px; }
-.composer-column { flex-shrink: 0; padding-bottom: 14px; padding-top: 8px; }
-.welcome { display: flex; min-height: 48vh; flex-direction: column; justify-content: center; align-items: center; gap: 12px; text-align: center; }
-.welcome h2 { font-size: 28px; font-weight: 500; letter-spacing: -.6px; }
-.welcome p { font-size: 15px; color: var(--muted-foreground); }
-.user-message { width: fit-content; max-width: 85%; margin: 16px 0 54px auto; padding: 12px 20px; border-radius: 24px; background: #1c4074; color: #f0f5ff; font-size: 16px; line-height: 1.75; white-space: pre-wrap; overflow-wrap: anywhere; }
-.assistant-message { margin-block: 20px; font-size: 16px; line-height: 1.85; }
-.chat-composer { border: 1px solid #ffffff12; border-radius: 26px; padding: 14px 12px 10px; background: #303030; box-shadow: 0 2px 8px #00000008; }
-.chat-composer:focus-within { border-color: #ffffff28; }
-.composer-editor { width: 100%; min-height: 60px; max-height: 220px; resize: none; border: 0; border-radius: 0; padding: 3px 3px 10px; background: transparent !important; font-size: 16px; line-height: 1.7; box-shadow: none !important; outline: none; }
-.composer-editor::placeholder { color: #8c8c8c; }
-.composer-toolbar { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding-top: 10px; }
-.composer-toolbar > div { min-width: 0; }
-.composer-toolbar svg { stroke-width: 1.8; }
-.access-label { display: flex; align-items: center; gap: 6px; margin-left: 8px; color: #f68d52; font-size: 13px; white-space: nowrap; }
-.model-selector { max-width: 220px; min-width: 0; padding-inline: 8px; font-size: 14px; font-weight: 400; color: #e8e8e8; }
-.model-selector > span { overflow: hidden; text-overflow: ellipsis; }
-.send-button { width: 34px; height: 34px; border-radius: 50%; background: #2d6bcb; color: white; }
-.send-button:hover:not(:disabled) { background: #3c7ddd; }
-.send-button:disabled { background: #ffffff16; color: #949494; opacity: 1; }
-@media (max-width: 1100px) {
-  .desktop-shell { --sidebar-width: 248px !important; }
-  .conversation-column, .composer-column { padding-inline: 32px; }
-  .access-label { display: none; }
-}
-@media (max-width: 767px) {
-  .workspace { border: 0; border-radius: 0; }
-  .thread-header { padding-inline: 16px; }
-  .conversation-column, .composer-column { padding-inline: 16px; }
-  .conversation-column { padding-top: 24px; }
-  .composer-toolbar { flex-wrap: wrap; }
-  .welcome h2 { font-size: 24px; }
-}
-@layer base {
-  * { @apply border-border; scrollbar-width: thin; scrollbar-color: #ffffff20 transparent; }
-  body { @apply m-0 bg-background text-foreground; }
-  button:not(:disabled), summary { cursor: pointer; }
-}
-.muted { color: var(--muted-foreground); }
-.error { color: #f0a294; overflow-wrap: anywhere; }
-.markdown { overflow-wrap: anywhere; min-width: 0; }
-.markdown > :first-child { margin-top: 0; }
-.markdown > :last-child { margin-bottom: 0; }
-.markdown p { margin: 14px 0; }
-.markdown h1, .markdown h2, .markdown h3, .markdown h4 { white-space: normal; overflow: visible; line-height: 1.5; margin: 24px 0 12px; font-weight: 600; }
-.markdown h1 { font-size: 24px; }
-.markdown h2 { font-size: 21px; }
-.markdown h3 { font-size: 18px; }
-.markdown ul, .markdown ol { padding-left: 24px; }
-.markdown ul { list-style-type: disc; }
-.markdown ol { list-style-type: decimal; }
-.markdown li { margin: 5px 0; }
-.markdown a { color: #a2c6fa; text-decoration: underline; text-underline-offset: 3px; }
-.markdown blockquote { border-left: 3px solid #555; color: #aaa; margin: 18px 0; padding: 0 18px; }
-.markdown hr { border: 0; border-top: 1px solid #3c3c3c; margin: 24px 0; }
-.markdown code { font-family: Consolas, "Cascadia Code", monospace; font-size: .92em; background: #292929; padding: 2px 5px; border-radius: 4px; }
-.code-block { margin: 18px 0; border: 1px solid #3b3b3b; border-radius: 10px; overflow: hidden; background: #202020; }
-.code-toolbar { display: flex; justify-content: space-between; align-items: center; padding: 7px 12px; color: #aaa; font-size: 12px; background: #282828; gap: 16px; }
-.code-toolbar button { padding: 4px 8px; border-radius: 5px; flex-shrink: 0; }
-.code-block pre { margin: 0; padding: 16px; overflow-x: auto; white-space: pre; tab-size: 2; line-height: 1.65; }
-.code-block pre code { background: none; padding: 0; border-radius: 0; }
-.table-scroll { max-width: 100%; overflow-x: auto; margin: 18px 0; }
-.markdown table { border-collapse: collapse; min-width: 100%; }
-.markdown td, .markdown th { padding: 8px 12px; border: 1px solid #444; text-align: left; }
-.markdown th { background: #282828; }
-.markdown .task-list-item { list-style: none; }
 
-@media (prefers-reduced-motion: reduce) { *, *::before, *::after { animation: none !important; transition: none !important; } }
+@layer base {
+  * { @apply border-border outline-ring/50; scrollbar-width: thin; scrollbar-color: var(--muted) transparent; }
+  body { @apply m-0 bg-background text-foreground antialiased; }
+  button:not(:disabled) { cursor: pointer; }
+}
+
+/* 原生窗口与侧栏共享系统材质；主面板仍保留 background，抽屉弹层保持不透明。 */
+.native-mica body { background: transparent; }
+.native-mica [data-slot="sidebar-wrapper"] { --sidebar: transparent; }
+
+/* Markdown 不控制应用布局，只规范模型正文的阅读样式。 */
+.message-prose { font-size: 14px; line-height: 1.85; overflow-wrap: anywhere; min-width: 0; }
+.message-prose > :first-child { margin-top: 0; }
+.message-prose > :last-child { margin-bottom: 0; }
+.message-prose p { margin-block: 12px; }
+.message-prose :is(h1, h2, h3, h4) { margin-block: 24px 12px; font-weight: 600; line-height: 1.4; letter-spacing: -.025em; }
+.message-prose h1 { font-size: 24px; }
+.message-prose h2 { font-size: 20px; }
+.message-prose h3 { font-size: 16px; }
+.message-prose ul { list-style: disc; padding-left: 24px; }
+.message-prose ol { list-style: decimal; padding-left: 24px; }
+.message-prose li { margin-block: 4px; }
+.message-prose a { text-decoration: underline; text-underline-offset: 4px; }
+.message-prose blockquote { margin-block: 16px; padding-left: 16px; border-left: 2px solid var(--border); color: var(--muted-foreground); }
+.message-prose hr { margin-block: 24px; border-color: var(--border); }
+.message-prose code { font-family: Consolas, monospace; font-size: 13px; }
+.message-prose :not(pre) > code { background: var(--muted); border-radius: 4px; padding: 2px 4px; }
+.message-prose pre { margin: 0; padding: 16px; overflow-x: auto; white-space: pre; tab-size: 2; line-height: 1.7; }
+.message-prose table { width: 100%; border-collapse: collapse; text-align: left; }
+.message-prose :is(td, th) { border-bottom: 1px solid var(--border); padding: 8px 12px; }
+.message-prose th { background: var(--muted); font-weight: 500; }
+.message-prose tr:last-child td { border-bottom: 0; }
+.message-prose .task-list-item { list-style: none; }
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after { animation: none !important; transition: none !important; }
+}

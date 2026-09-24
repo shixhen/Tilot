@@ -1,7 +1,7 @@
 import * as React from "react"
-import { cn } from "../../lib/utils"
+import { cn } from "@/lib/utils"
 
-/** shadcn 多行输入：统一输入状态并透传原生文本框属性。 */
+/** 提供标准多行输入框。 */
 function Textarea({ className, ...props }: React.ComponentProps<"textarea">) {
   return (
     <textarea

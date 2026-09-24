@@ -10,7 +10,18 @@
     "frontendDist": "../dist"
   },
   "app": {
-    "windows": [{ "label": "main", "title": "Tilot", "width": 1000, "height": 720, "minWidth": 640, "minHeight": 480 }],
+    "windows": [{
+      "label": "main",
+      "title": "Tilot",
+      "width": 1000,
+      "height": 720,
+      "minWidth": 640,
+      "minHeight": 480,
+      "decorations": true,
+      "theme": "Dark",
+      "transparent": true,
+      "windowEffects": { "effects": ["mica"] }
+    }],
     "security": {
       "csp": "default-src 'self'; connect-src ipc: http://ipc.localhost; style-src 'self' 'unsafe-inline'; img-src 'self' data:",
       "devCsp": "default-src 'self'; connect-src ipc: http://ipc.localhost http://127.0.0.1:1420 ws://127.0.0.1:1420; style-src 'self' 'unsafe-inline'; img-src 'self' data:"

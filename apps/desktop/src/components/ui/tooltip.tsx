@@ -4,7 +4,7 @@ import * as React from "react"
 import { cn } from "@/lib/utils"
 import * as TooltipPrimitive from "@radix-ui/react-tooltip"
 
-/** shadcn TooltipProvider：提供提示的Provider结构与样式。 */
+/** shadcn TooltipProvider：提供组件的语义结构、交互或默认样式。 */
 function TooltipProvider({
   delayDuration = 0,
   ...props
@@ -18,21 +18,21 @@ function TooltipProvider({
   )
 }
 
-/** shadcn Tooltip：提供提示的结构与样式。 */
+/** shadcn Tooltip：提供组件的语义结构、交互或默认样式。 */
 function Tooltip({
   ...props
 }: React.ComponentProps<typeof TooltipPrimitive.Root>) {
   return <TooltipPrimitive.Root data-slot="tooltip" {...props} />
 }
 
-/** shadcn TooltipTrigger：提供提示的Trigger结构与样式。 */
+/** shadcn TooltipTrigger：提供组件的语义结构、交互或默认样式。 */
 function TooltipTrigger({
   ...props
 }: React.ComponentProps<typeof TooltipPrimitive.Trigger>) {
   return <TooltipPrimitive.Trigger data-slot="tooltip-trigger" {...props} />
 }
 
-/** shadcn TooltipContent：提供提示的Content结构与样式。 */
+/** shadcn TooltipContent：提供组件的语义结构、交互或默认样式。 */
 function TooltipContent({
   className,
   sideOffset = 0,

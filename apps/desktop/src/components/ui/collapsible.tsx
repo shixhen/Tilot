@@ -2,14 +2,14 @@
 
 import * as CollapsiblePrimitive from "@radix-ui/react-collapsible"
 
-/** shadcn Collapsible：提供折叠内容的交互与状态。 */
+/** shadcn Collapsible：提供组件的语义结构、交互或默认样式。 */
 function Collapsible({
   ...props
 }: React.ComponentProps<typeof CollapsiblePrimitive.Root>) {
   return <CollapsiblePrimitive.Root data-slot="collapsible" {...props} />
 }
 
-/** shadcn CollapsibleTrigger：提供折叠内容的交互与状态。 */
+/** shadcn CollapsibleTrigger：提供组件的语义结构、交互或默认样式。 */
 function CollapsibleTrigger({
   ...props
 }: React.ComponentProps<typeof CollapsiblePrimitive.CollapsibleTrigger>) {
@@ -21,7 +21,7 @@ function CollapsibleTrigger({
   )
 }
 
-/** shadcn CollapsibleContent：提供折叠内容的交互与状态。 */
+/** shadcn CollapsibleContent：提供组件的语义结构、交互或默认样式。 */
 function CollapsibleContent({
   ...props
 }: React.ComponentProps<typeof CollapsiblePrimitive.CollapsibleContent>) {

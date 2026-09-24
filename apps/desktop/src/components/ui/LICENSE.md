@@ -22,6 +22,6 @@ SOFTWARE.
 
 ## 来源与本项目适配
 
-采用 [shadcn sidebar-07](https://ui.shadcn.com/blocks/sidebar#sidebar-07) 布局及 [New York v4 注册表](https://ui.shadcn.com/r/styles/new-york-v4/sidebar-07.json) 组件（2026-09-22）。侧栏、分组折叠、输入、弹窗和抽屉均基于官方源码。
+基础组件从 [New York v4 注册表](https://ui.shadcn.com/r/styles/new-york-v4/sidebar-07.json) 重新引入（2026-09-22）。页面与导航以官方 sidebar-07 为基础，布局组合见 workspace/page.tsx 与 workspace/navigation.tsx。将示例内容替换为真实任务、模型设置和对话，沿用默认组件样式与 Neutral 深色主题。
 
-项目适配：AppSidebar 与 TaskList 替换示例团队、用户和导航数据；使用 offcanvas 侧栏，主面板样式按用户参考截图调整；移除未使用的示例功能、组件及 cookie 写入；使用 Radix 独立包；补充中文注释和无障碍文案。对话输入与消息区域为 Tilot 业务组件，使用同一套样式变量。
+保留所用组件；移除未使用的 Sidebar、Sheet、Dialog 辅助函数和不读取的 cookie 写入；导入调整为独立 Radix 包，补充注释与中文可访问名称。输入区为官方 Card / Textarea / Button 的组合。旧的应用 UI 与样式已删除。项目规范见 docs/ui-guidelines.md。

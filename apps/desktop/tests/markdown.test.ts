@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
-import { MessageMarkdown, webURL } from "../src/markdown.tsx";
+import { MessageMarkdown, webURL } from "../src/workspace/markdown.tsx";
 
 // 检查流式未闭合围栏及完整代码、表格和任务列表的真实组件输出。
 test("Markdown 保留代码缩进并支持未闭合代码块、表格和任务列表", () => {

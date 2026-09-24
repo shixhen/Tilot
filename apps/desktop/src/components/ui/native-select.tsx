@@ -2,7 +2,7 @@ import * as React from "react"
 import { cn } from "@/lib/utils"
 import { ChevronDownIcon } from "lucide-react"
 
-/** shadcn NativeSelect：提供选择框的NativeSelect结构与样式。 */
+/** shadcn NativeSelect：提供组件的语义结构、交互或默认样式。 */
 function NativeSelect({
   className,
   size = "default",
@@ -10,7 +10,7 @@ function NativeSelect({
 }: Omit<React.ComponentProps<"select">, "size"> & { size?: "sm" | "default" }) {
   return (
     <div
-      className="group/native-select relative w-full has-[select:disabled]:opacity-50"
+      className="group/native-select relative w-fit has-[select:disabled]:opacity-50"
       data-slot="native-select-wrapper"
     >
       <select
@@ -33,7 +33,7 @@ function NativeSelect({
   )
 }
 
-/** shadcn NativeSelectOption：提供选择框的NativeSelectOption结构与样式。 */
+/** shadcn NativeSelectOption：提供组件的语义结构、交互或默认样式。 */
 function NativeSelectOption({
   className,
   ...props

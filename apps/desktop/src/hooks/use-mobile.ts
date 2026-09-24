@@ -2,13 +2,12 @@ import * as React from "react"
 
 const MOBILE_BREAKPOINT = 768
 
-/** 监听窗口宽度，决定是否使用移动端抽屉。 */
+/** 监听窗口是否处于移动端断点。 */
 export function useIsMobile() {
   const [isMobile, setIsMobile] = React.useState<boolean | undefined>(undefined)
 
   React.useEffect(() => {
     const mql = window.matchMedia(`(max-width: ${MOBILE_BREAKPOINT - 1}px)`)
-    /** 媒体查询跨过断点时同步窗口模式。 */
     const onChange = () => {
       setIsMobile(window.innerWidth < MOBILE_BREAKPOINT)
     }

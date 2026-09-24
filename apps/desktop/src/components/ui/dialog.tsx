@@ -6,7 +6,7 @@ import { XIcon } from "lucide-react"
 import * as DialogPrimitive from "@radix-ui/react-dialog"
 
 
-/** shadcn Dialog：提供弹窗的结构与样式。 */
+/** shadcn Dialog：提供组件的语义结构、交互或默认样式。 */
 function Dialog({
   ...props
 }: React.ComponentProps<typeof DialogPrimitive.Root>) {
@@ -14,7 +14,7 @@ function Dialog({
 }
 
 
-/** shadcn DialogPortal：提供弹窗的Portal结构与样式。 */
+/** shadcn DialogPortal：提供组件的语义结构、交互或默认样式。 */
 function DialogPortal({
   ...props
 }: React.ComponentProps<typeof DialogPrimitive.Portal>) {
@@ -22,7 +22,7 @@ function DialogPortal({
 }
 
 
-/** shadcn DialogOverlay：提供弹窗的Overlay结构与样式。 */
+/** shadcn DialogOverlay：提供组件的语义结构、交互或默认样式。 */
 function DialogOverlay({
   className,
   ...props
@@ -39,7 +39,7 @@ function DialogOverlay({
   )
 }
 
-/** shadcn DialogContent：提供弹窗的Content结构与样式。 */
+/** shadcn DialogContent：提供组件的语义结构、交互或默认样式。 */
 function DialogContent({
   className,
   children,
@@ -74,7 +74,7 @@ function DialogContent({
   )
 }
 
-/** shadcn DialogHeader：提供弹窗的Header结构与样式。 */
+/** shadcn DialogHeader：提供组件的语义结构、交互或默认样式。 */
 function DialogHeader({ className, ...props }: React.ComponentProps<"div">) {
   return (
     <div
@@ -86,7 +86,7 @@ function DialogHeader({ className, ...props }: React.ComponentProps<"div">) {
 }
 
 
-/** shadcn DialogTitle：提供弹窗的Title结构与样式。 */
+/** shadcn DialogTitle：提供组件的语义结构、交互或默认样式。 */
 function DialogTitle({
   className,
   ...props
@@ -100,7 +100,7 @@ function DialogTitle({
   )
 }
 
-/** shadcn DialogDescription：提供弹窗的Description结构与样式。 */
+/** shadcn DialogDescription：提供组件的语义结构、交互或默认样式。 */
 function DialogDescription({
   className,
   ...props

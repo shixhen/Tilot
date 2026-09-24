@@ -27,7 +27,7 @@ const SIDEBAR_WIDTH_MOBILE = "18rem"
 const SIDEBAR_WIDTH_ICON = "3rem"
 const SIDEBAR_KEYBOARD_SHORTCUT = "b"
 
-/** 侧栏共享状态，分别管理桌面折叠和窄窗口抽屉。 */
+/** 侧栏的展开状态和操作接口。 */
 type SidebarContextProps = {
   state: "expanded" | "collapsed"
   open: boolean
@@ -40,7 +40,7 @@ type SidebarContextProps = {
 
 const SidebarContext = React.createContext<SidebarContextProps | null>(null)
 
-/** 读取侧栏状态，供切换按钮和导航使用。 */
+/** 读取侧栏共享状态。 */
 function useSidebar() {
   const context = React.useContext(SidebarContext)
   if (!context) {
@@ -50,7 +50,7 @@ function useSidebar() {
   return context
 }
 
-/** 提供侧栏状态、响应式布局和 Ctrl/Command+B 快捷键。 */
+/** 管理侧栏展开状态、窄窗口抽屉和快捷键。 */
 function SidebarProvider({
   defaultOpen = true,
   open: openProp,
@@ -85,14 +85,12 @@ function SidebarProvider({
   )
 
   // Helper to toggle the sidebar.
-  /** 在当前屏幕模式下展开或收起侧栏。 */
   const toggleSidebar = React.useCallback(() => {
     return isMobile ? setOpenMobile((open) => !open) : setOpen((open) => !open)
   }, [isMobile, setOpen, setOpenMobile])
 
   // Adds a keyboard shortcut to toggle the sidebar.
   React.useEffect(() => {
-    /** 响应侧栏快捷键。 */
     const handleKeyDown = (event: KeyboardEvent) => {
       if (
         event.key === SIDEBAR_KEYBOARD_SHORTCUT &&
@@ -149,7 +147,7 @@ function SidebarProvider({
   )
 }
 
-/** 桌面显示固定侧栏，窄窗口使用带焦点管理的抽屉。 */
+/** 根据窗口宽度展示桌面侧栏或抽屉。 */
 function Sidebar({
   side = "left",
   variant = "sidebar",
@@ -196,7 +194,7 @@ function Sidebar({
         >
           <SheetHeader className="sr-only">
             <SheetTitle>任务侧栏</SheetTitle>
-            <SheetDescription>选择项目或历史任务。</SheetDescription>
+            <SheetDescription>浏览项目和历史任务。</SheetDescription>
           </SheetHeader>
           <div className="flex h-full w-full flex-col">{children}</div>
         </SheetContent>
@@ -252,7 +250,7 @@ function Sidebar({
   )
 }
 
-/** 切换侧栏的展开状态。 */
+/** 切换侧栏展开状态。 */
 function SidebarTrigger({
   className,
   onClick,
@@ -280,7 +278,7 @@ function SidebarTrigger({
 }
 
 
-/** 承载模板的主内容区域。 */
+/** 容纳侧栏旁的主面板。 */
 function SidebarInset({ className, ...props }: React.ComponentProps<"main">) {
   return (
     <main
@@ -296,7 +294,7 @@ function SidebarInset({ className, ...props }: React.ComponentProps<"main">) {
 }
 
 
-/** 容纳品牌和主要导航入口。 */
+/** 容纳侧栏品牌和主要操作。 */
 function SidebarHeader({ className, ...props }: React.ComponentProps<"div">) {
   return (
     <div
@@ -308,7 +306,7 @@ function SidebarHeader({ className, ...props }: React.ComponentProps<"div">) {
   )
 }
 
-/** 固定侧栏底部的设置入口。 */
+/** 固定显示侧栏底部操作。 */
 function SidebarFooter({ className, ...props }: React.ComponentProps<"div">) {
   return (
     <div
@@ -321,7 +319,7 @@ function SidebarFooter({ className, ...props }: React.ComponentProps<"div">) {
 }
 
 
-/** 提供可滚动的侧栏内容区域。 */
+/** 提供侧栏可滚动内容区。 */
 function SidebarContent({ className, ...props }: React.ComponentProps<"div">) {
   return (
     <div
@@ -336,7 +334,7 @@ function SidebarContent({ className, ...props }: React.ComponentProps<"div">) {
   )
 }
 
-/** 将相关导航项分组。 */
+/** 组织一组相关导航。 */
 function SidebarGroup({ className, ...props }: React.ComponentProps<"div">) {
   return (
     <div
@@ -372,7 +370,7 @@ function SidebarGroupLabel({
 
 
 
-/** 排列侧栏菜单项。 */
+/** 排列菜单项。 */
 function SidebarMenu({ className, ...props }: React.ComponentProps<"ul">) {
   return (
     <ul
@@ -384,7 +382,7 @@ function SidebarMenu({ className, ...props }: React.ComponentProps<"ul">) {
   )
 }
 
-/** 容纳一条导航及其附属操作。 */
+/** 承载菜单项及附属操作。 */
 function SidebarMenuItem({ className, ...props }: React.ComponentProps<"li">) {
   return (
     <li
@@ -418,7 +416,7 @@ const sidebarMenuButtonVariants = cva(
   }
 )
 
-/** 显示菜单按钮及选中状态，可在折叠时显示提示。 */
+/** 显示菜单项、选中状态及折叠提示。 */
 function SidebarMenuButton({
   asChild = false,
   isActive = false,
@@ -469,7 +467,7 @@ function SidebarMenuButton({
   )
 }
 
-/** 提供菜单项旁边的快捷操作。 */
+/** 显示菜单项快捷操作。 */
 function SidebarMenuAction({
   className,
   asChild = false,
@@ -504,7 +502,7 @@ function SidebarMenuAction({
 
 
 
-/** 显示项目下的任务列表。 */
+/** 排列子级任务。 */
 function SidebarMenuSub({ className, ...props }: React.ComponentProps<"ul">) {
   return (
     <ul
@@ -520,7 +518,7 @@ function SidebarMenuSub({ className, ...props }: React.ComponentProps<"ul">) {
   )
 }
 
-/** 容纳一条子级任务。 */
+/** 承载一条子级任务。 */
 function SidebarMenuSubItem({
   className,
   ...props
@@ -535,7 +533,7 @@ function SidebarMenuSubItem({
   )
 }
 
-/** 显示可选中的子级任务入口。 */
+/** 显示可选择的子级任务。 */
 function SidebarMenuSubButton({
   asChild = false,
   size = "md",

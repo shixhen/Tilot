@@ -5,21 +5,21 @@ import { cn } from "@/lib/utils"
 import { XIcon } from "lucide-react"
 import * as SheetPrimitive from "@radix-ui/react-dialog"
 
-/** shadcn Sheet：提供抽屉的结构与样式。 */
+/** shadcn Sheet：提供组件的语义结构、交互或默认样式。 */
 function Sheet({ ...props }: React.ComponentProps<typeof SheetPrimitive.Root>) {
   return <SheetPrimitive.Root data-slot="sheet" {...props} />
 }
 
 
 
-/** shadcn SheetPortal：提供抽屉的Portal结构与样式。 */
+/** shadcn SheetPortal：提供组件的语义结构、交互或默认样式。 */
 function SheetPortal({
   ...props
 }: React.ComponentProps<typeof SheetPrimitive.Portal>) {
   return <SheetPrimitive.Portal data-slot="sheet-portal" {...props} />
 }
 
-/** shadcn SheetOverlay：提供抽屉的Overlay结构与样式。 */
+/** shadcn SheetOverlay：提供组件的语义结构、交互或默认样式。 */
 function SheetOverlay({
   className,
   ...props
@@ -36,7 +36,7 @@ function SheetOverlay({
   )
 }
 
-/** shadcn SheetContent：提供抽屉的Content结构与样式。 */
+/** shadcn SheetContent：提供组件的语义结构、交互或默认样式。 */
 function SheetContent({
   className,
   children,
@@ -78,7 +78,7 @@ function SheetContent({
   )
 }
 
-/** shadcn SheetHeader：提供抽屉的Header结构与样式。 */
+/** shadcn SheetHeader：提供组件的语义结构、交互或默认样式。 */
 function SheetHeader({ className, ...props }: React.ComponentProps<"div">) {
   return (
     <div
@@ -90,7 +90,7 @@ function SheetHeader({ className, ...props }: React.ComponentProps<"div">) {
 }
 
 
-/** shadcn SheetTitle：提供抽屉的Title结构与样式。 */
+/** shadcn SheetTitle：提供组件的语义结构、交互或默认样式。 */
 function SheetTitle({
   className,
   ...props
@@ -104,7 +104,7 @@ function SheetTitle({
   )
 }
 
-/** shadcn SheetDescription：提供抽屉的Description结构与样式。 */
+/** shadcn SheetDescription：提供组件的语义结构、交互或默认样式。 */
 function SheetDescription({
   className,
   ...props

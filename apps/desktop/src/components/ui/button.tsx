@@ -1,7 +1,7 @@
 import * as React from "react"
 import { cva, type VariantProps } from "class-variance-authority"
-import { cn } from "../../lib/utils"
-import { Slot } from "@radix-ui/react-slot"
+import { cn } from "@/lib/utils"
+import * as Slot from "@radix-ui/react-slot"
 
 const buttonVariants = cva(
   "inline-flex shrink-0 items-center justify-center gap-2 rounded-md text-sm font-medium whitespace-nowrap transition-all outline-none focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring/50 disabled:pointer-events-none disabled:opacity-50 aria-invalid:border-destructive aria-invalid:ring-destructive/20 dark:aria-invalid:ring-destructive/40 [&_svg]:pointer-events-none [&_svg]:shrink-0 [&_svg:not([class*='size-'])]:size-4",
@@ -37,7 +37,7 @@ const buttonVariants = cva(
   }
 )
 
-/** shadcn 按钮：统一操作按钮的样式、尺寸和键盘焦点。 */
+/** 提供统一按钮变体、尺寸和焦点状态。 */
 function Button({
   className,
   variant = "default",
@@ -48,7 +48,7 @@ function Button({
   VariantProps<typeof buttonVariants> & {
     asChild?: boolean
   }) {
-  const Comp = asChild ? Slot : "button"
+  const Comp = asChild ? Slot.Root : "button"
 
   return (
     <Comp

@@ -4,7 +4,7 @@ import * as React from "react"
 import { cn } from "@/lib/utils"
 import * as SeparatorPrimitive from "@radix-ui/react-separator"
 
-/** shadcn Separator：提供分隔线的结构与样式。 */
+/** shadcn Separator：提供组件的语义结构、交互或默认样式。 */
 function Separator({
   className,
   orientation = "horizontal",

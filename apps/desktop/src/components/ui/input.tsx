@@ -1,7 +1,7 @@
 import * as React from "react"
-import { cn } from "../../lib/utils"
+import { cn } from "@/lib/utils"
 
-/** shadcn 单行输入：统一设置表单的输入和焦点样式。 */
+/** 提供标准单行输入框。 */
 function Input({ className, type, ...props }: React.ComponentProps<"input">) {
   return (
     <input
