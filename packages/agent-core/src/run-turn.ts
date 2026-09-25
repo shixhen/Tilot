@@ -8,6 +8,7 @@ import { executeTool, projectTools, type Workspace } from "@tilot/tool";
 
 /** Core 的内部执行事件；Server 转换为界面协议，轮次 id 用于区分并行任务。 */
 export type TurnEvent =
+  | { type: "tool.updated"; turnId: string; attemptId: string; runningToolId: string | null }
   | { type: "turn.started"; turn: Turn }
   | { type: "response.event"; turnId: string; attemptId: string; event: ResponseStreamEvent };
 
@@ -58,9 +59,11 @@ export async function runTurn(store: Store, client: OpenAI, options: RunTurnOpti
         for (const [index, call] of calls.entries()) {
           const skipped = options.signal?.aborted ? "轮次已取消，工具未执行。"
             : step === config.maxStepsPerRun ? "已达到最大模型请求次数，工具未执行。" : null;
+          if (!skipped) await notifyTool(attemptId!, records[index]!.id);
           const output = skipped ? JSON.stringify({ status: "not_executed", error: skipped })
             : await executeTool(workspace!, call.name, call.arguments, options.signal);
           store.history.saveToolResult(records[index]!.id, { type: "function_call_output", call_id: call.call_id, output });
+          await notifyTool(attemptId!, null);
         }
         if (options.signal?.aborted) finished = store.finishTurn(turn.id, "cancelled");
         else if (step === config.maxStepsPerRun) finished = store.finishTurn(turn.id, "failed", "已达到最大模型请求次数。");
@@ -76,6 +79,16 @@ export async function runTurn(store: Store, client: OpenAI, options: RunTurnOpti
     if (finished) return finished;
   }
   throw new Error("maxStepsPerRun 必须大于零。");
+
+  /** 工具通知失败时结束轮次并向上传递错误，已执行的工具不重跑。 */
+  async function notifyTool(attemptId: string, runningToolId: string | null): Promise<void> {
+    try {
+      await options.onEvent?.({ type: "tool.updated", turnId: turn.id, attemptId, runningToolId });
+    } catch (error) {
+      store.finishTurn(turn.id, "failed", errorMessage(error));
+      throw error;
+    }
+  }
 }
 
 /** 请求并保存一次完整模型响应；仅捕获执行错误，数据库保存失败不能伪装成普通模型错误。 */

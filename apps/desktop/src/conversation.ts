@@ -32,7 +32,8 @@ export async function loadConversation(request: Request, threadId: string): Prom
       }
       while (true) {
         const page = await request("turn.attempts", { turnId: turn.id, afterSequence: attempts.at(-1)?.sequence ?? 0, limit: 100 });
-        attempts.push(...page);
+        // 前端热更新不会重启 Node 服务；旧服务尚未提供 tools 字段。
+        attempts.push(...page.map((attempt) => ({ ...attempt, tools: attempt.tools ?? [] })));
         if (page.length < 100) break;
       }
       records.push({ turn, inputs, attempts, previews: [] });
@@ -48,10 +49,26 @@ export function mergeHistory(current: TurnRecord[], history: TurnRecord[]): Turn
   for (const saved of history) {
     const live = records.get(saved.turn.id);
     const turn = live && live.turn.status !== "running" && saved.turn.status === "running" ? live.turn : saved.turn;
-    const persisted = new Set(saved.attempts.flatMap((attempt) => attempt.messages.map((message) => message.itemId)));
-    records.set(turn.id, { ...saved, turn, previews: live?.previews.filter((preview) => !persisted.has(preview.itemId)) ?? [] });
+    const attempts = mergeAttempts(live?.attempts ?? [], saved.attempts);
+    const persisted = new Set(attempts.flatMap((attempt) => attempt.messages.map((message) => message.itemId)));
+    records.set(turn.id, { ...saved, attempts, turn, previews: live?.previews.filter((preview) => !persisted.has(preview.itemId)) ?? [] });
   }
   return [...records.values()].sort((a, b) => a.turn.sequence - b.turn.sequence);
+}
+
+/** 合并请求快照，旧历史查询不能抹掉较新的工具结果或执行状态。 */
+function mergeAttempts(current: AttemptView[], incoming: AttemptView[]): AttemptView[] {
+  const attempts = new Map(current.map((attempt) => [attempt.id, attempt]));
+  for (const attempt of incoming) {
+    const previous = attempts.get(attempt.id);
+    if (previous?.status === "completed" && attempt.status !== "completed") continue;
+    const tools = attempt.tools.map((tool) => {
+      const live = previous?.tools.find((entry) => entry.id === tool.id);
+      return live && tool.output === null && (live.output !== null || live.running) ? live : tool;
+    });
+    attempts.set(attempt.id, { ...attempt, tools });
+  }
+  return [...attempts.values()].sort((a, b) => a.sequence - b.sequence);
 }
 
 /** 应用单个服务事件；完成消息替换增量，终态不被迟到的启动应答覆盖。 */
@@ -63,6 +80,11 @@ export function applyEvent(records: TurnRecord[], event: ServerEvent): TurnRecor
   }
   return records.map((record) => {
     if (record.turn.id !== event.turnId) return record;
+    if (event.event === "attempt.updated") {
+      const attempts = mergeAttempts(record.attempts, [event.attempt]);
+      const persisted = new Set(event.attempt.messages.map((message) => message.itemId));
+      return { ...record, attempts, previews: record.previews.filter((preview) => !persisted.has(preview.itemId)) };
+    }
     if (record.attempts.some((attempt) => attempt.messages.some((message) => message.itemId === event.itemId))) return record;
     const previews = [...record.previews];
     const index = previews.findIndex((preview) => preview.itemId === event.itemId);

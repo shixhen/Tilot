@@ -2,7 +2,7 @@ import { runTurn, type TurnEvent } from "@tilot/agent-core";
 import { createResponsesClient } from "@tilot/responses";
 import type { Store, Turn } from "@tilot/store";
 import type { ServerEvent, TurnNotification } from "@tilot/protocol";
-import { projectMessages } from "./history.ts";
+import { listAttemptViews, projectMessages } from "./history.ts";
 
 /** 当前进程持有的执行句柄，关闭连接时取消并等待 Core 完成落库。 */
 interface ActiveTurn {
@@ -44,6 +44,11 @@ export class TurnManager {
           this.active.set(current.id, execution);
           started.resolve(current);
           await this.emit({ event: "turn.started", turn: current });
+        } else if (event.type === "tool.updated") {
+          const saved = this.store.history.getAttempt(event.attemptId)!;
+          const attempt = listAttemptViews(this.store, event.turnId, saved.sequence - 1, 1)[0]!;
+          for (const tool of attempt.tools) tool.running = tool.id === event.runningToolId;
+          await this.emit({ event: "attempt.updated", threadId, turnId: event.turnId, attempt });
         } else {
           for (const notification of projectResponseEvent(threadId, event)) await this.emit(notification);
         }

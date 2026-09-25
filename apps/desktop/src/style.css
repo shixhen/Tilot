@@ -78,6 +78,16 @@
 .native-mica body { background: transparent; }
 .native-mica [data-slot="sidebar-wrapper"] { --sidebar: transparent; }
 
+/* 连续调宽时立即跟随指针；跨过收起阈值时由组件恢复过渡效果。 */
+[data-slot="sidebar-wrapper"][data-resizing] { cursor: col-resize; user-select: none; }
+[data-slot="sidebar-wrapper"][data-resizing] :is([data-slot="sidebar-gap"], [data-slot="sidebar-container"], [data-slot="sidebar-inset"]) { transition: none; }
+
+/* 窄窗口抽屉与桌面侧栏采用同一时长和减速曲线，关闭时保留退出动画。 */
+.sidebar-drawer[data-state="open"] { animation: sidebar-enter 240ms cubic-bezier(0.2, 0, 0, 1); }
+.sidebar-drawer[data-state="closed"] { animation: sidebar-exit 240ms cubic-bezier(0.2, 0, 0, 1); }
+@keyframes sidebar-enter { from { transform: translateX(-100%); } to { transform: translateX(0); } }
+@keyframes sidebar-exit { from { transform: translateX(0); } to { transform: translateX(-100%); } }
+
 /* Markdown 不控制应用布局，只规范模型正文的阅读样式。 */
 .message-prose { font-size: 14px; line-height: 1.85; overflow-wrap: anywhere; min-width: 0; }
 .message-prose > :first-child { margin-top: 0; }

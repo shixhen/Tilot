@@ -8,6 +8,23 @@ import type { RpcRequest, RpcResult } from "@tilot/protocol";
 import { Store } from "@tilot/store";
 import { handleRpcLine } from "../src/rpc.ts";
 import { TurnManager } from "../src/turn-manager.ts";
+import { listAttemptViews } from "../src/history.ts";
+
+// 展示层按原始 outputIndex 关联调用与结果，不改写 SDK 响应。
+test("工具历史保留调用参数、输出位置与已保存结果", (context) => {
+  const { store } = openHistory(context);
+  const turn = store.startTurn(store.createThread("工具历史").id, "读取");
+  const attempt = store.history.startAttempt(turn.id, store.listTurnInputs(turn.id)[0]!.id);
+  const response = sampleResponse();
+  response.output.push({ type: "function_call", id: "function_1", call_id: "call_1", name: "read", arguments: '{"path":"a.ts"}', status: "completed" });
+  store.history.finishAttempt(attempt.id, { status: "completed", response });
+  const call = store.history.listToolCalls(attempt.id)[0]!;
+  assert.equal(listAttemptViews(store, turn.id)[0]!.tools[0]!.output, null);
+  store.history.saveToolResult(call.id, { type: "function_call_output", call_id: call.callId, output: "文件内容" });
+  assert.deepEqual(listAttemptViews(store, turn.id)[0]!.tools, [{
+    id: call.id, outputIndex: response.output.length - 1, name: "read", arguments: '{"path":"a.ts"}', output: "文件内容", running: false,
+  }]);
+});
 
 /** 创建独立数据库和真实 RPC 查询入口；测试不调用模型。 */
 function openHistory(context: TestContext) {
@@ -60,7 +77,7 @@ test("历史查询保留原文、输入边界和消息位置，只返回展示�
   assert.deepEqual(await query({ id: "inputs", method: "turn.inputs", params: { turnId: turn.id } }), [input, extra]);
   const expected = [{
     id: saved.id, turnId: turn.id, sequence: 1, inputThroughId: input.id, status: "completed",
-    error: null, createdAt: saved.createdAt, finishedAt: saved.finishedAt,
+    error: null, createdAt: saved.createdAt, finishedAt: saved.finishedAt, tools: [],
     messages: [
       { itemId: "reasoning_1", outputIndex: 0, parts: [{ kind: "reasoning", text: "推理正文" }] },
       { itemId: "message_1", outputIndex: 1, parts: [{ kind: "text", text: "正文" }, { kind: "refusal", text: "拒绝部分" }] },

@@ -22,7 +22,9 @@ import {
   TooltipTrigger,
 } from "@/components/ui/tooltip"
 
-const SIDEBAR_WIDTH = "16rem"
+const SIDEBAR_MIN_WIDTH = 200
+const SIDEBAR_COLLAPSE_DISTANCE = 80
+const SIDEBAR_MAX_WIDTH = 480
 const SIDEBAR_WIDTH_MOBILE = "18rem"
 const SIDEBAR_WIDTH_ICON = "3rem"
 const SIDEBAR_KEYBOARD_SHORTCUT = "b"
@@ -36,6 +38,10 @@ type SidebarContextProps = {
   setOpenMobile: (open: boolean) => void
   isMobile: boolean
   toggleSidebar: () => void
+  width: number
+  setWidth: (width: number) => void
+  resizing: boolean
+  setResizing: (resizing: boolean) => void
 }
 
 const SidebarContext = React.createContext<SidebarContextProps | null>(null)
@@ -66,6 +72,8 @@ function SidebarProvider({
 }) {
   const isMobile = useIsMobile()
   const [openMobile, setOpenMobile] = React.useState(false)
+  const [width, setWidth] = React.useState(256)
+  const [resizing, setResizing] = React.useState(false)
 
   // This is the internal state of the sidebar.
   // We use openProp and setOpenProp for control from outside the component.
@@ -118,8 +126,9 @@ function SidebarProvider({
       openMobile,
       setOpenMobile,
       toggleSidebar,
+      width, setWidth, resizing, setResizing,
     }),
-    [state, open, setOpen, isMobile, openMobile, setOpenMobile, toggleSidebar]
+    [state, open, setOpen, isMobile, openMobile, setOpenMobile, toggleSidebar, width, resizing]
   )
 
   return (
@@ -127,9 +136,10 @@ function SidebarProvider({
       <TooltipProvider delayDuration={0}>
         <div
           data-slot="sidebar-wrapper"
+          data-resizing={resizing || undefined}
           style={
             {
-              "--sidebar-width": SIDEBAR_WIDTH,
+              "--sidebar-width": `min(${width}px, 50vw)`,
               "--sidebar-width-icon": SIDEBAR_WIDTH_ICON,
               ...style,
             } as React.CSSProperties
@@ -184,7 +194,7 @@ function Sidebar({
           data-sidebar="sidebar"
           data-slot="sidebar"
           data-mobile="true"
-          className="w-(--sidebar-width) bg-sidebar p-0 text-sidebar-foreground [&>button]:hidden"
+          className="sidebar-drawer w-(--sidebar-width) bg-sidebar p-0 text-sidebar-foreground"
           style={
             {
               "--sidebar-width": SIDEBAR_WIDTH_MOBILE,
@@ -204,7 +214,7 @@ function Sidebar({
 
   return (
     <div
-      className="group peer hidden text-sidebar-foreground md:block"
+      className="group peer hidden shrink-0 text-sidebar-foreground md:block"
       data-state={state}
       data-collapsible={state === "collapsed" ? collapsible : ""}
       data-variant={variant}
@@ -215,7 +225,7 @@ function Sidebar({
       <div
         data-slot="sidebar-gap"
         className={cn(
-          "relative w-(--sidebar-width) bg-transparent transition-[width] duration-200 ease-linear",
+          "relative w-(--sidebar-width) bg-transparent transition-[width] duration-240 ease-[cubic-bezier(0.2,0,0,1)]",
           "group-data-[collapsible=offcanvas]:w-0",
           "group-data-[side=right]:rotate-180",
           variant === "floating" || variant === "inset"
@@ -226,7 +236,7 @@ function Sidebar({
       <div
         data-slot="sidebar-container"
         className={cn(
-          "fixed inset-y-0 z-10 hidden h-svh w-(--sidebar-width) transition-[left,right,width] duration-200 ease-linear md:flex",
+          "absolute inset-y-0 z-10 hidden h-full w-(--sidebar-width) transition-[left,right,width] duration-240 ease-[cubic-bezier(0.2,0,0,1)] md:flex",
           side === "left"
             ? "left-0 group-data-[collapsible=offcanvas]:left-[calc(var(--sidebar-width)*-1)]"
             : "right-0 group-data-[collapsible=offcanvas]:right-[calc(var(--sidebar-width)*-1)]",
@@ -245,9 +255,96 @@ function Sidebar({
         >
           {children}
         </div>
+        {collapsible === "offcanvas" && <SidebarResizeHandle side={side} />}
       </div>
     </div>
   )
+}
+
+/** 拖动侧栏调宽，向内越过缓冲距离收起，收起后反向拖动即可展开。 */
+function SidebarResizeHandle({ side }: { side: "left" | "right" }) {
+  const { open, setOpen, width, setWidth, setResizing } = useSidebar()
+  const drag = React.useRef<{
+    x: number; width: number; next: number; expanded: boolean
+  } | null>(null)
+  const transitionTimer = React.useRef<ReturnType<typeof setTimeout> | undefined>(undefined)
+  React.useEffect(() => () => {
+    clearTimeout(transitionTimer.current)
+    setResizing(false)
+  }, [setResizing])
+
+  /** 跨过收起阈值时暂时恢复缓动，动画结束后继续直接跟随指针。 */
+  function animateToggle(expanded: boolean): void {
+    clearTimeout(transitionTimer.current)
+    drag.current!.expanded = expanded
+    setResizing(false)
+    setOpen(expanded)
+    transitionTimer.current = setTimeout(() => {
+      transitionTimer.current = undefined
+      if (drag.current) {
+        setResizing(true)
+        updateDrag()
+      }
+    }, 240)
+  }
+
+  /** 固定切换边界；允许动画中反向切换，最小宽度以内不继续缩窄。 */
+  function updateDrag(): void {
+    const current = drag.current
+    if (!current) return
+    const expanded = current.next > SIDEBAR_MIN_WIDTH - SIDEBAR_COLLAPSE_DISTANCE
+    if (expanded !== current.expanded) {
+      animateToggle(expanded)
+    } else if (expanded && transitionTimer.current === undefined) {
+      setWidth(Math.max(SIDEBAR_MIN_WIDTH, Math.min(current.next, maximum())))
+    }
+  }
+
+  /** 松开或取消时释放指针；让已经开始的动画完成，不再改动宽度。 */
+  function finish(event: React.PointerEvent<HTMLDivElement>): void {
+    drag.current = null
+    setResizing(false)
+    if (event.currentTarget.hasPointerCapture(event.pointerId)) {
+      event.currentTarget.releasePointerCapture(event.pointerId)
+    }
+  }
+
+  /** 限制侧栏最多占半个窗口，给对话区保留可用空间。 */
+  function maximum(): number {
+    return Math.min(SIDEBAR_MAX_WIDTH, window.innerWidth / 2)
+  }
+
+  // 收起期间仍保留捕获指针的节点，使同一次拖动可以反向展开。
+  if (!open && !drag.current) return null
+  return <div
+    role="separator" aria-label="调整侧栏宽度" aria-orientation="vertical"
+    aria-valuemin={SIDEBAR_MIN_WIDTH} aria-valuemax={SIDEBAR_MAX_WIDTH} aria-valuenow={width}
+    tabIndex={0}
+    className={cn("absolute inset-y-0 z-20 w-1 touch-none cursor-col-resize outline-none focus-visible:bg-sidebar-border", side === "left" ? "right-0" : "left-0")}
+    onPointerDown={(event) => {
+      if (event.button !== 0) return
+      event.preventDefault()
+      const actualWidth = event.currentTarget.parentElement!.getBoundingClientRect().width
+      drag.current = {
+        x: event.clientX, width: actualWidth, next: actualWidth, expanded: open,
+      }
+      event.currentTarget.setPointerCapture(event.pointerId)
+      if (transitionTimer.current === undefined) setResizing(true)
+    }}
+    onPointerMove={(event) => {
+      if (!drag.current) return
+      drag.current.next = drag.current.width + (event.clientX - drag.current.x) * (side === "left" ? 1 : -1)
+      updateDrag()
+    }}
+    onPointerUp={finish} onPointerCancel={finish} onLostPointerCapture={finish}
+    onKeyDown={(event) => {
+      if (event.key !== "ArrowLeft" && event.key !== "ArrowRight") return
+      event.preventDefault()
+      const next = width + (event.key === "ArrowRight" ? 16 : -16) * (side === "left" ? 1 : -1)
+      if (next < SIDEBAR_MIN_WIDTH) setOpen(false)
+      else setWidth(Math.min(next, maximum()))
+    }}
+  />
 }
 
 /** 切换侧栏展开状态。 */
@@ -256,7 +353,8 @@ function SidebarTrigger({
   onClick,
   ...props
 }: React.ComponentProps<typeof Button>) {
-  const { toggleSidebar } = useSidebar()
+  const { toggleSidebar, isMobile, openMobile, open } = useSidebar()
+  const expanded = isMobile ? openMobile : open
 
   return (
     <Button
@@ -264,6 +362,9 @@ function SidebarTrigger({
       data-slot="sidebar-trigger"
       variant="ghost"
       size="icon"
+      aria-label={expanded ? "收起侧栏" : "展开侧栏"}
+      aria-expanded={expanded}
+      title={expanded ? "收起侧栏 (Ctrl+B)" : "展开侧栏 (Ctrl+B)"}
       className={cn("size-7", className)}
       onClick={(event) => {
         onClick?.(event)
@@ -284,7 +385,7 @@ function SidebarInset({ className, ...props }: React.ComponentProps<"main">) {
     <main
       data-slot="sidebar-inset"
       className={cn(
-        "relative flex w-full flex-1 flex-col bg-background",
+        "relative flex w-full flex-1 flex-col bg-background transition-[margin] duration-240 ease-[cubic-bezier(0.2,0,0,1)]",
         "md:peer-data-[variant=inset]:m-2 md:peer-data-[variant=inset]:ml-0 md:peer-data-[variant=inset]:rounded-xl md:peer-data-[variant=inset]:shadow-sm md:peer-data-[variant=inset]:peer-data-[state=collapsed]:ml-2",
         className
       )}

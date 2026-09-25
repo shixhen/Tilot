@@ -93,10 +93,22 @@ export interface AttemptView {
   createdAt: number;
   finishedAt: number | null;
   messages: MessageView[];
+  tools: ToolView[];
+}
+
+/** 工具展示记录；结果为空时尚未保存结果，不代表可以重新执行。 */
+export interface ToolView {
+  id: string;
+  outputIndex: number;
+  name: string;
+  arguments: string;
+  output: string | null;
+  running: boolean;
 }
 
 /** 服务推送数据；不向界面传递 SDK 响应对象或模型请求参数。 */
 export type TurnNotification =
+  | { event: "attempt.updated"; threadId: string; turnId: string; attempt: AttemptView }
   | { event: "turn.started" | "turn.finished"; turn: Turn }
   | { event: "message.delta"; threadId: string; turnId: string; itemId: string; contentIndex: number; kind: TextKind; delta: string }
   | { event: "message.completed"; threadId: string; turnId: string; itemId: string; outputIndex: number; parts: MessagePart[] };

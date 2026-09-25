@@ -29,6 +29,10 @@ export class BackendConnection {
 
   /** 先订阅事件再启动服务，避免遗漏启动阶段的应答或错误。 */
   static async connect(onEvent: (event: ServerEvent) => void, onDisconnect: (error: Error) => void): Promise<BackendConnection> {
+    // 桌面宿主或官方测试 mock 才会注入通信桥，普通浏览器不具备本地服务连接能力。
+    if (!("__TAURI_INTERNALS__" in window)) {
+      throw new Error("请在 Tilot 桌面程序中使用对话功能；当前浏览器页面仅供查看界面。");
+    }
     const connection = new BackendConnection(onEvent, onDisconnect);
     try {
       connection.unlisten = await listen<BackendEvent>("backend-event", ({ payload }) => connection.receive(payload));

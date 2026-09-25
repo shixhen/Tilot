@@ -1,5 +1,5 @@
 import type { Response } from "openai/resources/responses/responses";
-import type { AttemptView, MessagePart, MessageView } from "@tilot/protocol";
+import type { AttemptView, MessagePart, MessageView, ToolView } from "@tilot/protocol";
 import type { Store } from "@tilot/store";
 import { getResponseToolCallsFromResponse } from "@tilot/responses/output";
 
@@ -7,14 +7,24 @@ import { getResponseToolCallsFromResponse } from "@tilot/responses/output";
 export function listAttemptViews(store: Store, turnId: string, afterSequence = 0, limit = 50): AttemptView[] {
   return store.history.listAttempts(turnId, afterSequence, limit).map((attempt) => {
     let messages: MessageView[] = [];
+    const tools: ToolView[] = [];
     if (attempt.status === "completed") {
       if (!attempt.response) throw new Error("成功请求缺少已保存的响应。");
       messages = projectMessages(attempt.response);
+      for (const record of store.history.listToolCalls(attempt.id)) {
+        const call = attempt.response.output[record.outputIndex];
+        if (call?.type !== "function_call") throw new Error("工具记录与模型响应不匹配。");
+        tools.push({
+          id: record.id, outputIndex: record.outputIndex, name: call.name, arguments: call.arguments,
+          output: record.result === null ? null : typeof record.result.output === "string" ? record.result.output : JSON.stringify(record.result.output),
+          running: false,
+        });
+      }
     }
     return {
       id: attempt.id, turnId: attempt.turnId, sequence: attempt.sequence,
       inputThroughId: attempt.inputThroughId, status: attempt.status, error: attempt.error,
-      createdAt: attempt.createdAt, finishedAt: attempt.finishedAt, messages,
+      createdAt: attempt.createdAt, finishedAt: attempt.finishedAt, messages, tools,
     };
   });
 }

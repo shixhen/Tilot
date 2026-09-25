@@ -3,7 +3,7 @@ import type { Thread } from "@tilot/protocol";
 import type { WorkspaceState } from "../hooks/use-workspace";
 import { groupThreads, projectName } from "../projects";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "../components/ui/collapsible";
-import { Sidebar, SidebarContent, SidebarFooter, SidebarGroup, SidebarGroupLabel, SidebarHeader, SidebarMenu, SidebarMenuAction, SidebarMenuButton, SidebarMenuItem, SidebarMenuSub, SidebarMenuSubButton, SidebarMenuSubItem, SidebarTrigger, useSidebar } from "../components/ui/sidebar";
+import { Sidebar, SidebarContent, SidebarFooter, SidebarGroup, SidebarGroupLabel, SidebarHeader, SidebarMenu, SidebarMenuAction, SidebarMenuButton, SidebarMenuItem, SidebarMenuSub, SidebarMenuSubButton, SidebarMenuSubItem, useSidebar } from "../components/ui/sidebar";
 
 /** 按项目组织的真实任务导航。 */
 interface TaskNavigationProps {
@@ -57,7 +57,6 @@ export function WorkspaceNavigation({ state }: { state: WorkspaceState }) {
       <div className="flex items-center gap-2 px-2 py-2">
         <div className="flex size-8 items-center justify-center rounded-lg bg-sidebar-primary text-sidebar-primary-foreground"><Terminal className="size-4" /></div>
         <div className="grid flex-1 text-left text-sm leading-tight"><span className="font-semibold">Tilot</span><span className="text-xs text-muted-foreground">个人工作区</span></div>
-        <SidebarTrigger className="md:hidden" aria-label="关闭任务侧栏" />
       </div>
       <SidebarMenu>
         <SidebarMenuItem><SidebarMenuButton disabled={state.busy} onClick={() => navigate(() => state.select(null))}><SquarePen /><span>新对话</span></SidebarMenuButton></SidebarMenuItem>

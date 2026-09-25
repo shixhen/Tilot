@@ -15,6 +15,12 @@ afterEach(() => {
   Reflect.deleteProperty(globalThis, "window");
 });
 
+// 普通浏览器缺少桌面通信桥，应返回可理解的提示而非底层接口异常。
+test("浏览器直接打开时说明需要桌面程序", async () => {
+  Reflect.deleteProperty(window, "__TAURI_INTERNALS__");
+  await assert.rejects(BackendConnection.connect(() => assert.fail("不应收到服务事件"), assert.fail), /请在 Tilot 桌面程序中使用对话功能/);
+});
+
 // 应答可以乱序到达，流式事件不能占用等待中的 RPC 应答。
 test("按 id 匹配乱序应答，并独立交付流式事件", async () => {
   const events: ServerEvent[] = [];

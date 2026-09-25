@@ -91,7 +91,7 @@ test("完成一轮并回放历史，冻结输入与配置，终态事件在保�
       if (event.type === "turn.started") {
         store.appendTurnInput(event.turn.id, "稍后补充");
         store.saveConfig({ ...config, model: "changed-model" });
-      } else if (event.event.type === "response.completed") {
+      } else if (event.type === "response.event" && event.event.type === "response.completed") {
         assert.equal(store.getTurn(event.turnId)?.status, "completed");
         assert.equal(store.history.getAttempt(event.attemptId)?.status, "completed");
       }
@@ -213,7 +213,18 @@ test("项目工具按顺序执行并配对落库，下一次请求保留推理�
     { name: "shell", arguments: JSON.stringify({ command: "Set-Content -LiteralPath 'note.txt' -Value '你好' -Encoding UTF8" }) },
     { name: "read", arguments: JSON.stringify({ path: "note.txt" }) },
   ]) : sampleEvents());
-  const turn = await runTurn(store, client, { threadId: thread.id, input: "检查", instructions: "系统策略" });
+  const toolUpdates: { running: boolean; savedResults: number }[] = [];
+  const turn = await runTurn(store, client, {
+    threadId: thread.id, input: "检查", instructions: "系统策略",
+    onEvent: (event) => {
+      if (event.type !== "tool.updated") return;
+      toolUpdates.push({ running: event.runningToolId !== null, savedResults: store.history.listToolCalls(event.attemptId).filter((call) => call.result !== null).length });
+    },
+  });
+  assert.deepEqual(toolUpdates, [
+    { running: true, savedResults: 0 }, { running: false, savedResults: 1 },
+    { running: true, savedResults: 1 }, { running: false, savedResults: 2 },
+  ]);
   assert.equal(turn.status, "completed");
   const attempts = store.history.listAttempts(turn.id);
   assert.equal(attempts.length, 2);

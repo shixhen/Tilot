@@ -3,6 +3,7 @@ import type { MessagePart } from "@tilot/protocol";
 import type { TurnRecord } from "../conversation";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "../components/ui/collapsible";
 import { MessageMarkdown } from "./markdown";
+import { ToolCall } from "./tool-call";
 
 /** 渲染同一条回答的推理、正文和拒绝信息。 */
 function MessageParts({ parts }: { parts: MessagePart[] }) {
@@ -27,7 +28,9 @@ export function TurnMessages({ record }: { record: TurnRecord }) {
     throughId = attempt.inputThroughId;
     return <div key={attempt.id} className="grid gap-6">
       {inputs.map((input) => <UserMessage key={input.id} text={input.content} />)}
-      {attempt.messages.map((message) => <article key={message.itemId}><MessageParts parts={message.parts} /></article>)}
+      {[...attempt.messages, ...attempt.tools].sort((a, b) => a.outputIndex - b.outputIndex).map((item) =>
+        "parts" in item ? <article key={item.itemId}><MessageParts parts={item.parts} /></article>
+          : <ToolCall key={item.id} tool={item} active={record.turn.status === "running"} />)}
     </div>;
   });
   const status = record.turn.status;
