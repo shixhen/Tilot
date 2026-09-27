@@ -231,7 +231,7 @@ test("项目工具按顺序执行并配对落库，下一次请求保留推理�
   const calls = store.history.listToolCalls(attempts[0]!.id);
   assert.equal(calls.length, 2);
   const first = JSON.parse(String(requests[0]!.body));
-  assert.deepEqual(first.tools.map((tool: { name: string }) => tool.name), ["read", "shell"]);
+  assert.deepEqual(first.tools.map((tool: { name: string }) => tool.name), ["write", "edit", "read", "shell"]);
   assert.equal(first.tool_choice, "auto");
   const second = JSON.parse(String(requests[1]!.body));
   assert.deepEqual(second.input.map((item: { type?: string }) => item.type ?? "user"),
@@ -241,6 +241,23 @@ test("项目工具按顺序执行并配对落库，下一次请求保留推理�
   assert.equal(JSON.parse(second.input[5].output).data.content, "你好\r\n");
   assert.equal(second.input[4].call_id, calls[0]!.callId);
   assert.equal(second.input[5].call_id, calls[1]!.callId);
+});
+
+test("模型可连续写入、精确编辑并读取文件，结果进入下一次请求", async (context) => {
+  const store = openTestStore(context);
+  const thread = store.createThread("文件修改", projectDirectory(context));
+  let count = 0;
+  const { client, requests } = mockClient(() => ++count === 1 ? toolEvents([
+    { name: "write", arguments: JSON.stringify({ path: "src/a.txt", content: "第一行\r\n旧内容\n" }) },
+    { name: "edit", arguments: JSON.stringify({ path: "src/a.txt", oldText: "旧内容", newText: "新内容" }) },
+    { name: "read", arguments: JSON.stringify({ path: "src/a.txt" }) },
+  ]) : sampleEvents());
+  const turn = await runTurn(store, client, { threadId: thread.id, input: "修改文件", instructions: "" });
+  assert.equal(turn.status, "completed");
+  const next = JSON.parse(String(requests[1]!.body));
+  const results = next.input.filter((item: { type: string }) => item.type === "function_call_output").map((item: { output: string }) => JSON.parse(item.output));
+  assert.deepEqual(results.map((result: { status: string }) => result.status), ["ok", "ok", "ok"]);
+  assert.equal(results[2].data.content, "第一行\r\n新内容\n");
 });
 
 test("未知工具、非法参数及读取失败都有配对结果，模型可继续作答", async (context) => {

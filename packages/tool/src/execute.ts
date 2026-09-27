@@ -1,10 +1,25 @@
 import type { FunctionTool } from "openai/resources/responses/responses";
 import { readProjectFile } from "./read.ts";
 import { runShell } from "./shell.ts";
+import { editProjectFile, writeProjectFile } from "./write.ts";
 import type { Workspace } from "./workspace.ts";
 
 /** 当前已实现的模型工具声明；项目根目录由宿主绑定，不允许模型指定。 */
 export const projectTools: FunctionTool[] = [
+  {
+    type: "function", name: "write", strict: false,
+    description: "以 UTF-8 创建或完整覆盖项目文件，自动创建父目录。覆盖已有文件前先读取。路径使用 /，不允许绝对路径和内部链接。",
+    parameters: { type: "object", additionalProperties: false, required: ["path", "content"], properties: {
+      path: { type: "string" }, content: { type: "string" },
+    } },
+  },
+  {
+    type: "function", name: "edit", strict: false,
+    description: "精确替换 UTF-8 项目文件中的一处文本。先读取文件；oldText 必须非空且唯一匹配，换行也必须一致。保留未修改部分及 BOM，不作模糊匹配。",
+    parameters: { type: "object", additionalProperties: false, required: ["path", "oldText", "newText"], properties: {
+      path: { type: "string" }, oldText: { type: "string", minLength: 1 }, newText: { type: "string" },
+    } },
+  },
   {
     type: "function", name: "read", strict: false,
     description: "读取项目内 UTF-8 文本。路径使用 / 分隔，不允许绝对路径或内部链接。默认最多 200 行、50 KiB；根据 nextOffset 续读。",
@@ -38,7 +53,15 @@ export async function executeTool(workspace: Workspace, name: string, argumentsJ
     if (!args || typeof args !== "object" || Array.isArray(args)) throw new Error("工具参数必须是 JSON 对象。");
     const values = args as Record<string, unknown>;
     let data;
-    if (name === "read") {
+    if (name === "write") {
+      validateKeys(values, ["path", "content"]);
+      if (typeof values.path !== "string" || typeof values.content !== "string") throw new Error("path 和 content 必须是字符串。");
+      data = await writeProjectFile(workspace, { path: values.path, content: values.content }, signal);
+    } else if (name === "edit") {
+      validateKeys(values, ["path", "oldText", "newText"]);
+      if (typeof values.path !== "string" || typeof values.oldText !== "string" || typeof values.newText !== "string") throw new Error("path、oldText 和 newText 必须是字符串。");
+      data = await editProjectFile(workspace, { path: values.path, oldText: values.oldText, newText: values.newText }, signal);
+    } else if (name === "read") {
       validateKeys(values, ["path", "offset", "limit"]);
       if (typeof values.path !== "string") throw new Error("path 必须是字符串。");
       if (values.offset !== undefined && typeof values.offset !== "number") throw new Error("offset 必须是数字。");
