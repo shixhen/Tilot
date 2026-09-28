@@ -1,4 +1,4 @@
-import { Check, ChevronRight, CircleAlert, FileText, LoaderCircle, Terminal } from "lucide-react";
+import { ChevronRight, CircleAlert, FileText, LoaderCircle, Terminal } from "lucide-react";
 import type { ToolView } from "@tilot/protocol";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "../components/ui/collapsible";
 
@@ -30,22 +30,23 @@ export function ToolCall({ tool, active }: { tool: ToolView; active: boolean }) 
   const labels: Record<string, string> = { read: "读取文件", write: "写入文件", edit: "编辑文件", shell: "执行命令" };
   const summary = fileTool ? args.path : tool.name === "shell" ? args.command : tool.name;
   const output = typeof result.error === "string" ? result.error : typeof data.content === "string" ? data.content : typeof data.output === "string" ? data.output : tool.output;
-  return <Collapsible className="min-w-0 rounded-lg border text-sm">
-    <CollapsibleTrigger className="group flex w-full min-w-0 items-center gap-2 rounded-lg px-3 py-2 text-left outline-none focus-visible:ring-2 focus-visible:ring-ring">
-      {fileTool ? <FileText className="size-4 shrink-0" /> : <Terminal className="size-4 shrink-0" />}
-      <span className="shrink-0">{labels[tool.name] ?? tool.name}</span>
-      <span className="min-w-0 flex-1 truncate text-muted-foreground" title={typeof summary === "string" ? summary : undefined}>{typeof summary === "string" ? summary : "参数无效"}</span>
-      <span className={`flex shrink-0 items-center gap-1 text-xs ${failed ? "text-destructive" : "text-muted-foreground"}`}>
-        {running ? <LoaderCircle className="size-3 animate-spin" /> : failed ? <CircleAlert className="size-3" /> : status === "已完成" ? <Check className="size-3" /> : null}{status}
-      </span>
-      <ChevronRight className="size-3.5 shrink-0 transition-transform group-data-[state=open]:rotate-90" />
+  return <Collapsible className="group/tool min-w-0 text-sm">
+    <CollapsibleTrigger className="flex max-w-full min-w-0 items-center gap-2 rounded-sm text-left text-muted-foreground outline-none transition-colors hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring">
+      {running ? <LoaderCircle className="size-3.5 shrink-0 animate-spin" /> : fileTool ? <FileText className="size-3.5 shrink-0" /> : <Terminal className="size-3.5 shrink-0" />}
+      <span className={`shrink-0 ${running ? "shimmer-text" : ""}`}>{labels[tool.name] ?? tool.name}</span>
+      <code className="min-w-0 truncate font-mono text-[13px]" title={typeof summary === "string" ? summary : undefined}>{typeof summary === "string" ? summary : "参数无效"}</code>
+      {failed ? <span className="flex shrink-0 items-center gap-1 text-xs text-destructive"><CircleAlert className="size-3" />{status}</span>
+        : status !== "已完成" && !running && <span className="shrink-0 text-xs">{status}</span>}
+      <ChevronRight className="size-3.5 shrink-0 opacity-0 transition-[opacity,rotate] group-hover/tool:opacity-100 group-data-[state=open]/tool:rotate-90 group-data-[state=open]/tool:opacity-100" />
     </CollapsibleTrigger>
-    <CollapsibleContent className="min-w-0 space-y-3 border-t p-3">
-      <div><p className="mb-1 text-xs text-muted-foreground">参数</p><pre className="max-h-40 overflow-auto whitespace-pre-wrap wrap-anywhere font-mono text-xs">{tool.arguments}</pre></div>
-      {output !== null && <div><p className="mb-1 text-xs text-muted-foreground">结果</p><pre className="max-h-72 overflow-auto whitespace-pre-wrap wrap-anywhere font-mono text-xs">{output || "（无输出）"}</pre></div>}
-      {typeof data.exitCode === "number" && <p className="text-xs text-muted-foreground">退出码：{data.exitCode}</p>}
-      {data.truncated === true && <p className="text-xs text-muted-foreground">输出已截断，仅显示末尾内容。</p>}
-      {typeof data.nextOffset === "number" && <p className="text-xs text-muted-foreground">文件尚未读完，可从第 {data.nextOffset} 行继续读取。</p>}
+    <CollapsibleContent className="mt-2 min-w-0 overflow-hidden rounded-lg border bg-black/20">
+      <pre className="max-h-40 overflow-auto border-b px-3 py-2 font-mono text-xs leading-relaxed whitespace-pre-wrap wrap-anywhere text-muted-foreground">{tool.arguments}</pre>
+      {output !== null && <pre className="max-h-72 overflow-auto px-3 py-2 font-mono text-xs leading-relaxed whitespace-pre-wrap wrap-anywhere">{output || "（无输出）"}</pre>}
+      {(typeof data.exitCode === "number" || data.truncated === true || typeof data.nextOffset === "number") && <p className="border-t px-3 py-1.5 text-xs text-muted-foreground">
+        {typeof data.exitCode === "number" && `退出码 ${data.exitCode}`}
+        {data.truncated === true && " · 输出已截断，仅显示末尾内容"}
+        {typeof data.nextOffset === "number" && ` · 文件尚未读完，可从第 ${data.nextOffset} 行继续读取`}
+      </p>}
     </CollapsibleContent>
   </Collapsible>;
 }

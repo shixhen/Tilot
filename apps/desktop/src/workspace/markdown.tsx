@@ -21,9 +21,9 @@ function CodeBlock({ children }: ComponentProps<"pre">) {
     catch { setStatus("复制失败，请手动选择代码"); }
   }
 
-  return <div className="my-4 overflow-hidden rounded-lg border bg-muted/40">
-    <div className="flex items-center justify-between gap-3 border-b px-3 py-1.5 text-xs text-muted-foreground">
-      <span role="status">{status || "代码"}</span><Button type="button" variant="ghost" size="xs" onClick={() => void copy()}>{status === "已复制" ? <Check /> : <Copy />}复制代码</Button>
+  return <div className="my-4 overflow-hidden rounded-lg border bg-muted/30 shadow-sm">
+    <div className="flex items-center justify-between gap-3 border-b bg-muted/40 px-3 py-2 text-xs text-muted-foreground">
+      <span role="status">{status || "代码"}</span><Button type="button" variant="ghost" size="xs" className="h-6 hover:bg-background/80" onClick={() => void copy()}>{status === "已复制" ? <Check className="size-3" /> : <Copy className="size-3" />}复制代码</Button>
     </div>
     <pre ref={source}>{children}</pre>
   </div>;

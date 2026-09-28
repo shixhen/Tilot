@@ -11,7 +11,7 @@ export function SettingsDialog(props: SettingsOptions) {
   return <Dialog open onOpenChange={(open) => { if (!open && !form.busy) props.onClose(); }}>
     <DialogContent showCloseButton={false} className="max-h-[calc(100dvh-2rem)] overflow-y-auto">
       <DialogHeader className="pr-8 text-left"><DialogTitle>连接设置</DialogTitle><DialogDescription>设置模型服务地址与本机访问密钥。</DialogDescription></DialogHeader>
-      <Button type="button" variant="ghost" size="icon-sm" className="absolute right-3 top-3" aria-label="关闭设置" disabled={form.busy} onClick={props.onClose}><X /></Button>
+      <Button type="button" variant="ghost" size="icon-sm" className="absolute right-4 top-4" aria-label="关闭设置" disabled={form.busy} onClick={props.onClose}><X /></Button>
       <form className="grid gap-6" onSubmit={(event) => void form.save(event)}>
         <fieldset disabled={form.busy} className="grid gap-4">
           <div className="grid gap-2"><label className="text-sm font-medium" htmlFor="base-url">Base URL</label><Input id="base-url" required type="url" value={form.draft.baseURL} onChange={(event) => form.setDraft({ ...form.draft, baseURL: event.target.value })} /></div>
@@ -25,8 +25,8 @@ export function SettingsDialog(props: SettingsOptions) {
             <p className="text-xs leading-relaxed text-muted-foreground">{props.configured ? "当前地址已配置密钥。" : "当前地址尚未配置密钥。"}更换地址时需要对应密钥。密钥明文保存在本机 credentials.json。</p>
           </div>
         </fieldset>
-        {form.error && <p role="alert" className="text-sm text-destructive">{form.error}</p>}
-        <div className="flex justify-between gap-2 border-t pt-4">
+        {form.error && <p role="alert" className="rounded-lg border border-destructive/40 bg-destructive/10 px-3 py-2 text-sm text-destructive">{form.error}</p>}
+        <div className="flex justify-between gap-3 border-t pt-5">
           <Button type="button" variant="ghost" disabled={form.busy} onClick={() => void form.removeKey()}><Trash2 />删除密钥</Button>
           <Button disabled={form.busy}>{form.busy && <LoaderCircle className="animate-spin" />}保存设置</Button>
         </div>

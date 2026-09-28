@@ -1,34 +1,38 @@
 @import "tailwindcss";
+@plugin "tailwindcss-animate";
 @custom-variant dark (&:is(.dark *));
 
-/* shadcn Neutral 深色主题。所有界面颜色由这组语义变量统一提供。 */
+/* 参考 ChatGPT / Codex 深色界面：侧栏最深，主面板次之，输入框和浮层更亮一级。 */
 :root {
-  --background: oklch(0.145 0 0);
-  --foreground: oklch(0.985 0 0);
-  --card: oklch(0.205 0 0);
-  --card-foreground: oklch(0.985 0 0);
-  --popover: oklch(0.205 0 0);
-  --popover-foreground: oklch(0.985 0 0);
-  --primary: oklch(0.922 0 0);
-  --primary-foreground: oklch(0.205 0 0);
-  --secondary: oklch(0.269 0 0);
-  --secondary-foreground: oklch(0.985 0 0);
-  --muted: oklch(0.269 0 0);
-  --muted-foreground: oklch(0.708 0 0);
-  --accent: oklch(0.269 0 0);
-  --accent-foreground: oklch(0.985 0 0);
+  --background: #181818;
+  --foreground: #ececec;
+  --card: #363636;
+  --card-foreground: #ececec;
+  --popover: #2a2a2a;
+  --popover-foreground: #ececec;
+  --primary: #ececec;
+  --primary-foreground: #0d0d0d;
+  --secondary: #303030;
+  --secondary-foreground: #ececec;
+  --muted: #2a2a2a;
+  --muted-foreground: #8b8b8b;
+  --accent: #2a2a2a;
+  --accent-foreground: #ececec;
   --destructive: oklch(0.704 0.191 22.216);
-  --border: oklch(1 0 0 / 10%);
-  --input: oklch(1 0 0 / 15%);
+  --border: #2b2b2b;
+  --input: oklch(1 0 0 / 12%);
   --ring: oklch(0.556 0 0);
-  --sidebar: oklch(0.205 0 0);
-  --sidebar-foreground: oklch(0.985 0 0);
-  --sidebar-primary: oklch(0.922 0 0);
-  --sidebar-primary-foreground: oklch(0.205 0 0);
-  --sidebar-accent: oklch(0.269 0 0);
-  --sidebar-accent-foreground: oklch(0.985 0 0);
-  --sidebar-border: oklch(1 0 0 / 10%);
+  --sidebar: #1d1b1a;
+  --sidebar-foreground: #ececec;
+  --sidebar-primary: #ececec;
+  --sidebar-primary-foreground: #0d0d0d;
+  --sidebar-accent: oklch(1 0 0 / 7%);
+  --sidebar-accent-foreground: #ececec;
+  --sidebar-border: oklch(1 0 0 / 7%);
   --sidebar-ring: oklch(0.556 0 0);
+  /* 用户消息气泡与链接沿用截图中的蓝色。 */
+  --bubble: #173e76;
+  --link: #5685d1;
   --radius: 0.625rem;
   color-scheme: dark;
   font-family: "Segoe UI", "Microsoft YaHei UI", sans-serif;
@@ -62,6 +66,8 @@
   --color-sidebar-accent-foreground: var(--sidebar-accent-foreground);
   --color-sidebar-border: var(--sidebar-border);
   --color-sidebar-ring: var(--sidebar-ring);
+  --color-bubble: var(--bubble);
+  --color-link: var(--link);
   --radius-sm: calc(var(--radius) - 4px);
   --radius-md: calc(var(--radius) - 2px);
   --radius-lg: var(--radius);
@@ -70,7 +76,7 @@
 
 @layer base {
   * { @apply border-border outline-ring/50; scrollbar-width: thin; scrollbar-color: var(--muted) transparent; }
-  body { @apply m-0 bg-background text-foreground antialiased; }
+  body { @apply m-0 bg-sidebar text-foreground antialiased; }
   button:not(:disabled) { cursor: pointer; }
 }
 
@@ -88,28 +94,41 @@
 @keyframes sidebar-enter { from { transform: translateX(-100%); } to { transform: translateX(0); } }
 @keyframes sidebar-exit { from { transform: translateX(0); } to { transform: translateX(-100%); } }
 
+/* 运行中的状态文字：一道亮光从左向右扫过灰色文字。 */
+.shimmer-text {
+  color: transparent;
+  background: linear-gradient(90deg, var(--muted-foreground) 40%, var(--foreground) 50%, var(--muted-foreground) 60%) 0 0 / 300% 100%;
+  background-clip: text;
+  animation: shimmer 2s linear infinite;
+}
+@keyframes shimmer { from { background-position: 100% 0; } to { background-position: 0 0; } }
+
 /* Markdown 不控制应用布局，只规范模型正文的阅读样式。 */
-.message-prose { font-size: 14px; line-height: 1.85; overflow-wrap: anywhere; min-width: 0; }
+.message-prose { font-size: 15.5px; line-height: 1.75; overflow-wrap: anywhere; min-width: 0; }
 .message-prose > :first-child { margin-top: 0; }
 .message-prose > :last-child { margin-bottom: 0; }
-.message-prose p { margin-block: 12px; }
-.message-prose :is(h1, h2, h3, h4) { margin-block: 24px 12px; font-weight: 600; line-height: 1.4; letter-spacing: -.025em; }
-.message-prose h1 { font-size: 24px; }
-.message-prose h2 { font-size: 20px; }
+.message-prose p { margin-block: 16px; }
+.message-prose :is(h1, h2, h3, h4) { margin-block: 28px 16px; font-weight: 600; line-height: 1.4; letter-spacing: -.02em; }
+.message-prose h1 { font-size: 22px; }
+.message-prose h2 { font-size: 19px; }
 .message-prose h3 { font-size: 16px; }
-.message-prose ul { list-style: disc; padding-left: 24px; }
-.message-prose ol { list-style: decimal; padding-left: 24px; }
-.message-prose li { margin-block: 4px; }
-.message-prose a { text-decoration: underline; text-underline-offset: 4px; }
-.message-prose blockquote { margin-block: 16px; padding-left: 16px; border-left: 2px solid var(--border); color: var(--muted-foreground); }
-.message-prose hr { margin-block: 24px; border-color: var(--border); }
-.message-prose code { font-family: Consolas, monospace; font-size: 13px; }
-.message-prose :not(pre) > code { background: var(--muted); border-radius: 4px; padding: 2px 4px; }
-.message-prose pre { margin: 0; padding: 16px; overflow-x: auto; white-space: pre; tab-size: 2; line-height: 1.7; }
+.message-prose ul { list-style: disc; padding-left: 26px; margin-block: 16px; }
+.message-prose ol { list-style: decimal; padding-left: 26px; margin-block: 16px; }
+.message-prose li { margin-block: 6px; line-height: 1.65; }
+.message-prose a { color: var(--link); text-underline-offset: 3px; }
+.message-prose a:hover { text-decoration: underline; }
+.message-prose blockquote { margin-block: 20px; padding-left: 16px; border-left: 3px solid var(--border); color: var(--muted-foreground); }
+.message-prose hr { margin-block: 28px; border-color: var(--border); opacity: 0.5; }
+.message-prose code { font-family: Consolas, "Cascadia Code", monospace; font-size: 13.5px; }
+.message-prose :not(pre) > code { background: var(--muted); border: 1px solid var(--border); border-radius: 4px; padding: 2px 6px; }
+.message-prose pre { margin: 0; padding: 16px; overflow-x: auto; white-space: pre; tab-size: 2; line-height: 1.5; }
 .message-prose table { width: 100%; border-collapse: collapse; text-align: left; }
-.message-prose :is(td, th) { border-bottom: 1px solid var(--border); padding: 8px 12px; }
+.message-prose tr:first-child > :is(td, th) { border-top: 0; }
+.message-prose tr:last-child > td { border-bottom: 0; }
+.message-prose tr > :first-child { border-left: 0; }
+.message-prose tr > :last-child { border-right: 0; }
+.message-prose :is(td, th) { border: 1px solid var(--border); padding: 10px 14px; }
 .message-prose th { background: var(--muted); font-weight: 500; }
-.message-prose tr:last-child td { border-bottom: 0; }
 .message-prose .task-list-item { list-style: none; }
 
 @media (prefers-reduced-motion: reduce) {

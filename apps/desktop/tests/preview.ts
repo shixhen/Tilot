@@ -1,6 +1,6 @@
 import { mockIPC } from "@tauri-apps/api/mocks";
 import { emit } from "@tauri-apps/api/event";
-import type { AppConfig, RpcRequest, Thread, Turn, ServerEvent } from "@tilot/protocol";
+import type { AppConfig, AttemptView, RpcRequest, Thread, Turn, ServerEvent } from "@tilot/protocol";
 
 // 仅供浏览器手动验收，不进入应用入口或生产构建，不读取本地真实配置或密钥。
 let config: AppConfig = { baseURL: "https://example.invalid", model: "deepseek-flash", reasoningEffort: "high", contextBudgetTokens: 65536, maxOutputTokens: 16384, reserveTokens: 4096, maxStepsPerRun: 30, maxAutomaticRetries: 2 };
@@ -10,6 +10,7 @@ let pickCount = 0;
 const threads: Thread[] = [];
 const turns: Turn[] = [];
 const inputs = new Map<string, string>();
+const attempts = new Map<string, AttemptView[]>();
 
 /** 模拟本地服务事件，消息顺序和正式协议相同。 */
 async function notify(event: Omit<Extract<ServerEvent, { event: "message.delta" }>, "seq"> | { event: "turn.started" | "turn.finished"; turn: Turn }): Promise<void> {
@@ -31,7 +32,7 @@ async function respond(request: RpcRequest): Promise<unknown> {
     }
     case "turn.list": return turns.filter((turn) => turn.threadId === request.params.threadId);
     case "turn.inputs": return [{ id: 1, turnId: request.params.turnId, content: inputs.get(request.params.turnId), createdAt: Date.now() }];
-    case "turn.attempts": return [];
+    case "turn.attempts": return attempts.get(request.params.turnId) ?? [];
     case "turn.start": {
       const turn: Turn = { id: crypto.randomUUID(), threadId: request.params.threadId, sequence: turns.length + 1, status: "running", createdAt: Date.now(), finishedAt: null, error: null };
       turns.push(turn); inputs.set(turn.id, request.params.input);
@@ -43,7 +44,14 @@ async function respond(request: RpcRequest): Promise<unknown> {
         if (index < chunks.length) {
           const reasoning = index === 0;
           void notify({ event: "message.delta", threadId: turn.threadId, turnId: turn.id, itemId: reasoning ? "thought" : "answer", contentIndex: 0, kind: reasoning ? "reasoning" : "text", delta: chunks[index++]! });
-          if (index === chunks.length) clearInterval(timer);
+        } else {
+          // 流式结束后保存一次完整请求（思考、命令、正文），用于验收“用时”折叠。
+          clearInterval(timer);
+          turn.status = "completed"; turn.finishedAt = Date.now();
+          attempts.set(turn.id, [{ id: `${turn.id}-attempt`, turnId: turn.id, sequence: 1, inputThroughId: 1, status: "completed", error: null, createdAt: turn.createdAt, finishedAt: turn.finishedAt,
+            messages: [{ itemId: "thought", outputIndex: 0, parts: [{ kind: "reasoning", text: chunks[0]! }] }, { itemId: "answer", outputIndex: 2, parts: [{ kind: "text", text: chunks.slice(1).join("") }] }],
+            tools: [{ id: `${turn.id}-tool`, outputIndex: 1, name: "shell", arguments: JSON.stringify({ command: "git ls-files apps packages" }), output: JSON.stringify({ status: "ok", data: { output: "apps/desktop, packages/server", exitCode: 0 } }), running: false }] }]);
+          void notify({ event: "turn.finished", turn });
         }
       }, 800);
       return turn;
