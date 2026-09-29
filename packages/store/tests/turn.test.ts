@@ -3,7 +3,7 @@ import { join } from "node:path";
 import { test } from "node:test";
 import Database from "better-sqlite3";
 import { Store } from "@tilot/store";
-import { temporaryDirectory } from "./helpers.ts";
+import { downgradeToVersion4, temporaryDirectory } from "./helpers.ts";
 
 test("轮次和补充输入按原文持久化，分页顺序稳定，结束后可开始下一轮", (context) => {
   const directory = temporaryDirectory(context);
@@ -94,7 +94,8 @@ test("版本 2 升级保留配置和任务，新增轮次表可用", (context) =
   const directory = temporaryDirectory(context);
   const store = new Store(directory);
   const thread = store.createThread("旧任务");
-  const config = { ...store.getConfig(), model: "saved-model" };
+  const original = store.getConfig();
+  const config = { ...original, model: "saved-model", providers: [{ ...original.providers[0]!, models: [{ id: "saved-model", contextTokens: 131072 }] }] };
   try {
     store.saveConfig(config);
   } finally {
@@ -103,6 +104,7 @@ test("版本 2 升级保留配置和任务，新增轮次表可用", (context) =
   // 仅移除测试数据库的新表，恢复版本 2 的真实结构。
   const legacy = new Database(join(directory, "tilot.sqlite"));
   try {
+    downgradeToVersion4(legacy);
     legacy.exec("DROP TABLE tool_calls; DROP TABLE model_attempts; DROP TABLE turn_inputs; DROP TABLE turns; PRAGMA user_version = 2;");
   } finally {
     legacy.close();
@@ -110,7 +112,8 @@ test("版本 2 升级保留配置和任务，新增轮次表可用", (context) =
   const migrated = new Store(directory);
   try {
     assert.deepEqual(migrated.getConfig(), config);
-    assert.deepEqual(migrated.getThread(thread.id), thread);
+    // 升级前的任务没有模型设置，统一沿用升级时的全局默认值。
+    assert.deepEqual(migrated.getThread(thread.id), { ...thread, model: "saved-model" });
     assert.equal(migrated.startTurn(thread.id, "升级后执行").sequence, 1);
   } finally {
     migrated.close();

@@ -9,10 +9,13 @@ Responses 模块位于 `packages/responses`，使用 OpenAI SDK 的 `client.resp
 应用配置示例：
 ```json
 {
-  "baseURL": "https://api.deepseek.com",
+  "providerId": "default",
   "model": "deepseek-flash",
   "reasoningEffort": "high",
-  "contextBudgetTokens": 65536,
+  "providers": [{
+    "id": "default", "name": "api.deepseek.com", "baseURL": "https://api.deepseek.com",
+    "models": [{ "id": "deepseek-flash", "contextTokens": 65536 }]
+  }],
   "maxOutputTokens": 16384,
   "reserveTokens": 4096,
   "maxStepsPerRun": 30,
@@ -20,7 +23,7 @@ Responses 模块位于 `packages/responses`，使用 OpenAI SDK 的 `client.resp
 }
 ```
 
-普通配置保存在 SQLite 的 app_config 表中，数据库结构版本由 `PRAGMA user_version` 管理。首版协议固定为 Responses，不重复保存 provider/api 标记；凭据不包含在此配置中。
+`providers` 是用户添加的模型服务（名称、地址），保存在 providers 表中；每个服务的模型从它的 `/models` 加载，连同各自的最大上下文保存在 provider_models 表中，更换服务地址后该服务的模型整体替换。`providerId`、`model` 与 `reasoningEffort` 是新任务的默认值，每个任务另外保存自己的服务、模型和思考强度；仍被任务使用的服务不能删除。密钥按服务 id 保存在 credentials.json，并记录保存时的地址，服务改地址后旧密钥不再使用，删除服务时一并删除。普通配置保存在 SQLite 的 app_config 表中，数据库结构版本由 `PRAGMA user_version` 管理。首版协议固定为 Responses，不重复保存 provider/api 标记；凭据不包含在此配置中。
 
 | 应用数据 | 请求字段 |
 | --- | --- |
@@ -145,11 +148,11 @@ Responses 的 function 字段位于工具对象顶层。以下仅示意读取工
     <= min(模型上下文上限, 应用预算)
 ```
 
-输入包括 instructions、工具 schema、消息、推理和工具结果。默认可用输入预算为 45,056 token；无可靠 tokenizer 时保守估算并用 usage 校准。
+输入包括 instructions、工具 schema、消息、推理和工具结果。默认可用输入预算为 45,056 token。当前使用序列化输入的 UTF-8 字节数作保守估算，尚未接入模型专用 tokenizer 或 usage 校准；实际可能提前触发限制。
 
-先分页和截断工具结果，再压缩旧历史。仅在工具结果组完整后压缩，保留目标、约束、文件版本、已完成修改、待办和未知项。Tool 依据独立的授权记录校验操作，不以模型上下文或摘要作为授权依据。
+当前按开发者确认不启用摘要或历史裁剪。Tool 保留自身的分页及输出限制，Context 完整回放历史并检查配对；超限明确停止，不静默丢弃内容。
 
-原始历史保留；摘要记录覆盖边界，构造新的请求序列。被保留的输出项继续携带必要推理及配对结果，已整体摘要的旧组不再回放。摘要使用独立的无工具 Responses 请求，其 usage 计入 Run；失败保留旧上下文并暂停或有限修复。
+原始历史与当前输入保留。项目上下文仅加载根目录 AGENTS.md 及项目 .codex/skills 中的技能元数据，正文按需读取；详见 [上下文与项目技能](context-and-skills.md)。
 
 不发送 truncation 或 context_management 期待服务自动处理超限；Context 负责预算检查与压缩，Agent Core 根据结果继续或暂停执行。[兼容限制][A4]
 

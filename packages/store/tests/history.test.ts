@@ -4,7 +4,7 @@ import { test } from "node:test";
 import Database from "better-sqlite3";
 import type { Response, ResponseOutputItem } from "openai/resources/responses/responses";
 import { Store } from "@tilot/store";
-import { temporaryDirectory } from "./helpers.ts";
+import { downgradeToVersion4, temporaryDirectory } from "./helpers.ts";
 
 /** 构造完整的本地响应样本，不连接模型服务。 */
 function response(output: ResponseOutputItem[] = []): Response {
@@ -130,6 +130,7 @@ test("版本 3 升级保留轮次和输入，并增加模型历史表", (context
   store.close();
   const legacy = new Database(join(directory, "tilot.sqlite"));
   try {
+    downgradeToVersion4(legacy);
     legacy.exec("DROP TABLE tool_calls; DROP TABLE model_attempts; PRAGMA user_version = 3;");
   } finally {
     legacy.close();

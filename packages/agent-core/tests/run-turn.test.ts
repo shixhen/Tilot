@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
-import { existsSync, mkdtempSync, realpathSync, rmSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { test, type TestContext } from "node:test";
@@ -79,9 +79,11 @@ function mockClient(events: () => Record<string, unknown>[] = sampleEvents, gate
 
 test("完成一轮并回放历史，冻结输入与配置，终态事件在保存后交付", async (context) => {
   const store = openTestStore(context);
-  const thread = store.createThread("连续对话");
-  const config = { ...store.getConfig(), model: "configured-model", maxOutputTokens: 2048 };
+  const original = store.getConfig();
+  const config = { ...original, model: "configured-model", maxOutputTokens: 2048, providers: [{ ...original.providers[0]!,
+    models: [{ id: "configured-model", contextTokens: 65536 }, { id: "changed-model", contextTokens: 65536 }] }] };
   store.saveConfig(config);
+  const thread = store.createThread("连续对话");
   const { client, requests } = mockClient();
   const events: string[] = [];
   const first = await runTurn(store, client, {
@@ -90,7 +92,7 @@ test("完成一轮并回放历史，冻结输入与配置，终态事件在保�
       events.push(event.type === "response.event" ? event.event.type : event.type);
       if (event.type === "turn.started") {
         store.appendTurnInput(event.turn.id, "稍后补充");
-        store.saveConfig({ ...config, model: "changed-model" });
+        store.updateThreadModel(thread.id, "default", "changed-model", "none");
       } else if (event.type === "response.event" && event.event.type === "response.completed") {
         assert.equal(store.getTurn(event.turnId)?.status, "completed");
         assert.equal(store.history.getAttempt(event.attemptId)?.status, "completed");
@@ -258,6 +260,32 @@ test("模型可连续写入、精确编辑并读取文件，结果进入下一�
   const results = next.input.filter((item: { type: string }) => item.type === "function_call_output").map((item: { output: string }) => JSON.parse(item.output));
   assert.deepEqual(results.map((result: { status: string }) => result.status), ["ok", "ok", "ok"]);
   assert.equal(results[2].data.content, "第一行\r\n新内容\n");
+});
+
+test("请求加载项目根指令和技能元数据，预算超限时不请求模型", async (context) => {
+  const store = openTestStore(context);
+  const directory = projectDirectory(context);
+  mkdirSync(join(directory, ".codex/skills/demo"), { recursive: true });
+  writeFileSync(join(directory, "AGENTS.md"), "只修改当前项目", "utf8");
+  writeFileSync(join(directory, ".codex/skills/demo/SKILL.md"), "---\nname: demo\ndescription: 示例技能\n---\n不自动发送的技能正文", "utf8");
+  const { client, requests } = mockClient();
+  const thread = store.createThread("项目上下文", directory);
+  const first = await runTurn(store, client, { threadId: thread.id, input: "你好", instructions: "基础策略" });
+  assert.equal(first.status, "completed");
+  const sent = JSON.parse(String(requests[0]!.body));
+  assert.match(sent.instructions, /基础策略/);
+  assert.match(sent.instructions, /只修改当前项目/);
+  assert.match(sent.instructions, /示例技能/);
+  assert.doesNotMatch(sent.instructions, /不自动发送的技能正文/);
+  const config = store.getConfig();
+  store.saveConfig({ ...config, providers: config.providers.map((provider) => ({ ...provider,
+    models: provider.models.map((model) => ({ ...model, contextTokens: config.maxOutputTokens + config.reserveTokens + 1 })) })) });
+  const stopped = await runTurn(store, client, { threadId: thread.id, input: "继续", instructions: "基础策略" });
+  assert.equal(stopped.status, "failed");
+  assert.match(stopped.error!, /上下文超出预算/);
+  assert.equal(requests.length, 1);
+  assert.deepEqual(store.history.listAttempts(stopped.id), []);
+  assert.equal(store.listTurnInputs(stopped.id)[0]!.content, "继续");
 });
 
 test("未知工具、非法参数及读取失败都有配对结果，模型可继续作答", async (context) => {

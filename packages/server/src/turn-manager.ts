@@ -3,6 +3,7 @@ import { createResponsesClient } from "@tilot/responses";
 import type { Store, Turn } from "@tilot/store";
 import type { ServerEvent, TurnNotification } from "@tilot/protocol";
 import { listAttemptViews, projectMessages } from "./history.ts";
+import { SYSTEM_PROMPT, RESUME_INPUT } from "@tilot/prompts";
 
 /** 当前进程持有的执行句柄，关闭连接时取消并等待 Core 完成落库。 */
 interface ActiveTurn {
@@ -26,18 +27,21 @@ export class TurnManager {
     this.onFatal = onFatal;
   }
 
-  /** 使用当前地址对应的本地密钥启动轮次，取得轮次标识即返回，不等待模型完成。 */
-  start(threadId: string, input: string, instructions: string): Promise<Turn> {
+  /** 使用任务所选服务的地址和密钥启动轮次，取得轮次标识即返回，不等待模型完成。 */
+  start(threadId: string, input: string): Promise<Turn> {
     if (this.closed) throw new Error("服务正在关闭，不能开始新轮次。");
-    const config = this.store.getConfig();
-    const apiKey = this.store.credentials.getApiKey(config.baseURL);
-    if (!apiKey) throw new Error("当前服务地址尚未配置 API Key。");
-    const client = createResponsesClient({ apiKey, baseURL: config.baseURL });
+    const thread = this.store.getThread(threadId);
+    if (!thread) throw new Error("任务不存在。");
+    const provider = this.store.getConfig().providers.find((item) => item.id === thread.providerId);
+    if (!provider) throw new Error("对话使用的服务已不存在，请重新选择模型。");
+    const apiKey = this.store.credentials.getApiKey(provider.id, provider.baseURL);
+    if (!apiKey) throw new Error(`${provider.name} 尚未配置 API Key。`);
+    const client = createResponsesClient({ apiKey, baseURL: provider.baseURL });
     const started = Promise.withResolvers<Turn>();
     const execution: ActiveTurn = { controller: new AbortController(), done: Promise.resolve() };
     let current: Turn | undefined;
     execution.done = runTurn(this.store, client, {
-      threadId, input, instructions, signal: execution.controller.signal,
+      threadId, input, instructions: SYSTEM_PROMPT, signal: execution.controller.signal,
       onEvent: async (event) => {
         if (event.type === "turn.started") {
           current = event.turn;
@@ -64,6 +68,14 @@ export class TurnManager {
       if (current) this.active.delete(current.id);
     });
     return started.promise;
+  }
+
+  /** 仅允许从最新中断轮次创建后续轮次；旧调用及其记录不重跑、不改写。 */
+  resume(turnId: string): Promise<Turn> {
+    const turn = this.store.getTurn(turnId);
+    if (!turn || turn.status !== "interrupted") throw new Error("只能继续已中断的轮次。");
+    if (this.store.listTurns(turn.threadId, turn.sequence, 1).length) throw new Error("该任务已经有后续轮次，请继续最新对话。");
+    return this.start(turn.threadId, RESUME_INPUT);
   }
 
   /** 请求取消当前连接拥有的轮次；不存在或已结束返回 false，不改写历史。 */

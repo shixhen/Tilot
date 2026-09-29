@@ -1,3 +1,4 @@
+import { TOOL_DESCRIPTIONS, READ_OFFSET_DESCRIPTION } from "@tilot/prompts";
 import type { FunctionTool } from "openai/resources/responses/responses";
 import { readProjectFile } from "./read.ts";
 import { runShell } from "./shell.ts";
@@ -8,33 +9,33 @@ import type { Workspace } from "./workspace.ts";
 export const projectTools: FunctionTool[] = [
   {
     type: "function", name: "write", strict: false,
-    description: "以 UTF-8 创建或完整覆盖项目文件，自动创建父目录。覆盖已有文件前先读取。路径使用 /，不允许绝对路径和内部链接。",
+    description: TOOL_DESCRIPTIONS.write,
     parameters: { type: "object", additionalProperties: false, required: ["path", "content"], properties: {
       path: { type: "string" }, content: { type: "string" },
     } },
   },
   {
     type: "function", name: "edit", strict: false,
-    description: "精确替换 UTF-8 项目文件中的一处文本。先读取文件；oldText 必须非空且唯一匹配，换行也必须一致。保留未修改部分及 BOM，不作模糊匹配。",
+    description: TOOL_DESCRIPTIONS.edit,
     parameters: { type: "object", additionalProperties: false, required: ["path", "oldText", "newText"], properties: {
       path: { type: "string" }, oldText: { type: "string", minLength: 1 }, newText: { type: "string" },
     } },
   },
   {
     type: "function", name: "read", strict: false,
-    description: "读取项目内 UTF-8 文本。路径使用 / 分隔，不允许绝对路径或内部链接。默认最多 200 行、50 KiB；根据 nextOffset 续读。",
+    description: TOOL_DESCRIPTIONS.read,
     parameters: {
       type: "object", additionalProperties: false, required: ["path"],
       properties: {
         path: { type: "string" },
-        offset: { type: "integer", minimum: 1, description: "起始行，从 1 开始。" },
+        offset: { type: "integer", minimum: 1, description: READ_OFFSET_DESCRIPTION },
         limit: { type: "integer", minimum: 1, maximum: 200 },
       },
     },
   },
   {
     type: "function", name: "shell", strict: false,
-    description: "在项目根目录执行 Windows PowerShell 5.1 命令，可列目录、搜索和运行测试；不是 Bash。不支持交互或后台服务。默认 300 秒，输出保留末尾 50 KiB。命令可能直接修改文件；先读取再修改，失败时不要盲目重试有副作用的命令。",
+    description: TOOL_DESCRIPTIONS.shell,
     parameters: {
       type: "object", additionalProperties: false, required: ["command"],
       properties: {

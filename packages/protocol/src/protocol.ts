@@ -1,11 +1,34 @@
-/** 桌面与服务共用的任务数据；项目为空表示普通对话，时间均为 Unix 毫秒。 */
+/** 桌面与服务共用的任务数据；项目为空表示普通对话，每个任务记住自己的服务、模型和思考强度，时间均为 Unix 毫秒。 */
 export interface Thread {
   id: string;
   title: string;
   projectPath: string | null;
+  providerId: string;
+  model: string;
+  reasoningEffort: ReasoningEffort;
   createdAt: number;
   updatedAt: number;
 }
+
+/** 思考强度；none 表示不启用推理。 */
+export type ReasoningEffort = "none" | "low" | "high" | "max";
+
+/** 服务提供的一个模型；contextTokens 是用户为它设置的最大上下文。 */
+export interface ModelInfo {
+  id: string;
+  contextTokens: number;
+}
+
+/** 一个模型服务：一组地址和密钥，以及从这个服务加载的模型；密钥单独保存，不在这里。 */
+export interface Provider {
+  id: string;
+  name: string;
+  baseURL: string;
+  models: ModelInfo[];
+}
+
+/** 新加载的模型默认使用的最大上下文（64K）。 */
+export const DEFAULT_CONTEXT_TOKENS = 65536;
 
 /** 当前已实现的任务、配置和凭据 RPC；请求 id 由调用方生成，用于对应返回结果。 */
 export type RpcRequest =
@@ -13,17 +36,19 @@ export type RpcRequest =
   | { id: string; method: "turn.read"; params: { turnId: string } }
   | { id: string; method: "turn.inputs"; params: { turnId: string; afterId?: number; limit?: number } }
   | { id: string; method: "turn.attempts"; params: { turnId: string; afterSequence?: number; limit?: number } }
-  | { id: string; method: "turn.start"; params: { threadId: string; input: string; instructions: string } }
+  | { id: string; method: "turn.start"; params: { threadId: string; input: string } }
+  | { id: string; method: "turn.resume"; params: { turnId: string } }
   | { id: string; method: "turn.interrupt"; params: { turnId: string } }
   | { id: string; method: "config.get"; params: Record<string, never> }
   | { id: string; method: "config.set"; params: { config: AppConfig } }
   | { id: string; method: "credentials.status"; params: Record<string, never> }
-  | { id: string; method: "credentials.set"; params: { baseURL: string; apiKey: string } }
-  | { id: string; method: "credentials.delete"; params: Record<string, never> }
+  | { id: string; method: "credentials.set"; params: { providerId: string; apiKey: string } }
+  | { id: string; method: "models.fetch"; params: { providerId: string; baseURL: string; apiKey: string } }
   | { id: string; method: "thread.create"; params: { title: string; projectPath?: string | null } }
   | { id: string; method: "thread.read"; params: { threadId: string } }
   | { id: string; method: "thread.list"; params: { limit?: number; offset?: number } }
-  | { id: string; method: "thread.rename"; params: { threadId: string; title: string } };
+  | { id: string; method: "thread.rename"; params: { threadId: string; title: string } }
+  | { id: string; method: "thread.update"; params: { threadId: string; providerId: string; model: string; reasoningEffort: ReasoningEffort } };
 
 /** RPC 错误分类；消息仅描述失败，不回传原始请求。 */
 export interface RpcError {
@@ -36,10 +61,10 @@ export type RpcResponse =
   | { id: string; success: true; result: RpcResult }
   | { id: string | null; success: false; error: RpcError };
 
-/** 已实现方法的返回数据；凭据只返回是否配置，不返回原文。 */
+/** 已实现方法的返回数据；凭据只返回哪些服务已配置密钥，不返回原文。 */
 export type RpcResult =
-  | Thread | Thread[] | Turn | Turn[] | TurnInput[] | AttemptView[] | AppConfig
-  | { configured: boolean } | { interrupted: boolean } | null;
+  | Thread | Thread[] | Turn | Turn[] | TurnInput[] | AttemptView[] | AppConfig | string[]
+  | { configured: string[] } | { interrupted: boolean } | null;
 
 /** 轮次的结束状态；interrupted 表示旧执行进程退出，区别于用户主动取消。 */
 export type TurnFinalStatus = "completed" | "failed" | "cancelled" | "interrupted";
@@ -119,12 +144,12 @@ export type ServerEvent = TurnNotification & { seq: number };
 /** 标准输出的一条消息，可通过 event 或 success 字段区分事件和请求应答。 */
 export type ServerMessage = RpcResponse | ServerEvent;
 
-/** 桌面与服务共用的普通配置，不包含凭据。 */
+/** 桌面与服务共用的普通配置，不包含凭据；providerId、model 与 reasoningEffort 是新任务的默认值。 */
 export interface AppConfig {
-  baseURL: string;
+  providerId: string;
   model: string;
-  reasoningEffort: "none" | "low" | "high" | "max";
-  contextBudgetTokens: number;
+  reasoningEffort: ReasoningEffort;
+  providers: Provider[];
   maxOutputTokens: number;
   reserveTokens: number;
   maxStepsPerRun: number;

@@ -109,13 +109,13 @@ test("失败、取消与中断只展示状态，运行中历史查询不改变�
   assert.ok(Array.isArray(rows));
   assert.equal(rows.length, 4);
   for (const row of rows) {
-    assert.ok("messages" in row);
+    assert.ok(typeof row === "object" && "messages" in row);
     assert.deepEqual(row.messages, []);
   }
   assert.deepEqual(store.history.listAttempts(turn.id), before);
   store.recoverInterruptedTurns();
   const interrupted = await query({ id: "refresh", method: "turn.attempts", params: { turnId: turn.id, afterSequence: running.sequence - 1 } });
-  assert.ok(Array.isArray(interrupted) && interrupted[0] && "status" in interrupted[0]);
+  assert.ok(Array.isArray(interrupted) && typeof interrupted[0] === "object" && "status" in interrupted[0]);
   assert.equal(interrupted[0].status, "interrupted");
 });
 

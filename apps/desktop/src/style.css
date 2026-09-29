@@ -33,6 +33,8 @@
   /* 用户消息气泡与链接沿用截图中的蓝色。 */
   --bubble: #173e76;
   --link: #5685d1;
+  /* 发送按钮、滑块等强调色。 */
+  --brand: #2c67c5;
   --radius: 0.625rem;
   color-scheme: dark;
   font-family: "Segoe UI", "Microsoft YaHei UI", sans-serif;
@@ -68,6 +70,7 @@
   --color-sidebar-ring: var(--sidebar-ring);
   --color-bubble: var(--bubble);
   --color-link: var(--link);
+  --color-brand: var(--brand);
   --radius-sm: calc(var(--radius) - 4px);
   --radius-md: calc(var(--radius) - 2px);
   --radius-lg: var(--radius);
@@ -88,12 +91,6 @@
 [data-slot="sidebar-wrapper"][data-resizing] { cursor: col-resize; user-select: none; }
 [data-slot="sidebar-wrapper"][data-resizing] :is([data-slot="sidebar-gap"], [data-slot="sidebar-container"], [data-slot="sidebar-inset"]) { transition: none; }
 
-/* 窄窗口抽屉与桌面侧栏采用同一时长和减速曲线，关闭时保留退出动画。 */
-.sidebar-drawer[data-state="open"] { animation: sidebar-enter 240ms cubic-bezier(0.2, 0, 0, 1); }
-.sidebar-drawer[data-state="closed"] { animation: sidebar-exit 240ms cubic-bezier(0.2, 0, 0, 1); }
-@keyframes sidebar-enter { from { transform: translateX(-100%); } to { transform: translateX(0); } }
-@keyframes sidebar-exit { from { transform: translateX(0); } to { transform: translateX(-100%); } }
-
 /* 运行中的状态文字：一道亮光从左向右扫过灰色文字。 */
 .shimmer-text {
   color: transparent;
@@ -102,6 +99,10 @@
   animation: shimmer 2s linear infinite;
 }
 @keyframes shimmer { from { background-position: 100% 0; } to { background-position: 0 0; } }
+
+/* 流式输出时新出现的文字从透明渐变到不透明。 */
+.fade-in { animation: fade-in 600ms ease-out both; }
+@keyframes fade-in { from { opacity: 0; } }
 
 /* Markdown 不控制应用布局，只规范模型正文的阅读样式。 */
 .message-prose { font-size: 15.5px; line-height: 1.75; overflow-wrap: anywhere; min-width: 0; }

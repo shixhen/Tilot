@@ -7,6 +7,7 @@ import { test, type TestContext } from "node:test";
 import type { Response, ResponseOutputItem } from "openai/resources/responses/responses";
 import { Store } from "@tilot/store";
 import { buildContext } from "@tilot/context";
+import { UNKNOWN_TOOL_RESULT } from "@tilot/prompts";
 
 /** 为每个测试创建独立数据库，结束时关闭连接并清理本次临时目录。 */
 function openTestStore(context: TestContext): Store {
@@ -34,6 +35,26 @@ function response(output: ResponseOutputItem[] = []): Response {
 function call(id: string): ResponseOutputItem {
   return { type: "function_call", id: `item_${id}`, call_id: id, name: "read_file", arguments: ' { "path": "a.ts" } ', status: "completed" };
 }
+
+test("恢复中断历史时保留已知结果，仅在上下文中为未决调用补充未知说明", (context) => {
+  const store = openTestStore(context);
+  const thread = store.createThread("中断恢复");
+  const old = store.startTurn(thread.id, "修改项目");
+  const attempt = store.history.startAttempt(old.id, store.listTurnInputs(old.id)[0]!.id);
+  store.history.finishAttempt(attempt.id, { status: "completed", response: response([call("saved"), call("unknown")]) });
+  const calls = store.history.listToolCalls(attempt.id);
+  const result = { type: "function_call_output" as const, call_id: "saved", output: "已保存的结果" };
+  store.history.saveToolResult(calls[0]!.id, result);
+  store.recoverInterruptedTurns();
+  const current = store.startTurn(thread.id, "继续");
+  const built = buildContext(store, { turnId: current.id, inputThroughId: store.listTurnInputs(current.id)[0]!.id, instructions: "" });
+  assert.deepEqual(built.input.slice(3, 5), [result, {
+    type: "function_call_output", call_id: "unknown",
+    output: JSON.stringify({ status: "unknown", error: UNKNOWN_TOOL_RESULT }),
+  }]);
+  assert.equal(store.history.listToolCalls(attempt.id)[1]!.result, null);
+  assert.equal(store.getTurn(old.id)?.status, "interrupted");
+});
 
 test("按输入边界回放完整消息组，保留推理并跳过诊断，固定本次输入范围", (context) => {
   const store = openTestStore(context);

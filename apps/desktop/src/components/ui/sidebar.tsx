@@ -9,13 +9,6 @@ import * as Slot from "@radix-ui/react-slot"
 import { useIsMobile } from "@/hooks/use-mobile"
 import { Button } from "@/components/ui/button"
 import {
-  Sheet,
-  SheetContent,
-  SheetDescription,
-  SheetHeader,
-  SheetTitle,
-} from "@/components/ui/sheet"
-import {
   Tooltip,
   TooltipContent,
   TooltipProvider,
@@ -25,7 +18,6 @@ import {
 const SIDEBAR_MIN_WIDTH = 200
 const SIDEBAR_COLLAPSE_DISTANCE = 80
 const SIDEBAR_MAX_WIDTH = 480
-const SIDEBAR_WIDTH_MOBILE = "18rem"
 const SIDEBAR_WIDTH_ICON = "3rem"
 const SIDEBAR_KEYBOARD_SHORTCUT = "b"
 
@@ -34,9 +26,6 @@ type SidebarContextProps = {
   state: "expanded" | "collapsed"
   open: boolean
   setOpen: (open: boolean) => void
-  openMobile: boolean
-  setOpenMobile: (open: boolean) => void
-  isMobile: boolean
   toggleSidebar: () => void
   width: number
   setWidth: (width: number) => void
@@ -56,7 +45,7 @@ function useSidebar() {
   return context
 }
 
-/** 管理侧栏展开状态、窄窗口抽屉和快捷键。 */
+/** 管理侧栏展开状态、窄窗口自动收起和快捷键。 */
 function SidebarProvider({
   defaultOpen = true,
   open: openProp,
@@ -70,9 +59,9 @@ function SidebarProvider({
   open?: boolean
   onOpenChange?: (open: boolean) => void
 }) {
-  const isMobile = useIsMobile()
-  const [openMobile, setOpenMobile] = React.useState(false)
-  const [width, setWidth] = React.useState(256)
+  const narrow = useIsMobile()
+  const autoCollapsed = React.useRef(false)
+  const [width, setWidth] = React.useState(240)
   const [resizing, setResizing] = React.useState(false)
 
   // This is the internal state of the sidebar.
@@ -94,8 +83,20 @@ function SidebarProvider({
 
   // Helper to toggle the sidebar.
   const toggleSidebar = React.useCallback(() => {
-    return isMobile ? setOpenMobile((open) => !open) : setOpen((open) => !open)
-  }, [isMobile, setOpen, setOpenMobile])
+    autoCollapsed.current = false
+    setOpen((open) => !open)
+  }, [setOpen])
+
+  // 窗口变窄时用同样的动画自动收起，变宽后恢复；期间用户手动切换过则不再自动恢复。
+  React.useEffect(() => {
+    if (narrow && open) {
+      autoCollapsed.current = true
+      setOpen(false)
+    } else if (!narrow && autoCollapsed.current) {
+      autoCollapsed.current = false
+      setOpen(true)
+    }
+  }, [narrow])
 
   // Adds a keyboard shortcut to toggle the sidebar.
   React.useEffect(() => {
@@ -122,13 +123,10 @@ function SidebarProvider({
       state,
       open,
       setOpen,
-      isMobile,
-      openMobile,
-      setOpenMobile,
       toggleSidebar,
       width, setWidth, resizing, setResizing,
     }),
-    [state, open, setOpen, isMobile, openMobile, setOpenMobile, toggleSidebar, width, resizing]
+    [state, open, setOpen, toggleSidebar, width, resizing]
   )
 
   return (
@@ -170,7 +168,7 @@ function Sidebar({
   variant?: "sidebar" | "floating" | "inset"
   collapsible?: "offcanvas" | "icon" | "none"
 }) {
-  const { isMobile, state, openMobile, setOpenMobile } = useSidebar()
+  const { state } = useSidebar()
 
   if (collapsible === "none") {
     return (
@@ -187,34 +185,9 @@ function Sidebar({
     )
   }
 
-  if (isMobile) {
-    return (
-      <Sheet open={openMobile} onOpenChange={setOpenMobile} {...props}>
-        <SheetContent
-          data-sidebar="sidebar"
-          data-slot="sidebar"
-          data-mobile="true"
-          className="sidebar-drawer w-(--sidebar-width) bg-sidebar p-0 text-sidebar-foreground"
-          style={
-            {
-              "--sidebar-width": SIDEBAR_WIDTH_MOBILE,
-            } as React.CSSProperties
-          }
-          side={side}
-        >
-          <SheetHeader className="sr-only">
-            <SheetTitle>任务侧栏</SheetTitle>
-            <SheetDescription>浏览项目和历史任务。</SheetDescription>
-          </SheetHeader>
-          <div className="flex h-full w-full flex-col">{children}</div>
-        </SheetContent>
-      </Sheet>
-    )
-  }
-
   return (
     <div
-      className="group peer hidden shrink-0 text-sidebar-foreground md:block"
+      className="group peer shrink-0 text-sidebar-foreground"
       data-state={state}
       data-collapsible={state === "collapsed" ? collapsible : ""}
       data-variant={variant}
@@ -236,13 +209,13 @@ function Sidebar({
       <div
         data-slot="sidebar-container"
         className={cn(
-          "absolute inset-y-0 z-10 hidden h-full w-(--sidebar-width) transition-[left,right,width] duration-240 ease-[cubic-bezier(0.2,0,0,1)] md:flex",
+          "absolute inset-y-0 z-10 flex h-full w-(--sidebar-width) transition-[left,right,width] duration-240 ease-[cubic-bezier(0.2,0,0,1)]",
           side === "left"
             ? "left-0 group-data-[collapsible=offcanvas]:left-[calc(var(--sidebar-width)*-1)]"
             : "right-0 group-data-[collapsible=offcanvas]:right-[calc(var(--sidebar-width)*-1)]",
           // Adjust the padding for floating and inset variants.
           variant === "floating" || variant === "inset"
-            ? "group-data-[collapsible=icon]:w-[calc(var(--sidebar-width-icon)+(--spacing(4))+2px)]"
+            ? "p-2 group-data-[collapsible=icon]:w-[calc(var(--sidebar-width-icon)+(--spacing(4))+2px)]"
             : "group-data-[collapsible=icon]:w-(--sidebar-width-icon) group-data-[side=left]:border-r group-data-[side=right]:border-l",
           className
         )}
@@ -334,6 +307,14 @@ function SidebarResizeHandle({ side }: { side: "left" | "right" }) {
     onPointerMove={(event) => {
       if (!drag.current) return
       drag.current.next = drag.current.width + (event.clientX - drag.current.x) * (side === "left" ? 1 : -1)
+      // 展开动画中指针已越过侧栏当前边缘时，立即结束动画，改为直接跟随指针。
+      const edge = event.currentTarget.getBoundingClientRect()
+      if (drag.current.expanded && transitionTimer.current !== undefined &&
+          (side === "left" ? event.clientX > edge.right : event.clientX < edge.left)) {
+        clearTimeout(transitionTimer.current)
+        transitionTimer.current = undefined
+        setResizing(true)
+      }
       updateDrag()
     }}
     onPointerUp={finish} onPointerCancel={finish} onLostPointerCapture={finish}
@@ -353,8 +334,7 @@ function SidebarTrigger({
   onClick,
   ...props
 }: React.ComponentProps<typeof Button>) {
-  const { toggleSidebar, isMobile, openMobile, open } = useSidebar()
-  const expanded = isMobile ? openMobile : open
+  const { toggleSidebar, open: expanded } = useSidebar()
 
   return (
     <Button
@@ -386,8 +366,8 @@ function SidebarInset({ className, ...props }: React.ComponentProps<"main">) {
       data-slot="sidebar-inset"
       className={cn(
         "relative flex w-full flex-1 flex-col bg-background transition-[margin] duration-240 ease-[cubic-bezier(0.2,0,0,1)]",
-        // 参考 Codex：主面板贴合窗口右下边缘，只用一条细线与侧栏和标题栏区分。
-        "md:peer-data-[variant=inset]:border-t md:peer-data-[variant=inset]:border-l md:peer-data-[variant=inset]:peer-data-[state=collapsed]:border-l-0",
+        // 主面板四周留出间距并使用圆角；与侧栏底色接近，用细边框勾出轮廓。
+        "peer-data-[variant=inset]:m-2 peer-data-[variant=inset]:ml-0 peer-data-[variant=inset]:rounded-xl peer-data-[variant=inset]:border peer-data-[variant=inset]:shadow-sm peer-data-[variant=inset]:peer-data-[state=collapsed]:ml-2",
         className
       )}
       {...props}
@@ -533,7 +513,7 @@ function SidebarMenuButton({
   tooltip?: string | React.ComponentProps<typeof TooltipContent>
 } & VariantProps<typeof sidebarMenuButtonVariants>) {
   const Comp = asChild ? Slot.Root : "button"
-  const { isMobile, state } = useSidebar()
+  const { state } = useSidebar()
 
   const button = (
     <Comp
@@ -562,7 +542,7 @@ function SidebarMenuButton({
       <TooltipContent
         side="right"
         align="center"
-        hidden={state !== "collapsed" || isMobile}
+        hidden={state !== "collapsed"}
         {...tooltip}
       />
     </Tooltip>
@@ -587,14 +567,12 @@ function SidebarMenuAction({
       data-sidebar="menu-action"
       className={cn(
         "absolute top-1.5 right-1 flex aspect-square w-5 items-center justify-center rounded-md p-0 text-sidebar-foreground ring-sidebar-ring outline-hidden transition-transform peer-hover/menu-button:text-sidebar-accent-foreground hover:bg-sidebar-accent hover:text-sidebar-accent-foreground focus-visible:ring-2 [&>svg]:size-4 [&>svg]:shrink-0",
-        // Increases the hit area of the button on mobile.
-        "after:absolute after:-inset-2 md:after:hidden",
         "peer-data-[size=sm]/menu-button:top-1",
         "peer-data-[size=default]/menu-button:top-1.5",
         "peer-data-[size=lg]/menu-button:top-2.5",
         "group-data-[collapsible=icon]:hidden",
         showOnHover &&
-          "group-focus-within/menu-item:opacity-100 group-hover/menu-item:opacity-100 peer-data-[active=true]/menu-button:text-sidebar-accent-foreground data-[state=open]:opacity-100 md:opacity-0",
+          "group-focus-within/menu-item:opacity-100 group-hover/menu-item:opacity-100 peer-data-[active=true]/menu-button:text-sidebar-accent-foreground data-[state=open]:opacity-100 opacity-0",
         className
       )}
       {...props}

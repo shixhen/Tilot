@@ -1,6 +1,6 @@
 import type OpenAI from "openai";
 import type { Response, ResponseStreamEvent } from "openai/resources/responses/responses";
-import { buildContext } from "@tilot/context";
+import { appendProjectInstructions, buildContext, checkContextBudget, loadProjectContext } from "@tilot/context";
 import { streamResponse } from "@tilot/responses";
 import { getResponseToolCallsFromResponse } from "@tilot/responses/output";
 import type { AppConfig, AttemptCompletion, Store, Turn } from "@tilot/store";
@@ -34,9 +34,10 @@ export async function runTurn(store: Store, client: OpenAI, options: RunTurnOpti
   options.signal?.throwIfAborted();
   const turn = store.startTurn(options.threadId, options.input);
   const input = store.listTurnInputs(turn.id, 0, 1)[0]!;
-  const config = store.getConfig();
-  const projectPath = store.getThread(options.threadId)!.projectPath;
-  const workspace = projectPath === null ? undefined : { rootPath: projectPath };
+  const thread = store.getThread(options.threadId)!;
+  // 使用任务自己选择的服务、模型和思考强度，其余配置取全局值。
+  const config = { ...store.getConfig(), providerId: thread.providerId, model: thread.model, reasoningEffort: thread.reasoningEffort };
+  const workspace = thread.projectPath === null ? undefined : { rootPath: thread.projectPath };
   try {
     await options.onEvent?.({ type: "turn.started", turn });
   } catch (error) {
@@ -104,6 +105,12 @@ async function requestAttempt(
   try {
     options.signal?.throwIfAborted();
     context = buildContext(store, { turnId: turn.id, inputThroughId, instructions: options.instructions });
+    if (workspace) {
+      const project = await loadProjectContext(workspace.rootPath, options.signal);
+      context.instructions = appendProjectInstructions(context.instructions, project);
+    }
+    checkContextBudget(context, workspace ? projectTools : [], config);
+    options.signal?.throwIfAborted();
   } catch (error) {
     return { attemptId, terminal, completion: { status: options.signal?.aborted ? "cancelled" : "failed", error: errorMessage(error) } };
   }

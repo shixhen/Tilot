@@ -9,12 +9,16 @@ import { test, type TestContext } from "node:test";
 import type { RpcRequest, RpcResponse, ServerMessage } from "@tilot/protocol";
 import { Store } from "@tilot/store";
 import { serveStdio } from "../src/stdio.ts";
+import { SYSTEM_PROMPT, RESUME_INPUT } from "@tilot/prompts";
 
 /** 启动本地模拟模型服务，先发送增量，再由测试决定何时发送终态。 */
 async function mockModel(context: TestContext) {
   const pending: { response: ServerResponse; id: string }[] = [];
+  const requests: Record<string, unknown>[] = [];
   const server = createServer((request, response) => {
-    request.resume();
+    let body = "";
+    request.setEncoding("utf8").on("data", (chunk: string) => { body += chunk; });
+    request.on("end", () => { requests.push(JSON.parse(body) as Record<string, unknown>); });
     const id = `response_${pending.length}`;
     pending.push({ response, id });
     response.writeHead(200, { "content-type": "text/event-stream" });
@@ -48,7 +52,7 @@ async function mockModel(context: TestContext) {
     for (const [output_index, item] of output.entries()) response.write(sse({ type: "response.output_item.done", sequence_number: 5 + output_index, output_index, item }));
     response.end(sse({ type: "response.completed", sequence_number: 7, response: { id, status: "completed", output } }));
   }
-  return { baseURL: `http://127.0.0.1:${address.port}`, finish };
+  return { baseURL: `http://127.0.0.1:${address.port}`, finish, requests };
 }
 
 /** 编码测试用 SSE 事件，正式模型传输仍由 OpenAI SDK 处理。 */
@@ -56,12 +60,34 @@ function sse(event: Record<string, unknown>): string {
   return `event: ${event.type}\ndata: ${JSON.stringify(event)}\n\n`;
 }
 
+test("继续仅接受最新中断轮次，创建新轮次并统一使用正式提示词", { timeout: 10000 }, async (context) => {
+  const model = await mockModel(context);
+  const session = openSession(context, model.baseURL);
+  const thread = session.store.createThread("恢复");
+  const old = session.store.startTurn(thread.id, "原任务输入");
+  assert.equal((await session.request({ id: "running", method: "turn.resume", params: { turnId: old.id } })).success, false);
+  session.store.recoverInterruptedTurns();
+  const result = await session.request({ id: "resume", method: "turn.resume", params: { turnId: old.id } });
+  assert.ok(result.success && result.result && !Array.isArray(result.result) && "threadId" in result.result);
+  const resumed = result.result;
+  assert.notEqual(resumed.id, old.id);
+  assert.equal(session.store.listTurnInputs(resumed.id)[0]?.content, RESUME_INPUT);
+  assert.equal((await session.request({ id: "duplicate", method: "turn.resume", params: { turnId: old.id } })).success, false);
+  await session.waitFor((message) => "event" in message && message.event === "message.delta" && message.turnId === resumed.id);
+  assert.equal(model.requests[0]?.instructions, SYSTEM_PROMPT);
+  assert.deepEqual(model.requests[0]?.input, [{ role: "user", content: "原任务输入" }, { role: "user", content: RESUME_INPUT }]);
+  model.finish(0);
+  await session.waitFor((message) => "event" in message && message.event === "turn.finished" && message.turn.id === resumed.id);
+  assert.equal(session.store.getTurn(old.id)?.status, "interrupted");
+});
+
 /** 创建完整服务连接及数据库，使用本地模拟模型地址和测试密钥。 */
 function openSession(context: TestContext, baseURL: string) {
   const directory = mkdtempSync(join(tmpdir(), "tilot-turns-"));
   const store = new Store(directory);
-  store.saveConfig({ ...store.getConfig(), baseURL });
-  store.credentials.saveApiKey(baseURL, "local-test-only");
+  const config = store.getConfig();
+  store.saveConfig({ ...config, providers: [{ ...config.providers[0]!, baseURL }] });
+  store.credentials.saveApiKey("default", baseURL, "local-test-only");
   const input = new PassThrough();
   const output = new PassThrough();
   const received: ServerMessage[] = [];
@@ -106,7 +132,7 @@ function openSession(context: TestContext, baseURL: string) {
   }
   /** 启动一个任务的轮次，并确认返回的是执行标识而非等待模型结束。 */
   async function start(threadId: string, id: string): Promise<string> {
-    const result = await request({ id, method: "turn.start", params: { threadId, input: "输入", instructions: "测试策略" } });
+    const result = await request({ id, method: "turn.start", params: { threadId, input: "输入" } });
     assert.ok(result.success && result.result && !Array.isArray(result.result) && "threadId" in result.result);
     return result.result.id;
   }
@@ -119,7 +145,7 @@ test("启动立即应答，并行任务事件有序且互不串流，完成内�
   const thread = session.store.createThread("第一个任务");
   const first = await session.start(thread.id, "start-first");
   await session.waitFor((message) => "event" in message && message.event === "message.delta" && message.turnId === first);
-  const duplicate = await session.request({ id: "duplicate", method: "turn.start", params: { threadId: thread.id, input: "重复", instructions: "" } });
+  const duplicate = await session.request({ id: "duplicate", method: "turn.start", params: { threadId: thread.id, input: "重复" } });
   assert.equal(duplicate.success, false);
   const second = await session.start(session.store.createThread("第二个任务").id, "start-second");
   await session.waitFor((message) => "event" in message && message.event === "message.delta" && message.turnId === second);
@@ -160,11 +186,11 @@ test("缺少密钥不创建轮次，模型失败和输出断连均正确收尾",
   const model = await mockModel(context);
   const session = openSession(context, model.baseURL);
   const thread = session.store.createThread("错误路径");
-  session.store.credentials.deleteApiKey();
-  const missing = await session.request({ id: "missing", method: "turn.start", params: { threadId: thread.id, input: "输入", instructions: "" } });
+  session.store.credentials.retain([]);
+  const missing = await session.request({ id: "missing", method: "turn.start", params: { threadId: thread.id, input: "输入" } });
   assert.equal(missing.success, false);
   assert.deepEqual(session.store.listTurns(thread.id), []);
-  session.store.credentials.saveApiKey(model.baseURL, "local-test-only");
+  session.store.credentials.saveApiKey("default", model.baseURL, "local-test-only");
   const failed = await session.start(thread.id, "failed");
   await session.waitFor((message) => "event" in message && message.event === "message.delta" && message.turnId === failed);
   model.finish(0, true);

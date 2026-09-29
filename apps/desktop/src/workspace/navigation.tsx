@@ -5,7 +5,7 @@ import type { WorkspaceState } from "../hooks/use-workspace";
 import { groupThreads, projectName } from "../projects";
 import { Button } from "../components/ui/button";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "../components/ui/collapsible";
-import { Sidebar, SidebarContent, SidebarFooter, SidebarGroup, SidebarHeader, SidebarMenu, SidebarMenuAction, SidebarMenuButton, SidebarMenuItem, useSidebar } from "../components/ui/sidebar";
+import { Sidebar, SidebarContent, SidebarFooter, SidebarGroup, SidebarHeader, SidebarMenu, SidebarMenuAction, SidebarMenuButton, SidebarMenuItem } from "../components/ui/sidebar";
 
 /** 按项目组织的真实任务导航。 */
 interface TaskNavigationProps {
@@ -17,20 +17,25 @@ interface TaskNavigationProps {
   onOpenProject: () => void;
 }
 
-/** 可折叠的分组标题：灰色小字，悬停时显示折叠箭头和右侧操作。 */
-function GroupSection({ label, action, children }: { label: string; action?: ReactNode; children: ReactNode }) {
+/** 可折叠的分组标题：灰色小字，悬停时显示折叠箭头和右侧操作；箭头重心在底部尖角，上移 1px 与中文视觉居中。 */
+function GroupSection({ label, action, children }: { label: string; action: ReactNode; children: ReactNode }) {
   return <SidebarGroup className="py-1">
     <Collapsible defaultOpen className="group/section">
       <div className="group/header flex h-[30px] items-center gap-1 px-2">
         <CollapsibleTrigger className="flex items-center gap-1 rounded-sm text-sm text-sidebar-foreground/45 outline-none transition-colors hover:text-sidebar-foreground/70 focus-visible:ring-2 focus-visible:ring-sidebar-ring">
           {label}
-          <ChevronDown className="size-3.5 opacity-0 transition-[opacity,rotate] group-hover/header:opacity-100 group-data-[state=closed]/section:-rotate-90" />
+          <ChevronDown className="size-3.5 -translate-y-px opacity-0 transition-[opacity,rotate] group-hover/header:opacity-100 group-data-[state=closed]/section:-rotate-90" />
         </CollapsibleTrigger>
         {action}
       </div>
       <CollapsibleContent>{children}</CollapsibleContent>
     </Collapsible>
   </SidebarGroup>;
+}
+
+/** 分组标题右侧的 + 按钮，只在悬停或键盘聚焦时显示。 */
+function HeaderAction({ label, disabled, onClick }: { label: string; disabled: boolean; onClick: () => void }) {
+  return <Button variant="ghost" size="icon-xs" className="ml-auto text-sidebar-foreground/60 opacity-0 group-hover/header:opacity-100 focus-visible:opacity-100" disabled={disabled} aria-label={label} title={label} onClick={onClick}><Plus className="size-3.5" /></Button>;
 }
 
 /** 单条任务；选中项用浅色底突出，标题过长时截断。 */
@@ -51,7 +56,7 @@ export function TaskNavigation({ threads, selected, disabled, onSelect, onNew, o
   const chatGroup = groups.find((group) => group.path === null);
 
   return <>
-    <GroupSection label="项目" action={<Button variant="ghost" size="icon-xs" className="ml-auto text-sidebar-foreground/60 opacity-0 group-hover/header:opacity-100 focus-visible:opacity-100" disabled={disabled} aria-label="打开项目" title="打开项目" onClick={onOpenProject}><Plus className="size-3.5" /></Button>}>
+    <GroupSection label="项目" action={<HeaderAction label="打开项目" disabled={disabled} onClick={onOpenProject} />}>
       <SidebarMenu>
         {projectGroups.map((group) => <Collapsible key={group.path!} asChild defaultOpen className="group/project">
           <SidebarMenuItem>
@@ -73,7 +78,7 @@ export function TaskNavigation({ threads, selected, disabled, onSelect, onNew, o
       </SidebarMenu>
     </GroupSection>
 
-    <GroupSection label="最近">
+    <GroupSection label="最近" action={<HeaderAction label="新建对话" disabled={disabled} onClick={() => onNew(null)} />}>
       <SidebarMenu>
         {chatGroup?.threads.map((thread) => <ThreadItem key={thread.id} thread={thread} selected={thread.id === selected} disabled={disabled} indent={false} onSelect={onSelect} />)}
       </SidebarMenu>
@@ -84,29 +89,21 @@ export function TaskNavigation({ threads, selected, disabled, onSelect, onNew, o
 
 /** Codex 风格侧栏：顶部品牌与新对话，中部任务列表，底部设置入口。 */
 export function WorkspaceNavigation({ state }: { state: WorkspaceState }) {
-  const { setOpenMobile } = useSidebar();
-
-  /** 选择目标后关闭移动抽屉，避免遮挡新的内容。 */
-  function navigate(action: () => void): void {
-    setOpenMobile(false);
-    action();
-  }
-
   return <Sidebar variant="inset">
     <SidebarHeader className="gap-1 px-2 pt-1 pb-2">
       <div className="flex h-10 items-center px-2 text-lg font-semibold tracking-tight">Tilot</div>
       <SidebarMenu>
-        <SidebarMenuItem><SidebarMenuButton disabled={state.busy} onClick={() => navigate(() => state.select(null))}><SquarePen /><span>新对话</span></SidebarMenuButton></SidebarMenuItem>
+        <SidebarMenuItem><SidebarMenuButton disabled={state.busy} onClick={() => state.select(null)}><SquarePen /><span>新对话</span></SidebarMenuButton></SidebarMenuItem>
       </SidebarMenu>
     </SidebarHeader>
     <SidebarContent className="gap-0 px-0"><TaskNavigation threads={state.chat.threads} selected={state.chat.selected} disabled={state.busy}
-      onSelect={(id) => navigate(() => state.select(id))} onNew={(path) => navigate(() => state.select(null, path))}
-      onOpenProject={() => navigate(() => void state.chooseProject())} /></SidebarContent>
+      onSelect={(id) => state.select(id)} onNew={(path) => state.select(null, path)}
+      onOpenProject={() => void state.chooseProject()} /></SidebarContent>
     <SidebarFooter className="p-2">
       <SidebarMenu><SidebarMenuItem>
-        <SidebarMenuButton disabled={!state.chat.config} onClick={() => navigate(() => state.setSettingsOpen(true))}>
+        <SidebarMenuButton disabled={!state.chat.config} onClick={() => state.setSettingsOpen(true)}>
           <Settings /><span className="flex-1">设置</span>
-          <span className="max-w-28 truncate text-xs text-sidebar-foreground/45">{state.chat.connected ? state.chat.config?.model : "服务未连接"}</span>
+          {!state.chat.connected && <span className="text-xs text-sidebar-foreground/45">服务未连接</span>}
         </SidebarMenuButton>
       </SidebarMenuItem></SidebarMenu>
     </SidebarFooter>

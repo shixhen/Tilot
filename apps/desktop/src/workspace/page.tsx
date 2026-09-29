@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { ArrowDown, LoaderCircle, SquarePen } from "lucide-react";
 import { useWorkspace } from "../hooks/use-workspace";
 import { projectName } from "../projects";
@@ -11,8 +11,8 @@ import { TurnMessages } from "./transcript";
 import { Timeline } from "./timeline";
 import { WorkspaceTitlebar } from "./titlebar";
 
-/** 对话区与输入框共用的居中列宽，正文宽度约 736px。 */
-const column = "mx-auto w-full min-w-0 max-w-[784px] px-6";
+/** 正文与输入框共用此宽度并同步伸缩：最大 720px，两侧各留 16px。 */
+const column = "mx-auto w-full min-w-0 max-w-[752px] px-4";
 
 /** 相邻两轮间隔超过 30 分钟时，在轮次上方显示时间。 */
 const TIME_GAP = 30 * 60 * 1000;
@@ -22,12 +22,21 @@ export function WorkspacePage() {
   const state = useWorkspace();
   const scroll = useRef<HTMLDivElement>(null);
   const follow = useRef(true);
+  const dock = useRef<HTMLDivElement>(null);
   const [atBottom, setAtBottom] = useState(true);
   const records = state.chat.records;
-  useEffect(() => { follow.current = true; }, [state.chat.selected]);
-  useEffect(() => {
+  /** 正在跟随最新内容时滚到底部。 */
+  function followBottom(): void {
     if (follow.current && scroll.current) scroll.current.scrollTop = scroll.current.scrollHeight;
-  }, [records, state.chat.selected]);
+  }
+  // 输入框变高（多行输入、出现提示）时，同样保持最新内容在输入框上方可见。
+  useLayoutEffect(() => {
+    const observer = new ResizeObserver(followBottom);
+    observer.observe(dock.current!);
+    return () => observer.disconnect();
+  }, []);
+  useEffect(() => { follow.current = true; }, [state.chat.selected]);
+  useEffect(followBottom, [records, state.chat.selected]);
 
   return <SidebarProvider className="h-dvh min-h-0 flex-col overflow-hidden">
     <WorkspaceTitlebar />
@@ -41,15 +50,17 @@ export function WorkspacePage() {
         </h1>
         <Button variant="ghost" size="icon-sm" className="text-muted-foreground" aria-label="新建对话" title="新建对话" disabled={state.busy} onClick={() => state.select(null, state.projectPath)}><SquarePen /></Button>
       </header>
-      <div className="relative min-h-0 flex-1">
+      {/* @container 让时间轴按对话区自身宽度（而非窗口宽度）决定是否显示。 */}
+      <div className="@container relative min-h-0 flex-1">
         <Timeline records={records} scroll={scroll} />
-        <div ref={scroll} className="h-full overflow-y-auto" onScroll={(event) => {
+        {/* 输入区放在滚动容器内部并用 sticky 固定在底部：它只占内容区，不会盖住滚动条，滚动条仍覆盖整个对话区。 */}
+        <div ref={scroll} className="flex h-full flex-col overflow-y-auto [scrollbar-gutter:stable]" onScroll={(event) => {
           const node = event.currentTarget;
           const distance = node.scrollHeight - node.scrollTop - node.clientHeight;
           follow.current = distance < 80;
           setAtBottom(distance < 80);
         }}>
-          <div className={`${column} grid grid-cols-1 gap-8 pt-4 pb-10`}>
+          <div className={`${column} grid flex-1 grid-cols-1 content-start gap-8 pt-4 pb-8`}>
             {!state.chat.selected && <div className="flex min-h-[50vh] flex-col items-center justify-center gap-2 text-center">
               <h2 className="text-[28px] font-semibold tracking-tight">{state.projectPath ? `要在 ${projectName(state.projectPath)} 中做什么？` : "有什么可以帮忙的？"}</h2>
               <p className="text-sm text-muted-foreground">{state.projectPath ? "讨论、探索并直接修改项目代码。" : "提出问题，或在左侧打开项目一起编写代码。"}</p>
@@ -59,21 +70,24 @@ export function WorkspacePage() {
             {records.map((record, index) => {
               const previous = records[index - 1];
               const showTime = !previous || record.turn.createdAt - previous.turn.createdAt > TIME_GAP;
-              return <TurnMessages key={record.turn.id} record={record} time={showTime ? record.turn.createdAt : undefined} />;
+              return <TurnMessages key={record.turn.id} record={record} time={showTime ? record.turn.createdAt : undefined}
+                onResume={index === records.length - 1 ? () => void state.chat.resume(record.turn.id) : undefined}
+                resumeDisabled={state.busy || !state.chat.connected} />;
             })}
           </div>
-        </div>
+          {/* 顶部渐变让滚到下面的文字自然淡出；渐变区域不拦截点击，只有其中的控件可以点击。 */}
+          <div ref={dock} className={`${column} pointer-events-none sticky bottom-0 z-10 grid grid-cols-1 gap-3 *:pointer-events-auto bg-[linear-gradient(to_bottom,transparent,var(--background)_1.5rem)] pt-6 pb-5`}>
         {!atBottom && <Button variant="outline" size="icon-sm" aria-label="滚动到底部" title="滚动到底部"
-          className="absolute bottom-3 left-1/2 z-10 -translate-x-1/2 rounded-full bg-background! shadow-md hover:bg-muted!"
+          className="absolute bottom-full left-1/2 -translate-x-1/2 rounded-full bg-background! shadow-md hover:bg-muted!"
           onClick={() => scroll.current?.scrollTo({ top: scroll.current.scrollHeight, behavior: "smooth" })}><ArrowDown /></Button>}
-      </div>
-      <div className={`${column} grid shrink-0 grid-cols-1 gap-3 pt-1 pb-5`}>
         {(state.chat.error || state.projectError) && <p role="alert" className="rounded-2xl border border-destructive/30 bg-destructive/10 px-4 py-2.5 text-sm text-destructive">{state.projectError || state.chat.error}</p>}
-        {state.chat.config && !state.chat.configured && <div className="flex items-center justify-between gap-3 rounded-2xl bg-card/60 px-4 py-2.5 text-sm"><span className="text-muted-foreground">先配置模型连接，即可开始对话。</span><Button variant="secondary" size="sm" className="rounded-full" onClick={() => state.setSettingsOpen(true)}>配置连接</Button></div>}
+        {state.chat.config && !state.configured && <div className="flex items-center justify-between gap-3 rounded-2xl bg-card/60 px-4 py-2.5 text-sm"><span className="text-muted-foreground">{state.chat.configured.length ? "当前模型所在的服务还没有 API Key。" : "先配置模型连接，即可开始对话。"}</span><Button variant="secondary" size="sm" className="rounded-full" onClick={() => state.setSettingsOpen(true)}>配置连接</Button></div>}
         <Composer state={state} />
+          </div>
+        </div>
       </div>
     </SidebarInset>
     </div>
-    {state.settingsOpen && state.chat.config && <SettingsDialog config={state.chat.config} configured={state.chat.configured} request={state.chat.request} onSaved={state.chat.refreshConfig} onClose={() => state.setSettingsOpen(false)} />}
+    {state.settingsOpen && state.chat.config && <SettingsDialog config={state.chat.config} configured={state.chat.configured} used={state.chat.threads.map((thread) => thread.providerId)} request={state.chat.request} onSaved={state.chat.refreshConfig} onClose={() => state.setSettingsOpen(false)} />}
   </SidebarProvider>;
 }

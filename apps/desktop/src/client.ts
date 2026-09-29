@@ -4,10 +4,11 @@ import type { BackendConnection } from "./backend";
 /** 已有 RPC 方法与返回值的对应关系，让界面调用保留具体类型。 */
 interface Results {
   "thread.create": Thread; "thread.read": Thread | null; "thread.list": Thread[]; "thread.rename": Thread;
-  "turn.start": Turn; "turn.interrupt": { interrupted: boolean }; "turn.read": Turn | null;
+  "turn.start": Turn; "turn.resume": Turn; "turn.interrupt": { interrupted: boolean }; "turn.read": Turn | null;
   "turn.list": Turn[]; "turn.inputs": TurnInput[]; "turn.attempts": AttemptView[];
   "config.get": AppConfig; "config.set": AppConfig;
-  "credentials.status": { configured: boolean }; "credentials.set": null; "credentials.delete": null;
+  "credentials.status": { configured: string[] }; "credentials.set": null;
+  "models.fetch": string[]; "thread.update": Thread;
 }
 
 /** 限定方法和参数同时匹配的调用签名，传输层继续负责关联应答。 */

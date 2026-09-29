@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import type { AppConfig, ServerEvent, Thread } from "@tilot/protocol";
+import type { AppConfig, ReasoningEffort, ServerEvent, Thread } from "@tilot/protocol";
 import { BackendConnection } from "./backend";
 import { createClient, type Request } from "./client";
 import { applyEvent, loadConversation, mergeHistory, type TurnRecord } from "./conversation";
@@ -16,7 +16,8 @@ export function useChat() {
   const [newProjectPath, setNewProjectPath] = useState<string | null>(null);
   const [conversations, setConversations] = useState<Record<string, TurnRecord[]>>({});
   const [config, setConfig] = useState<AppConfig | null>(null);
-  const [configured, setConfigured] = useState(false);
+  // 已配置密钥的服务 id。
+  const [configured, setConfigured] = useState<string[]>([]);
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
   const [historyLoading, setHistoryLoading] = useState<Record<string, boolean>>({});
@@ -107,7 +108,7 @@ export function useChat() {
         setThreads((threads) => [thread, ...threads]);
         setSelected(threadId);
       }
-      const turn = await request("turn.start", { threadId, input, instructions: "你是 Tilot，一个帮助用户理解和编写代码的助手。请使用用户的语言回答。" });
+      const turn = await request("turn.start", { threadId, input });
       setConversations((state) => ({ ...state, [turn.threadId]: applyEvent(state[turn.threadId] ?? [], { event: "turn.started", turn, seq: 0 }) }));
       void refreshHistory(threadId).catch(report);
       return { accepted: true, threadId };
@@ -115,9 +116,37 @@ export function useChat() {
     finally { submitting.current = false; if (mounted.current) setBusy(false); }
   }
 
+  /** 从中断轮次创建后续轮次，并刷新历史；由服务端检查能否继续。 */
+  async function resume(turnId: string): Promise<void> {
+    if (submitting.current) return;
+    submitting.current = true;
+    setBusy(true);
+    setError("");
+    try {
+      const turn = await request("turn.resume", { turnId });
+      setConversations((state) => ({ ...state, [turn.threadId]: applyEvent(state[turn.threadId] ?? [], { event: "turn.started", turn, seq: 0 }) }));
+      await refreshHistory(turn.threadId);
+    } catch (error) { report(error); }
+    finally { submitting.current = false; if (mounted.current) setBusy(false); }
+  }
+
   /** 请求停止执行；按钮状态以服务最终事件为准，不提前伪造取消。 */
   async function stop(turnId: string): Promise<void> {
     try { await request("turn.interrupt", { turnId }); }
+    catch (error) { report(error); }
+  }
+
+  /** 修改已有任务的服务、模型和思考强度，以服务返回的任务记录为准。 */
+  async function updateThread(threadId: string, providerId: string, model: string, reasoningEffort: ReasoningEffort): Promise<void> {
+    try {
+      const thread = await request("thread.update", { threadId, providerId, model, reasoningEffort });
+      setThreads((threads) => threads.map((item) => item.id === thread.id ? thread : item));
+    } catch (error) { report(error); }
+  }
+
+  /** 修改新任务使用的默认服务、模型和思考强度。 */
+  async function updateDefaults(providerId: string, model: string, reasoningEffort: ReasoningEffort): Promise<void> {
+    try { setConfig(await request("config.set", { config: { ...config!, providerId, model, reasoningEffort } })); }
     catch (error) { report(error); }
   }
 
@@ -130,5 +159,5 @@ export function useChat() {
 
   return { connected, threads, selected, newProjectPath, records: selected ? conversations[selected] ?? [] : [], config, configured,
     error, busy, historyLoading: selected ? historyLoading[selected] ?? false : false,
-    request, select, send, stop, refreshConfig };
+    request, select, send, resume, stop, updateThread, updateDefaults, refreshConfig };
 }

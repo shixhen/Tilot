@@ -23,3 +23,12 @@ test("Markdown 拒绝可执行内容与非网页链接，不生成图片请求",
   assert.match(html, /\[图片：说明\]/);
   for (const url of ["/relative", "//example.com", "mailto:user@example.com", "data:text/html,test"]) assert.equal(webURL(url), "");
 });
+
+// 流式输出时文字按词包进淡入片段；表格行之间的空白不能变成 span，否则会产生非法表格结构。
+test("流式 Markdown 按词生成淡入片段，结束后恢复纯文本", () => {
+  const text = "你好 world\n\n| 名称 | 状态 |\n| --- | --- |\n| Tilot | 已连接 |";
+  const streaming = renderToStaticMarkup(createElement(MessageMarkdown, { text, streaming: true }));
+  assert.match(streaming, /<span class="fade-in">world<\/span>/);
+  assert.doesNotMatch(streaming, /<(?:table|thead|tbody|tr)>\s*<span/);
+  assert.doesNotMatch(renderToStaticMarkup(createElement(MessageMarkdown, { text })), /fade-in/);
+});

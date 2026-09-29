@@ -1,6 +1,7 @@
 import { useRef, useState, type ComponentProps } from "react";
 import Markdown from "react-markdown";
 import remarkGfm from "remark-gfm";
+import type { Element, Root } from "hast";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { Check, Copy } from "lucide-react";
 import { Button } from "../components/ui/button";
@@ -43,9 +44,31 @@ function WebLink({ href, children, title }: ComponentProps<"a">) {
   return <><a href={href} title={title ?? href} onClick={(event) => { event.preventDefault(); void open(); }}>{children}</a>{failed && <span role="status" className="text-destructive">（无法打开链接）</span>}</>;
 }
 
-/** 渲染 GFM 正文，禁用 HTML 和自动图片请求，宽表格单独滚动。 */
-export function MessageMarkdown({ text }: { text: string }) {
-  return <div className="message-prose"><Markdown skipHtml remarkPlugins={[remarkGfm]} urlTransform={webURL} components={{
+/** 按词切分文字（中文按词语，英文按单词）。 */
+const segmenter = new Intl.Segmenter("zh", { granularity: "word" });
+
+/**
+ * 流式输出时把文字切成带淡入动画的小片段。片段按顺序追加在末尾，已显示片段的位置和 key 不变，
+ * React 复用原有节点，动画不会重播；只有新出现的片段从透明渐变到不透明。
+ * 纯空白文本保持原样，避免在表格行之间插入非法的 span。
+ */
+function rehypeFadeIn() {
+  return (tree: Root) => {
+    const split = (node: Root | Element): void => {
+      node.children = node.children.flatMap((child) => {
+        if (child.type === "element") split(child);
+        if (child.type !== "text" || !child.value.trim()) return [child];
+        return Array.from(segmenter.segment(child.value), ({ segment }): Element =>
+          ({ type: "element", tagName: "span", properties: { className: ["fade-in"] }, children: [{ type: "text", value: segment }] }));
+      }) as Root["children"];
+    };
+    split(tree);
+  };
+}
+
+/** 渲染 GFM 正文，禁用 HTML 和自动图片请求，宽表格单独滚动；streaming 时新文字淡入。 */
+export function MessageMarkdown({ text, streaming = false }: { text: string; streaming?: boolean }) {
+  return <div className="message-prose"><Markdown skipHtml remarkPlugins={[remarkGfm]} rehypePlugins={streaming ? [rehypeFadeIn] : []} urlTransform={webURL} components={{
     pre: CodeBlock,
     a: WebLink,
     img: ({ alt }) => <span className="text-muted-foreground">[图片：{alt || "未提供说明"}]</span>,

@@ -2,6 +2,9 @@ import { toResponseInputItems } from "openai/lib/responses/ResponseInputItems";
 import type { ResponseInputItem } from "openai/resources/responses/responses";
 import type { ModelAttempt, Store, Turn, TurnInput } from "@tilot/store";
 import { getResponseToolCallsFromResponse } from "@tilot/responses/output";
+import { UNKNOWN_TOOL_RESULT } from "@tilot/prompts";
+export { checkContextBudget, type ContextBudget } from "./budget.ts";
+export { loadProjectContext, appendProjectInstructions, type ProjectContext, type SkillMetadata } from "./project.ts";
 
 /** 本次构建的边界；Core 在开始请求前选定轮次、用户输入边界和系统策略。 */
 export interface ContextOptions {
@@ -83,7 +86,7 @@ function buildTurnInput(
         while (inputIndex < inputs.length && inputs[inputIndex]!.id <= attempt.inputThroughId) {
           result.push({ role: "user", content: inputs[inputIndex++]!.content });
         }
-        result.push(...buildResponseGroup(store, attempt, itemIds, callIds));
+        result.push(...buildResponseGroup(store, attempt, itemIds, callIds, turn.status === "interrupted"));
         previousBoundary = attempt.inputThroughId;
       }
       afterSequence = attempt.sequence;
@@ -98,7 +101,7 @@ function buildTurnInput(
 
 /** 校验并转换一份成功响应及全部配对结果，保留推理正文和工具参数，不修改存储记录。 */
 function buildResponseGroup(
-  store: Store, attempt: ModelAttempt, itemIds: Set<string>, callIds: Set<string>,
+  store: Store, attempt: ModelAttempt, itemIds: Set<string>, callIds: Set<string>, interrupted: boolean,
 ): ResponseInputItem[] {
   const response = attempt.response;
   if (!response || response.status !== "completed") {
@@ -119,8 +122,14 @@ function buildResponseGroup(
     const stored = storedCalls[index]!;
     if (callIds.has(call.call_id)) throw new Error("上下文中存在重复的工具 call_id。");
     callIds.add(call.call_id);
-    if (stored.callId !== call.call_id || response.output[stored.outputIndex] !== call ||
-        stored.result?.type !== "function_call_output" || stored.result.call_id !== call.call_id) {
+    if (stored.callId !== call.call_id || response.output[stored.outputIndex] !== call) {
+      throw new Error("工具调用记录与原始调用不一致。");
+    }
+    if (stored.result === null && interrupted) {
+      results.push({ type: "function_call_output", call_id: call.call_id, output: JSON.stringify({ status: "unknown", error: UNKNOWN_TOOL_RESULT }) });
+      continue;
+    }
+    if (stored.result?.type !== "function_call_output" || stored.result.call_id !== call.call_id) {
       throw new Error("工具调用缺少配对结果，或结果与原始调用不一致。");
     }
     results.push(stored.result);

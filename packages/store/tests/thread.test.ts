@@ -3,7 +3,7 @@ import { join } from "node:path";
 import { test } from "node:test";
 import Database from "better-sqlite3";
 import { Store } from "@tilot/store";
-import { temporaryDirectory } from "./helpers.ts";
+import { downgradeToVersion4, temporaryDirectory } from "./helpers.ts";
 
 test("创建任务、重命名和分页列表可在重启后恢复，项目绑定不变", (context) => {
   const directory = temporaryDirectory(context);
@@ -52,7 +52,8 @@ test("无效操作不修改任务，不存在的任务不会被自动创建", (c
 test("版本 1 数据库升级后保留配置；迁移失败时版本号不会提前更新", (context) => {
   const directory = temporaryDirectory(context);
   const store = new Store(directory);
-  const config = { ...store.getConfig(), model: "saved-model" };
+  const original = store.getConfig();
+  const config = { ...original, model: "saved-model", providers: [{ ...original.providers[0]!, models: [{ id: "saved-model", contextTokens: 131072 }] }] };
   try {
     store.saveConfig(config);
   } finally {
@@ -61,6 +62,7 @@ test("版本 1 数据库升级后保留配置；迁移失败时版本号不会�
   // 仅在测试目录中恢复旧版结构，模拟已保存配置的版本 1 数据库。
   const legacy = new Database(join(directory, "tilot.sqlite"));
   try {
+    downgradeToVersion4(legacy);
     legacy.exec("DROP TABLE tool_calls; DROP TABLE model_attempts; DROP TABLE turn_inputs; DROP TABLE turns; DROP TABLE threads; PRAGMA user_version = 1;");
     legacy.exec("CREATE TABLE threads (conflict TEXT);");
     assert.throws(() => new Store(directory));

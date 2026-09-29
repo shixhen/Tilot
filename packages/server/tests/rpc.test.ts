@@ -1,13 +1,15 @@
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
+import { createServer } from "node:http";
+import type { AddressInfo } from "node:net";
 import { mkdtempSync, rmSync, realpathSync, mkdirSync, writeFileSync, symlinkSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { PassThrough, Writable } from "node:stream";
 import { test, type TestContext } from "node:test";
 import { fileURLToPath } from "node:url";
-import type { RpcResponse } from "@tilot/protocol";
-import { Store } from "@tilot/store";
+import type { RpcResponse, Thread } from "@tilot/protocol";
+import { acquireServiceLock, Store } from "@tilot/store";
 import { handleRpcLine } from "../src/rpc.ts";
 import { serveStdio } from "../src/stdio.ts";
 import { TurnManager } from "../src/turn-manager.ts";
@@ -40,6 +42,26 @@ async function runServer(directory: string, lines: string[]): Promise<RpcRespons
   assert.equal(stderr, "");
   return stdout.trim().split("\n").map((line) => JSON.parse(line) as RpcResponse);
 }
+
+test("真实服务先取得排他锁再恢复遗留轮次，关闭后释放锁", { timeout: 10000 }, async (context) => {
+  const directory = temporaryDirectory(context);
+  const store = new Store(directory);
+  const turn = store.startTurn(store.createThread("遗留任务").id, "原输入");
+  const attempt = store.history.startAttempt(turn.id, store.listTurnInputs(turn.id)[0]!.id);
+  const unlock = acquireServiceLock(directory);
+  try {
+    await assert.rejects(runServer(directory, ['{"id":"list","method":"thread.list","params":{}}']), /已有本地服务/);
+    assert.equal(store.getTurn(turn.id)?.status, "running");
+  } finally { unlock(); store.close(); }
+  await runServer(directory, ['{"id":"list","method":"thread.list","params":{}}']);
+  const reopened = new Store(directory);
+  try {
+    assert.equal(reopened.getTurn(turn.id)?.status, "interrupted");
+    assert.equal(reopened.history.getAttempt(attempt.id)?.status, "interrupted");
+    assert.equal(reopened.listTurnInputs(turn.id)[0]?.content, "原输入");
+  } finally { reopened.close(); }
+  acquireServiceLock(directory)();
+});
 
 test("真实服务按 UTF-8 行协议处理任务请求，坏请求不影响后续操作，退出后可重开", { timeout: 10000 }, async (context) => {
   const directory = temporaryDirectory(context);
@@ -139,39 +161,83 @@ test("项目任务解析目录链接并持久化，文件和失效目录不会�
   finally { reopened.close(); }
 });
 
-test("配置与凭据 RPC 保存并恢复设置，地址切换隔离密钥，响应不回显密钥", { timeout: 10000 }, async (context) => {
+test("配置与凭据 RPC 保存并恢复多个服务，地址切换隔离密钥，删除服务同时删除密钥，响应不回显密钥", { timeout: 10000 }, async (context) => {
   const directory = temporaryDirectory(context);
   const store = new Store(directory);
-  const config = { ...store.getConfig(), baseURL: "https://example.test", model: "saved-model" };
+  const original = store.getConfig();
+  const provider = { ...original.providers[0]!, baseURL: "https://example.test/", models: [{ id: "saved-model", contextTokens: 65536 }] };
+  const second = { id: "second", name: "second.test", baseURL: "https://second.test/", models: [{ id: "other-model", contextTokens: 65536 }] };
+  const config = { ...original, model: "saved-model", providers: [provider, second] };
   store.close();
   const key = "local-test-rpc-secret";
   const requests = [
     { id: "config", method: "config.set", params: { config: { ...config, apiKey: key } } },
-    { id: "save", method: "credentials.set", params: { baseURL: config.baseURL, apiKey: key } },
-    { id: "empty", method: "credentials.set", params: { baseURL: config.baseURL, apiKey: " " } },
+    { id: "save", method: "credentials.set", params: { providerId: "default", apiKey: key } },
+    { id: "save-second", method: "credentials.set", params: { providerId: "second", apiKey: `${key}-2` } },
+    { id: "empty", method: "credentials.set", params: { providerId: "default", apiKey: " " } },
+    { id: "unknown", method: "credentials.set", params: { providerId: "missing", apiKey: key } },
     { id: "status", method: "credentials.status", params: {} },
-    { id: "bad-budget", method: "config.set", params: { config: { ...config, contextBudgetTokens: 1 } } },
+    { id: "bad-budget", method: "config.set", params: { config: { ...config, providers: [{ ...provider, models: [{ id: "saved-model", contextTokens: 1 }] }, second] } } },
     { id: "bad-type", method: "config.set", params: { config: { ...config, maxStepsPerRun: "20" } } },
     { id: "read", method: "config.get", params: {} },
-    { id: "change", method: "config.set", params: { config: { ...config, baseURL: "https://other.test" } } },
-    { id: "other-status", method: "credentials.status", params: {} },
+    { id: "change", method: "config.set", params: { config: { ...config, providers: [{ ...provider, baseURL: "https://other.test/" }, second] } } },
+    { id: "changed-status", method: "credentials.status", params: {} },
+    { id: "remove", method: "config.set", params: { config: { ...config, providers: [provider] } } },
+    { id: "restore", method: "config.set", params: { config } },
+    { id: "removed-status", method: "credentials.status", params: {} },
   ];
   const results = await runServer(directory, requests.map((request) => JSON.stringify(request)));
   assert.deepEqual(results[0], { id: "config", success: true, result: config });
   assert.deepEqual(results[1], { id: "save", success: true, result: null });
-  assert.equal(results[2]?.success, false);
-  assert.deepEqual(results[3], { id: "status", success: true, result: { configured: true } });
+  assert.deepEqual(results[2], { id: "save-second", success: true, result: null });
+  assert.equal(results[3]?.success, false);
   assert.equal(results[4]?.success, false);
-  assert.equal(results[5]?.success, false);
-  assert.deepEqual(results[6], { id: "read", success: true, result: config });
-  assert.deepEqual(results[8], { id: "other-status", success: true, result: { configured: false } });
+  assert.deepEqual(results[5], { id: "status", success: true, result: { configured: ["default", "second"] } });
+  assert.equal(results[6]?.success, false);
+  assert.equal(results[7]?.success, false);
+  assert.deepEqual(results[8], { id: "read", success: true, result: config });
+  // 地址改了，旧密钥不会被用于新地址。
+  assert.deepEqual(results[10], { id: "changed-status", success: true, result: { configured: ["second"] } });
+  // 删除 second 服务后再加回来，它的密钥已经随之删除；default 恢复原地址后密钥重新可用。
+  assert.deepEqual(results[13], { id: "removed-status", success: true, result: { configured: ["default"] } });
   assert.equal(JSON.stringify(results).includes(key), false);
-  const reopened = await runServer(directory, [
-    JSON.stringify({ id: "restore", method: "config.set", params: { config } }),
-    JSON.stringify({ id: "exists", method: "credentials.status", params: {} }),
-    JSON.stringify({ id: "delete", method: "credentials.delete", params: {} }),
-    JSON.stringify({ id: "deleted", method: "credentials.status", params: {} }),
-  ]);
-  assert.deepEqual(reopened[1], { id: "exists", success: true, result: { configured: true } });
-  assert.deepEqual(reopened[3], { id: "deleted", success: true, result: { configured: false } });
+});
+
+test("模型列表使用填写或已保存的密钥加载，任务可单独切换模型和强度", async (context) => {
+  // 本地服务模拟 GET /models，只接受 saved-key。
+  const server = createServer((request, response) => {
+    const ok = request.url === "/models" && request.headers.authorization === "Bearer saved-key";
+    response.writeHead(ok ? 200 : 401, { "content-type": "application/json" });
+    response.end(JSON.stringify(ok
+      ? { object: "list", data: ["model-a", "model-b"].map((id) => ({ id, object: "model", created: 0, owned_by: "test" })) }
+      : { error: { message: "密钥无效" } }));
+  });
+  await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+  context.after(() => server.close());
+  const baseURL = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
+  const store = new Store(temporaryDirectory(context));
+  try {
+    const turns = new TurnManager(store, async () => {}, () => {});
+    const call = (method: string, params: object) => handleRpcLine(store, JSON.stringify({ id: method, method, params }), turns);
+    assert.deepEqual(await call("models.fetch", { providerId: "new", baseURL, apiKey: "saved-key" }), { id: "models.fetch", success: true, result: ["model-a", "model-b"] });
+    assert.match(JSON.stringify(await call("models.fetch", { providerId: "new", baseURL, apiKey: " " })), /请填写 API Key/);
+    assert.equal((await call("models.fetch", { providerId: "new", baseURL, apiKey: "wrong-key" })).success, false);
+    const original = store.getConfig();
+    const second = { id: "second", name: "second", baseURL, models: [{ id: "model-b", contextTokens: 131072 }] };
+    store.saveConfig({ ...original, model: "model-a", providers: [{ ...original.providers[0]!, baseURL, models: [{ id: "model-a", contextTokens: 65536 }] }, second] });
+    store.credentials.saveApiKey("default", baseURL, "saved-key");
+    assert.equal((await call("models.fetch", { providerId: "default", baseURL, apiKey: "" })).success, true);
+    assert.match(JSON.stringify(await call("models.fetch", { providerId: "second", baseURL, apiKey: "" })), /请填写 API Key/);
+
+    const created = await call("thread.create", { title: "任务" });
+    assert.ok(created.success);
+    const thread = created.result as Thread;
+    assert.equal(thread.model, "model-a");
+    const updated = await call("thread.update", { threadId: thread.id, providerId: "second", model: "model-b", reasoningEffort: "low" });
+    assert.deepEqual(updated, { id: "thread.update", success: true, result: { ...thread, providerId: "second", model: "model-b", reasoningEffort: "low" } });
+    assert.equal((await call("thread.update", { threadId: thread.id, providerId: "default", model: "model-b", reasoningEffort: "low" })).success, false);
+    assert.match(JSON.stringify(await call("thread.update", { threadId: thread.id, providerId: "default", model: "model-a", reasoningEffort: "extreme" })), /invalid_request/);
+  } finally {
+    store.close();
+  }
 });

@@ -39,6 +39,13 @@ export function createResponsesClient(options: ResponsesClientOptions): OpenAI {
   });
 }
 
+/** 读取服务提供的模型名称（GET /models），按服务返回顺序；15 秒无响应视为失败。 */
+export async function listModels(options: ResponsesClientOptions): Promise<string[]> {
+  const ids: string[] = [];
+  for await (const model of createResponsesClient(options).models.list({ timeout: 15_000 })) ids.push(model.id);
+  return ids;
+}
+
 /**
  * 发起一次流式请求，校验并传递 SDK 事件，包括推理与工具调用；完全相同的重复事件只传递一次。
  * completed、failed、incomplete 均作为终态交给调用方判断；无终态断流则抛错。

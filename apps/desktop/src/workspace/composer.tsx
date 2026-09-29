@@ -1,10 +1,11 @@
 import { useLayoutEffect, useRef } from "react";
-import { ArrowUp, ChevronDown, Folder, LoaderCircle, Plus, Square, X } from "lucide-react";
+import { ArrowUp, Folder, LoaderCircle, Plus, Square, X } from "lucide-react";
 import type { WorkspaceState } from "../hooks/use-workspace";
 import { projectName } from "../projects";
 import { Button } from "../components/ui/button";
 import { Card, CardContent, CardFooter } from "../components/ui/card";
 import { Textarea } from "../components/ui/textarea";
+import { ModelPicker } from "./model-picker";
 
 /** Codex 风格输入框：圆角卡片内上方输入、下方工具栏，保留中文输入法和多行编辑行为。 */
 export function Composer({ state }: { state: WorkspaceState }) {
@@ -32,7 +33,6 @@ export function Composer({ state }: { state: WorkspaceState }) {
     return () => observer.disconnect();
   }, []);
 
-  const efforts = { none: "", low: "低", high: "高", max: "最高" };
   return <form className="min-w-0 w-full" onSubmit={(event) => void state.submit(event)}>
     <Card className="min-w-0 gap-0 rounded-[20px] border-0 py-0 shadow-lg shadow-black/20">
       <CardContent className="min-w-0 px-4 pt-3.5 pb-1">
@@ -56,14 +56,14 @@ export function Composer({ state }: { state: WorkspaceState }) {
           </span>}
         </div>
         <div className="flex shrink-0 items-center gap-1.5">
-          <Button type="button" variant="ghost" size="sm" className="h-8 gap-1 rounded-full px-2.5 text-sm font-normal hover:bg-white/10!" disabled={!state.chat.config} onClick={() => state.setSettingsOpen(true)}>
-            <span className="max-w-40 truncate">{state.chat.config?.model ?? (state.chat.error ? "未连接" : "连接中")}</span>
-            {state.chat.config && efforts[state.chat.config.reasoningEffort] && <span className="text-muted-foreground">{efforts[state.chat.config.reasoningEffort]}</span>}
-            <ChevronDown className="size-3.5 text-muted-foreground" />
-          </Button>
+          {/* 已有任务显示它自己的模型，新对话显示默认值。 */}
+          {state.choice && state.chat.config
+            ? <ModelPicker providerId={state.choice.providerId} model={state.choice.model} reasoningEffort={state.choice.reasoningEffort}
+              providers={state.chat.config.providers} onChange={state.chooseModel} />
+            : <span className="px-2.5 text-sm text-muted-foreground">{state.chat.error ? "未连接" : "连接中"}</span>}
           {state.running
             ? <Button type="button" size="icon-sm" className="rounded-full bg-foreground text-background hover:bg-foreground/85" aria-label="停止生成" title="停止生成" disabled={!state.chat.connected} onClick={() => void state.chat.stop(state.running!.turn.id)}><Square className="size-3 fill-current" /></Button>
-            : <Button type="submit" size="icon-sm" className="rounded-full bg-[#2c67c5] text-white hover:bg-[#3572d6] disabled:bg-white/10 disabled:text-muted-foreground disabled:opacity-100" aria-label="发送消息" title="发送 (Enter)" disabled={!state.canSend}>{state.busy ? <LoaderCircle className="animate-spin" /> : <ArrowUp />}</Button>}
+            : <Button type="submit" size="icon-sm" className="rounded-full bg-brand text-white hover:bg-brand/90 disabled:bg-white/10 disabled:text-muted-foreground disabled:opacity-100" aria-label="发送消息" title="发送 (Enter)" disabled={!state.canSend}>{state.busy ? <LoaderCircle className="animate-spin" /> : <ArrowUp />}</Button>}
         </div>
       </CardFooter>
     </Card>

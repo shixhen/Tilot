@@ -1,4 +1,5 @@
 import { useState, type FormEvent } from "react";
+import type { ReasoningEffort } from "@tilot/protocol";
 import { open } from "@tauri-apps/plugin-dialog";
 import { useChat } from "../use-chat";
 
@@ -15,7 +16,10 @@ export function useWorkspace() {
   const draft = drafts[draftKey] ?? "";
   const running = chat.records.find((record) => record.turn.status === "running");
   const busy = chat.busy || picking;
-  const canSend = chat.connected && chat.configured && !busy && !chat.historyLoading && !running && !!draft.trim();
+  // 已有任务用它自己的服务，新对话用默认服务；该服务配置了密钥才能发送。
+  const choice = thread ?? chat.config;
+  const configured = !!choice && chat.configured.includes(choice.providerId);
+  const canSend = chat.connected && configured && !busy && !chat.historyLoading && !running && !!draft.trim();
 
   /** 更新当前任务草稿，其他任务草稿保持独立。 */
   function editDraft(value: string): void {
@@ -26,6 +30,12 @@ export function useWorkspace() {
   function select(id: string | null, path: string | null = null): void {
     setProjectError("");
     chat.select(id, path);
+  }
+
+  /** 已有任务只修改该任务；尚未发送的新对话修改默认值，发送时创建的任务会沿用。 */
+  function chooseModel(providerId: string, model: string, reasoningEffort: ReasoningEffort): void {
+    if (thread) void chat.updateThread(thread.id, providerId, model, reasoningEffort);
+    else void chat.updateDefaults(providerId, model, reasoningEffort);
   }
 
   /** 选择项目目录，取消时不改变任务和草稿。 */
@@ -47,8 +57,8 @@ export function useWorkspace() {
     setDrafts((current) => ({ ...current, [draftKey]: "", [result.threadId ?? draftKey]: result.accepted ? "" : draft }));
   }
 
-  return { chat, thread, projectPath, draft, running, busy, canSend, projectError, settingsOpen,
-    setSettingsOpen, editDraft, select, chooseProject, submit };
+  return { chat, thread, choice, configured, projectPath, draft, running, busy, canSend, projectError, settingsOpen,
+    setSettingsOpen, editDraft, select, chooseModel, chooseProject, submit };
 }
 
 /** 页面与子组件共用的工作区状态。 */
