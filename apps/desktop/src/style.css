@@ -91,6 +91,9 @@
 [data-slot="sidebar-wrapper"][data-resizing] { cursor: col-resize; user-select: none; }
 [data-slot="sidebar-wrapper"][data-resizing] :is([data-slot="sidebar-gap"], [data-slot="sidebar-container"], [data-slot="sidebar-inset"]) { transition: none; }
 
+/* 行内展开箭头相对中文字形下移 1px；用定位偏移，旋转时中心不会漂移。 */
+.disclosure-icon { position: relative; top: 1px; flex-shrink: 0; }
+
 /* 运行中的状态文字：一道亮光从左向右扫过灰色文字。 */
 .shimmer-text {
   color: transparent;
@@ -100,9 +103,8 @@
 }
 @keyframes shimmer { from { background-position: 100% 0; } to { background-position: 0 0; } }
 
-/* 流式输出时新出现的文字从透明渐变到不透明。 */
-.fade-in { animation: fade-in 600ms ease-out both; }
-@keyframes fade-in { from { opacity: 0; } }
+/* 透明度由距离输出末尾的字符数决定，不使用固定时长淡入。 */
+.stream-tail { opacity: var(--stream-opacity); }
 
 /* Markdown 不控制应用布局，只规范模型正文的阅读样式。 */
 .message-prose { font-size: 15.5px; line-height: 1.75; overflow-wrap: anywhere; min-width: 0; }
@@ -133,5 +135,6 @@
 .message-prose .task-list-item { list-style: none; }
 
 @media (prefers-reduced-motion: reduce) {
+  .stream-tail { opacity: 1; }
   *, *::before, *::after { animation: none !important; transition: none !important; }
 }

@@ -17,14 +17,14 @@ interface TaskNavigationProps {
   onOpenProject: () => void;
 }
 
-/** 可折叠的分组标题：灰色小字，悬停时显示折叠箭头和右侧操作；箭头重心在底部尖角，上移 1px 与中文视觉居中。 */
+/** 可折叠的分组标题：灰色小字，悬停时显示折叠箭头和右侧操作。 */
 function GroupSection({ label, action, children }: { label: string; action: ReactNode; children: ReactNode }) {
   return <SidebarGroup className="py-1">
     <Collapsible defaultOpen className="group/section">
       <div className="group/header flex h-[30px] items-center gap-1 px-2">
         <CollapsibleTrigger className="flex items-center gap-1 rounded-sm text-sm text-sidebar-foreground/45 outline-none transition-colors hover:text-sidebar-foreground/70 focus-visible:ring-2 focus-visible:ring-sidebar-ring">
           {label}
-          <ChevronDown className="size-3.5 -translate-y-px opacity-0 transition-[opacity,rotate] group-hover/header:opacity-100 group-data-[state=closed]/section:-rotate-90" />
+          <ChevronDown className="disclosure-icon size-3.5 opacity-0 transition-[opacity,rotate] group-hover/header:opacity-100 group-data-[state=closed]/section:-rotate-90" />
         </CollapsibleTrigger>
         {action}
       </div>

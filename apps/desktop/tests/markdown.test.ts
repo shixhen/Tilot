@@ -24,11 +24,18 @@ test("Markdown 拒绝可执行内容与非网页链接，不生成图片请求",
   for (const url of ["/relative", "//example.com", "mailto:user@example.com", "data:text/html,test"]) assert.equal(webURL(url), "");
 });
 
-// 流式输出时文字按词包进淡入片段；表格行之间的空白不能变成 span，否则会产生非法表格结构。
-test("流式 Markdown 按词生成淡入片段，结束后恢复纯文本", () => {
+// 尾部窗口跨 Markdown 节点共用，不影响表格结构，结束后完整显示。
+test("流式 Markdown 仅末尾八个字符渐变，推进后旧字恢复不透明", () => {
   const text = "你好 world\n\n| 名称 | 状态 |\n| --- | --- |\n| Tilot | 已连接 |";
   const streaming = renderToStaticMarkup(createElement(MessageMarkdown, { text, streaming: true }));
-  assert.match(streaming, /<span class="fade-in">world<\/span>/);
+  assert.equal((streaming.match(/class="stream-tail"/g) ?? []).length, 8);
+  assert.match(streaming, /你好 world/);
   assert.doesNotMatch(streaming, /<(?:table|thead|tbody|tr)>\s*<span/);
-  assert.doesNotMatch(renderToStaticMarkup(createElement(MessageMarkdown, { text })), /fade-in/);
+  assert.doesNotMatch(renderToStaticMarkup(createElement(MessageMarkdown, { text })), /stream-tail/);
+  const initial = renderToStaticMarkup(createElement(MessageMarkdown, { text: "甲乙丙丁戊己庚辛", streaming: true }));
+  assert.match(initial, /style="--stream-opacity:0">辛<\/span>/);
+  const advanced = renderToStaticMarkup(createElement(MessageMarkdown, { text: "甲乙丙丁戊己庚辛壬癸子丑寅卯辰巳", streaming: true }));
+  assert.match(advanced, /甲乙丙丁戊己庚辛<span/);
+  const emoji = renderToStaticMarkup(createElement(MessageMarkdown, { text: "👨‍👩‍👧‍👦", streaming: true }));
+  assert.equal((emoji.match(/class="stream-tail"/g) ?? []).length, 1);
 });

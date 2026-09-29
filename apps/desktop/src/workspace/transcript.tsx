@@ -41,7 +41,7 @@ function Reasoning({ text, live }: { text: string; live: boolean }) {
   return <Collapsible open={open} onOpenChange={setOpen} className="text-sm text-muted-foreground">
     <CollapsibleTrigger className="group flex items-center gap-1 rounded-sm outline-none transition-colors hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring">
       <span className={live ? "shimmer-text" : undefined}>{live ? "正在思考" : "思考"}</span>
-      <ChevronRight className="size-3.5 transition-transform group-data-[state=open]:rotate-90" />
+      <ChevronRight className="disclosure-icon size-3.5 transition-transform group-data-[state=open]:rotate-90" />
     </CollapsibleTrigger>
     <CollapsibleContent>
       {/* 生成中顶部渐隐，提示上方还有被推走的内容。 */}
@@ -114,7 +114,7 @@ export function TurnMessages({ record, time, onResume, resumeDisabled }: { recor
       <Collapsible className="group/work border-b pb-2">
         <CollapsibleTrigger className="flex items-center gap-1 rounded-sm text-sm text-muted-foreground outline-none transition-colors hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring">
           用时 {formatDuration((turn.finishedAt ?? turn.createdAt) - turn.createdAt)}
-          <ChevronRight className="size-4 transition-transform group-data-[state=open]/work:rotate-90" />
+          <ChevronRight className="disclosure-icon size-4 transition-transform group-data-[state=open]/work:rotate-90" />
         </CollapsibleTrigger>
         <CollapsibleContent className="grid min-w-0 grid-cols-1 gap-4 pt-4 pb-2">{render(entries.slice(lastInput + 1, answer))}</CollapsibleContent>
       </Collapsible>

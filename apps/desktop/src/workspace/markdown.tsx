@@ -1,4 +1,4 @@
-import { useRef, useState, type ComponentProps } from "react";
+import { useEffect, useRef, useState, type ComponentProps } from "react";
 import Markdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import type { Element, Root } from "hast";
@@ -44,23 +44,43 @@ function WebLink({ href, children, title }: ComponentProps<"a">) {
   return <><a href={href} title={title ?? href} onClick={(event) => { event.preventDefault(); void open(); }}>{children}</a>{failed && <span role="status" className="text-destructive">（无法打开链接）</span>}</>;
 }
 
-/** 按词切分文字（中文按词语，英文按单词）。 */
-const segmenter = new Intl.Segmenter("zh", { granularity: "word" });
+/** 按可见字符切分，不拆开组合字符或 emoji。 */
+const segmenter = new Intl.Segmenter("zh", { granularity: "grapheme" });
+
+/** 仅末尾 8 个非空白字符参与渐变，透明度随后续文字推进。 */
+const STREAM_TAIL_LENGTH = 8;
 
 /**
- * 流式输出时把文字切成带淡入动画的小片段。片段按顺序追加在末尾，已显示片段的位置和 key 不变，
- * React 复用原有节点，动画不会重播；只有新出现的片段从透明渐变到不透明。
- * 纯空白文本保持原样，避免在表格行之间插入非法的 span。
+ * 从 Markdown 末尾向前分配渐变，跨段落共用一个尾部窗口。
+ * 旧文字保持普通文本，最多生成 8 个 span；结构间空白不包装，保留合法表格结构。
  */
-function rehypeFadeIn() {
+function rehypeStreamTail() {
   return (tree: Root) => {
+    let remaining = STREAM_TAIL_LENGTH;
+    /** 逆序处理子节点，再按原顺序放回字符，不改变正文及复制内容。 */
     const split = (node: Root | Element): void => {
-      node.children = node.children.flatMap((child) => {
+      for (let index = node.children.length - 1; index >= 0 && remaining > 0; index--) {
+        const child = node.children[index]!;
         if (child.type === "element") split(child);
-        if (child.type !== "text" || !child.value.trim()) return [child];
-        return Array.from(segmenter.segment(child.value), ({ segment }): Element =>
-          ({ type: "element", tagName: "span", properties: { className: ["fade-in"] }, children: [{ type: "text", value: segment }] }));
-      }) as Root["children"];
+        if (child.type !== "text" || !child.value.trim()) continue;
+        const characters = Array.from(segmenter.segment(child.value));
+        const tail: Element["children"] = [];
+        let start = child.value.length;
+        for (let position = characters.length - 1; position >= 0 && remaining > 0; position--) {
+          const { segment, index: offset } = characters[position]!;
+          start = offset;
+          if (!segment.trim()) {
+            tail.unshift({ type: "text", value: segment });
+            continue;
+          }
+          tail.unshift({ type: "element", tagName: "span", properties: {
+            className: ["stream-tail"], style: `--stream-opacity:${(STREAM_TAIL_LENGTH - remaining) / STREAM_TAIL_LENGTH}`,
+          }, children: [{ type: "text", value: segment }] });
+          remaining--;
+        }
+        if (start > 0) tail.unshift({ type: "text", value: child.value.slice(0, start) });
+        node.children.splice(index, 1, ...tail);
+      }
     };
     split(tree);
   };
@@ -68,7 +88,14 @@ function rehypeFadeIn() {
 
 /** 渲染 GFM 正文，禁用 HTML 和自动图片请求，宽表格单独滚动；streaming 时新文字淡入。 */
 export function MessageMarkdown({ text, streaming = false }: { text: string; streaming?: boolean }) {
-  return <div className="message-prose"><Markdown skipHtml remarkPlugins={[remarkGfm]} rehypePlugins={streaming ? [rehypeFadeIn] : []} urlTransform={webURL} components={{
+  const [settledText, setSettledText] = useState<string | null>(null);
+  // 输出暂停时显示完整末尾，避免等待网络或工具期间最后几个字一直透明。
+  useEffect(() => {
+    if (!streaming) return;
+    const timer = setTimeout(() => setSettledText(text), 240);
+    return () => clearTimeout(timer);
+  }, [text, streaming]);
+  return <div className="message-prose"><Markdown skipHtml remarkPlugins={[remarkGfm]} rehypePlugins={streaming && settledText !== text ? [rehypeStreamTail] : []} urlTransform={webURL} components={{
     pre: CodeBlock,
     a: WebLink,
     img: ({ alt }) => <span className="text-muted-foreground">[图片：{alt || "未提供说明"}]</span>,

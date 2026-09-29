@@ -27,7 +27,7 @@ export function ModelPicker({ providerId, model, reasoningEffort, providers, onC
       <Button type="button" variant="ghost" size="sm" className="h-8 gap-1 rounded-full px-2.5 text-sm font-normal hover:bg-white/10!" title={missing ? "当前服务没有这个模型，请重新选择" : "选择模型和思考强度"}>
         <span className={`max-w-40 truncate ${missing ? "text-destructive" : ""}`}>{model}</span>
         <span className="text-muted-foreground">{reasoningEffort}</span>
-        <ChevronDown className="size-3.5 text-muted-foreground" />
+        <ChevronDown className="disclosure-icon size-3.5 text-muted-foreground" />
       </Button>
     </PopoverTrigger>
     <PopoverContent align="end" sideOffset={8} className="w-56 rounded-xl border-white/10 p-2 shadow-xl">
@@ -36,7 +36,7 @@ export function ModelPicker({ providerId, model, reasoningEffort, providers, onC
           onClick={() => setView("models")}>
           <span className="text-[15px] leading-6 font-semibold text-link">{reasoningEffort}</span>
           <span className={`flex max-w-full items-center gap-0.5 text-xs ${missing ? "text-destructive" : "text-muted-foreground"}`}>
-            <span className="truncate">{model}</span><ChevronRight className="size-3 shrink-0" />
+            <span className="truncate">{model}</span><ChevronRight className="disclosure-icon size-3" />
           </span>
         </button>
         <Slider min={0} max={EFFORTS.length - 1} step={1} value={[EFFORTS.indexOf(reasoningEffort)]} aria-label="思考强度"
