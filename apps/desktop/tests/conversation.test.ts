@@ -3,6 +3,7 @@ import { test } from "node:test";
 import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { TurnMessages } from "../src/workspace/transcript.tsx";
+import { TooltipProvider } from "../src/components/ui/tooltip.tsx";
 import type { AttemptView, Turn } from "@tilot/protocol";
 import { applyEvent, loadConversation, mergeHistory, type TurnRecord } from "../src/conversation.ts";
 import type { Request } from "../src/client.ts";
@@ -27,7 +28,7 @@ test("旧服务未返回 tools 时仍可加载、合并并渲染回答", async (
   }) as Request;
   const records = mergeHistory([], await loadConversation(request, "thread"));
   assert.deepEqual(records[0]!.attempts[0]!.tools, []);
-  const html = renderToStaticMarkup(createElement(TurnMessages, { record: records[0]! }));
+  const html = renderToStaticMarkup(createElement(TooltipProvider, null, createElement(TurnMessages, { record: records[0]! })));
   assert.match(html, /已收到消息/);
   assert.match(html, /你好/);
 });

@@ -1,16 +1,17 @@
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { ChevronRight, CircleAlert, Square } from "lucide-react";
 import { Button } from "../components/ui/button";
-import type { MessagePart, ToolView, TurnInput } from "@tilot/protocol";
+import type { MessagePart, ResponseMetrics, ToolView, TurnInput } from "@tilot/protocol";
 import type { TurnRecord } from "../conversation";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "../components/ui/collapsible";
 import { MessageMarkdown } from "./markdown";
 import { ToolCall } from "./tool-call";
+import { MessageActions } from "./message-actions";
 
 /** 一轮对话按显示顺序展开后的条目：用户输入、模型消息或工具调用。 */
 type Entry =
   | { kind: "input"; input: TurnInput }
-  | { kind: "message"; key: string; parts: MessagePart[] }
+  | { kind: "message"; key: string; parts: MessagePart[]; time: number | null; metrics?: ResponseMetrics | undefined }
   | { kind: "tool"; tool: ToolView };
 
 /** 将耗时格式化为 Codex 式短文本，例如 9m 46s。 */
@@ -58,15 +59,21 @@ function MessageParts({ parts, live }: { parts: MessagePart[]; live: boolean }) 
 }
 
 /** 用户消息使用深蓝色气泡，靠右显示。 */
-function UserMessage({ text }: { text: string }) {
-  return <div className="ml-auto max-w-[75%] rounded-[18px] bg-bubble px-4 py-2.5 text-[15px] leading-[1.6] whitespace-pre-wrap wrap-anywhere text-white/95">{text}</div>;
+function UserMessage({ input, onEdit, disabled }: { input: TurnInput; onEdit?: ((text: string) => void) | undefined; disabled: boolean }) {
+  return <div className="group/message ml-auto min-w-0 max-w-[75%]">
+    <div className="ml-auto w-fit max-w-full rounded-[18px] bg-bubble px-4 py-2.5 text-[15px] leading-[1.6] whitespace-pre-wrap wrap-anywhere text-white/95">{input.content}</div>
+    <MessageActions user text={input.content} time={input.createdAt} onEdit={onEdit} disabled={disabled} />
+  </div>;
 }
 
 /** 渲染单个条目；live 表示它是运行中轮次的最新条目。 */
-function EntryView({ entry, active, live }: { entry: Entry; active: boolean; live: boolean }) {
-  if (entry.kind === "input") return <UserMessage text={entry.input.content} />;
+function EntryView({ entry, active, live, onEdit, editDisabled }: { entry: Entry; active: boolean; live: boolean; onEdit?: ((text: string) => void) | undefined; editDisabled: boolean }) {
+  if (entry.kind === "input") return <UserMessage input={entry.input} onEdit={onEdit} disabled={editDisabled} />;
   if (entry.kind === "tool") return <ToolCall tool={entry.tool} active={active} />;
-  return <article className="min-w-0 max-w-full"><MessageParts parts={entry.parts} live={live} /></article>;
+  const text = entry.parts.filter((part) => part.kind !== "reasoning").map((part) => part.text).join("\n\n");
+  return <article className="group/message min-w-0 max-w-full"><MessageParts parts={entry.parts} live={live} />
+    {text && <MessageActions text={text} time={entry.time} metrics={entry.metrics} />}
+  </article>;
 }
 
 /** 按模型请求的输入边界合并正式历史与实时预览，保持原始顺序。 */
@@ -79,11 +86,11 @@ function listEntries(record: TurnRecord): Entry[] {
     }
     throughId = attempt.inputThroughId;
     for (const item of [...attempt.messages, ...attempt.tools].sort((a, b) => a.outputIndex - b.outputIndex)) {
-      entries.push("parts" in item ? { kind: "message", key: item.itemId, parts: item.parts } : { kind: "tool", tool: item });
+      entries.push("parts" in item ? { kind: "message", key: item.itemId, parts: item.parts, time: attempt.finishedAt, metrics: attempt.metrics } : { kind: "tool", tool: item });
     }
   }
   for (const input of record.inputs) if (input.id > throughId) entries.push({ kind: "input", input });
-  for (const preview of record.previews) entries.push({ kind: "message", key: preview.itemId, parts: preview.parts });
+  for (const preview of record.previews) entries.push({ kind: "message", key: preview.itemId, parts: preview.parts, time: record.turn.finishedAt });
   return entries;
 }
 
@@ -93,7 +100,7 @@ function entryKey(entry: Entry): string {
 }
 
 /** 一轮对话；完成后把最终回答之前的思考和工具调用折叠为“用时”一行。 */
-export function TurnMessages({ record, time, onResume, resumeDisabled }: { record: TurnRecord; time?: number | undefined; onResume?: (() => void) | undefined; resumeDisabled?: boolean }) {
+export function TurnMessages({ record, time, onResume, resumeDisabled, onEdit, editDisabled = false }: { record: TurnRecord; time?: number | undefined; onResume?: (() => void) | undefined; resumeDisabled?: boolean; onEdit?: ((text: string) => void) | undefined; editDisabled?: boolean }) {
   const { turn } = record;
   const active = turn.status === "running";
   const entries = listEntries(record);
@@ -101,7 +108,7 @@ export function TurnMessages({ record, time, onResume, resumeDisabled }: { recor
   const answer = entries.findLastIndex((entry) => entry.kind === "message" && entry.parts.some((part) => part.kind === "text"));
   const collapse = turn.status === "completed" && answer > lastInput + 1;
   const last = entries.at(-1);
-  const render = (list: Entry[]) => list.map((entry) => <EntryView key={entryKey(entry)} entry={entry} active={active} live={active && entry === last} />);
+  const render = (list: Entry[]) => list.map((entry) => <EntryView key={entryKey(entry)} entry={entry} active={active} live={active && entry === last} onEdit={onEdit} editDisabled={editDisabled} />);
   // 最新条目是用户输入或已结束的工具时，模型尚未开始输出，在末尾提示正在思考。
   const waiting = active && (!last || last.kind === "input" || (last.kind === "tool" && last.tool.output !== null));
   const labels = { cancelled: "已停止", interrupted: "运行已中断", failed: "生成失败" };

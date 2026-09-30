@@ -5,6 +5,7 @@ import type { Element, Root } from "hast";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { Check, Copy } from "lucide-react";
 import { Button } from "../components/ui/button";
+import { useCopyText } from "../hooks/use-copy-text";
 
 /** 只允许完整网页地址，阻止模型生成的脚本和本地路径导航。 */
 export function webURL(url: string): string {
@@ -14,17 +15,11 @@ export function webURL(url: string): string {
 /** 以主题色显示代码块，复制时只读取代码原文。 */
 function CodeBlock({ children }: ComponentProps<"pre">) {
   const source = useRef<HTMLPreElement>(null);
-  const [status, setStatus] = useState("");
-
-  /** 将代码写入剪贴板，并报告成功或失败。 */
-  async function copy(): Promise<void> {
-    try { await navigator.clipboard.writeText(source.current?.textContent ?? ""); setStatus("已复制"); }
-    catch { setStatus("复制失败，请手动选择代码"); }
-  }
+  const { status, copy } = useCopyText();
 
   return <div className="my-4 overflow-hidden rounded-lg border bg-muted/30 shadow-sm">
     <div className="flex items-center justify-between gap-3 border-b bg-muted/40 px-3 py-2 text-xs text-muted-foreground">
-      <span role="status">{status || "代码"}</span><Button type="button" variant="ghost" size="xs" className="h-6 hover:bg-background/80" onClick={() => void copy()}>{status === "已复制" ? <Check className="size-3" /> : <Copy className="size-3" />}复制代码</Button>
+      <span role="status">{status || "代码"}</span><Button type="button" variant="ghost" size="xs" className="h-6 hover:bg-background/80" onClick={() => void copy(source.current?.textContent ?? "")}>{status === "已复制" ? <Check className="size-3" /> : <Copy className="size-3" />}复制代码</Button>
     </div>
     <pre ref={source}>{children}</pre>
   </div>;

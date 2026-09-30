@@ -54,7 +54,7 @@ export function WorkspacePage() {
       <div className="@container relative min-h-0 flex-1">
         <Timeline records={records} scroll={scroll} />
         {/* 输入区放在滚动容器内部并用 sticky 固定在底部：它只占内容区，不会盖住滚动条，滚动条仍覆盖整个对话区。 */}
-        <div ref={scroll} className="flex h-full flex-col overflow-y-auto [scrollbar-gutter:stable]" onScroll={(event) => {
+        <div ref={scroll} className="flex h-full flex-col overflow-y-auto [scrollbar-gutter:stable_both-edges]" onScroll={(event) => {
           const node = event.currentTarget;
           const distance = node.scrollHeight - node.scrollTop - node.clientHeight;
           follow.current = distance < 80;
@@ -72,6 +72,7 @@ export function WorkspacePage() {
               const showTime = !previous || record.turn.createdAt - previous.turn.createdAt > TIME_GAP;
               return <TurnMessages key={record.turn.id} record={record} time={showTime ? record.turn.createdAt : undefined}
                 onResume={index === records.length - 1 ? () => void state.chat.resume(record.turn.id) : undefined}
+                onEdit={(text) => { state.editDraft(text); dock.current?.querySelector("textarea")?.focus(); }} editDisabled={state.busy}
                 resumeDisabled={state.busy || !state.chat.connected} />;
             })}
           </div>

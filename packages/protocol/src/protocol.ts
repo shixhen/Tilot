@@ -119,6 +119,17 @@ export interface AttemptView {
   finishedAt: number | null;
   messages: MessageView[];
   tools: ToolView[];
+  metrics?: ResponseMetrics;
+}
+
+/** 单次模型请求的实测时间和服务端用量；null 表示未采集或服务端未返回，缓存命中包含在输入中。 */
+export interface ResponseMetrics {
+  firstTokenMs: number | null;
+  tokensPerSecond: number | null;
+  inputTokens: number | null;
+  cachedTokens: number | null;
+  outputTokens: number | null;
+  totalTokens: number | null;
 }
 
 /** 工具展示记录；结果为空时尚未保存结果，不代表可以重新执行。 */

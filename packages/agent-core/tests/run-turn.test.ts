@@ -96,6 +96,9 @@ test("完成一轮并回放历史，冻结输入与配置，终态事件在保�
       } else if (event.type === "response.event" && event.event.type === "response.completed") {
         assert.equal(store.getTurn(event.turnId)?.status, "completed");
         assert.equal(store.history.getAttempt(event.attemptId)?.status, "completed");
+        const saved = store.history.getAttempt(event.attemptId)!;
+        assert.ok(saved.firstTokenMs !== null && saved.firstTokenMs >= 0);
+        assert.ok(saved.durationMs !== null && saved.durationMs >= saved.firstTokenMs);
       }
     },
   });

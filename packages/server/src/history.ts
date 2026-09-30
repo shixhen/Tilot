@@ -25,6 +25,16 @@ export function listAttemptViews(store: Store, turnId: string, afterSequence = 0
       id: attempt.id, turnId: attempt.turnId, sequence: attempt.sequence,
       inputThroughId: attempt.inputThroughId, status: attempt.status, error: attempt.error,
       createdAt: attempt.createdAt, finishedAt: attempt.finishedAt, messages, tools,
+      metrics: {
+        firstTokenMs: attempt.firstTokenMs,
+        tokensPerSecond: attempt.firstTokenMs !== null && attempt.durationMs !== null &&
+          attempt.durationMs > attempt.firstTokenMs && attempt.response?.usage
+          ? attempt.response.usage.output_tokens / ((attempt.durationMs - attempt.firstTokenMs) / 1000) : null,
+        inputTokens: attempt.response?.usage?.input_tokens ?? null,
+        cachedTokens: attempt.response?.usage?.input_tokens_details?.cached_tokens ?? null,
+        outputTokens: attempt.response?.usage?.output_tokens ?? null,
+        totalTokens: attempt.response?.usage?.total_tokens ?? null,
+      },
     };
   });
 }

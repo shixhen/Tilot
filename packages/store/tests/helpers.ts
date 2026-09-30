@@ -8,6 +8,8 @@ import type Database from "better-sqlite3";
 /** 把测试数据库退回版本 5 的结构：default 服务的模型回到 models 表，恢复全局 baseURL，删除服务表和任务的服务列。 */
 export function downgradeToVersion5(database: Database.Database): void {
   database.exec(`
+    ALTER TABLE model_attempts DROP COLUMN firstTokenMs;
+    ALTER TABLE model_attempts DROP COLUMN durationMs;
     CREATE TABLE models (
       id TEXT PRIMARY KEY CHECK (length(trim(id)) > 0),
       contextTokens INTEGER NOT NULL CHECK (contextTokens > 0)

@@ -14,6 +14,10 @@ export interface ModelAttempt {
   error: string | null;
   createdAt: number;
   finishedAt: number | null;
+  /** 发起请求至首个非空内容增量的毫秒数；未采集时为空。 */
+  firstTokenMs: number | null;
+  /** 请求开始至流结束的毫秒数，不包含工具执行。 */
+  durationMs: number | null;
 }
 
 /** 结束请求时提交的数据；成功响应须先经 Responses 校验，其余响应仅供诊断。 */
@@ -21,6 +25,8 @@ export interface AttemptCompletion {
   status: Exclude<AttemptStatus, "running">;
   response?: Response;
   error?: string;
+  firstTokenMs?: number | null;
+  durationMs?: number;
 }
 
 /** 直接复用 SDK 的函数工具结果，保留原始 call_id 和 output。 */

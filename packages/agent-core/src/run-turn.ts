@@ -115,6 +115,8 @@ async function requestAttempt(
     return { attemptId, terminal, completion: { status: options.signal?.aborted ? "cancelled" : "failed", error: errorMessage(error) } };
   }
   attemptId = store.history.startAttempt(turn.id, inputThroughId).id;
+  let firstTokenMs: number | null = null;
+  const requestStarted = performance.now();
   try {
     const previousIds = new Set<string>();
     const previousCallIds = new Set<string>();
@@ -127,6 +129,12 @@ async function requestAttempt(
       max_output_tokens: config.maxOutputTokens,
       tools: workspace ? projectTools : [], tool_choice: workspace ? "auto" : "none",
     }, options.signal)) {
+      // 创建事件不是 token；推理、正文、拒绝文本和工具参数的首个非空增量均算首 token。
+      if (firstTokenMs === null && (
+        event.type === "response.output_text.delta" || event.type === "response.reasoning_text.delta" ||
+        event.type === "response.reasoning_summary_text.delta" || event.type === "response.refusal.delta" ||
+        event.type === "response.function_call_arguments.delta"
+      ) && event.delta.length > 0) firstTokenMs = performance.now() - requestStarted;
       if (event.type === "response.created" || event.type === "response.in_progress" ||
         event.type === "response.completed" || event.type === "response.failed" || event.type === "response.incomplete") snapshot = event.response;
       if (event.type === "response.completed") {
@@ -159,7 +167,7 @@ async function requestAttempt(
     };
   }
   // streamResponse 无终态会抛错，所以这里必定已有成功或失败结果。
-  store.history.finishAttempt(attemptId, completion!);
+  store.history.finishAttempt(attemptId, { ...completion!, firstTokenMs, durationMs: performance.now() - requestStarted });
   return { attemptId, completion: completion!, terminal };
 }
 

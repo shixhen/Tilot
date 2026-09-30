@@ -55,12 +55,12 @@ export class ModelHistoryStore {
     }
     return this.database.transaction(() => {
       const now = Date.now();
-      const row = this.database.prepare<[string, string | null, string | null, number, string], AttemptRow>(`
-        UPDATE model_attempts SET status = ?, responseJson = ?, error = ?, finishedAt = ?
+      const row = this.database.prepare<[string, string | null, string | null, number, number | null, number | null, string], AttemptRow>(`
+        UPDATE model_attempts SET status = ?, responseJson = ?, error = ?, finishedAt = ?, firstTokenMs = ?, durationMs = ?
         WHERE id = ? AND status = 'running'
           AND EXISTS (SELECT 1 FROM turns WHERE turns.id = model_attempts.turnId AND turns.status = 'running')
         RETURNING *
-      `).get(completion.status, response === null ? null : JSON.stringify(response), error, now, id);
+      `).get(completion.status, response === null ? null : JSON.stringify(response), error, now, completion.firstTokenMs ?? null, completion.durationMs ?? null, id);
       if (!row) {
         throw new Error("请求尝试不存在或已结束，或所属轮次已结束。");
       }

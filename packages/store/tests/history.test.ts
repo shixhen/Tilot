@@ -120,6 +120,31 @@ test("失败诊断不登记工具调用，显式恢复只中断仍运行的尝�
   }
 });
 
+test("版本 6 升级保留历史响应，旧请求计时为空，新请求计时可保存", (context) => {
+  const directory = temporaryDirectory(context);
+  const store = new Store(directory);
+  const turn = store.startTurn(store.createThread("旧历史").id, "输入");
+  const input = store.listTurnInputs(turn.id)[0]!;
+  const attempt = store.history.startAttempt(turn.id, input.id);
+  const snapshot = response();
+  store.history.finishAttempt(attempt.id, { status: "completed", response: snapshot });
+  store.close();
+  const legacy = new Database(join(directory, "tilot.sqlite"));
+  try {
+    legacy.exec("ALTER TABLE model_attempts DROP COLUMN firstTokenMs; ALTER TABLE model_attempts DROP COLUMN durationMs; PRAGMA user_version = 6;");
+  } finally { legacy.close(); }
+  const migrated = new Store(directory);
+  try {
+    assert.equal(migrated.history.getAttempt(attempt.id)?.firstTokenMs, null);
+    assert.equal(migrated.history.getAttempt(attempt.id)?.durationMs, null);
+    assert.deepEqual(migrated.history.getAttempt(attempt.id)?.response, snapshot);
+    const next = migrated.history.startAttempt(turn.id, input.id);
+    const saved = migrated.history.finishAttempt(next.id, { status: "completed", response: response(), firstTokenMs: 10, durationMs: 25 });
+    assert.equal(saved.firstTokenMs, 10);
+    assert.equal(saved.durationMs, 25);
+  } finally { migrated.close(); }
+});
+
 test("版本 3 升级保留轮次和输入，并增加模型历史表", (context) => {
   const directory = temporaryDirectory(context);
   const store = new Store(directory);

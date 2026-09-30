@@ -6,7 +6,7 @@ import { DEFAULT_CONFIG } from "./config.ts";
 export function migrateDatabase(database: Database.Database): void {
   database.transaction(() => {
     const version = database.pragma("user_version", { simple: true });
-    if (typeof version !== "number" || !Number.isInteger(version) || version < 0 || version > 6) {
+    if (typeof version !== "number" || !Number.isInteger(version) || version < 0 || version > 7) {
       throw new Error("不支持此数据库版本，请使用匹配的 Tilot 版本。");
     }
     if (version === 0) {
@@ -157,6 +157,13 @@ export function migrateDatabase(database: Database.Database): void {
         ALTER TABLE app_config DROP COLUMN baseURL;
       `);
       database.pragma("user_version = 6");
+    }
+    if (version < 7) {
+      database.exec(`
+        ALTER TABLE model_attempts ADD COLUMN firstTokenMs REAL CHECK (firstTokenMs >= 0);
+        ALTER TABLE model_attempts ADD COLUMN durationMs REAL CHECK (durationMs >= 0);
+      `);
+      database.pragma("user_version = 7");
     }
   }).immediate();
 }

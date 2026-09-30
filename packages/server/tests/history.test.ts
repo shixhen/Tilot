@@ -20,6 +20,9 @@ test("工具历史保留调用参数、输出位置与已保存结果", (context
   store.history.finishAttempt(attempt.id, { status: "completed", response });
   const call = store.history.listToolCalls(attempt.id)[0]!;
   assert.equal(listAttemptViews(store, turn.id)[0]!.tools[0]!.output, null);
+  assert.deepEqual(listAttemptViews(store, turn.id)[0]!.metrics, {
+    firstTokenMs: null, tokensPerSecond: null, inputTokens: null, cachedTokens: null, outputTokens: null, totalTokens: null,
+  });
   store.history.saveToolResult(call.id, { type: "function_call_output", call_id: call.callId, output: "文件内容" });
   assert.deepEqual(listAttemptViews(store, turn.id)[0]!.tools, [{
     id: call.id, outputIndex: response.output.length - 1, name: "read", arguments: '{"path":"a.ts"}', output: "文件内容", running: false,
@@ -69,7 +72,9 @@ test("历史查询保留原文、输入边界和消息位置，只返回展示�
   const input = store.listTurnInputs(turn.id)[0]!;
   const attempt = store.history.startAttempt(turn.id, input.id);
   const snapshot = sampleResponse();
-  const saved = store.history.finishAttempt(attempt.id, { status: "completed", response: snapshot });
+  snapshot.usage = { input_tokens: 100, input_tokens_details: { cached_tokens: 60, cache_write_tokens: 0 }, output_tokens: 20,
+    output_tokens_details: { reasoning_tokens: 5 }, total_tokens: 120 };
+  const saved = store.history.finishAttempt(attempt.id, { status: "completed", response: snapshot, firstTokenMs: 250, durationMs: 1250 });
   const extra = store.appendTurnInput(turn.id, "模型回答之后的补充");
   const finished = store.finishTurn(turn.id, "completed");
   assert.deepEqual(await query({ id: "read", method: "turn.read", params: { turnId: turn.id } }), finished);
@@ -78,6 +83,7 @@ test("历史查询保留原文、输入边界和消息位置，只返回展示�
   const expected = [{
     id: saved.id, turnId: turn.id, sequence: 1, inputThroughId: input.id, status: "completed",
     error: null, createdAt: saved.createdAt, finishedAt: saved.finishedAt, tools: [],
+    metrics: { firstTokenMs: 250, tokensPerSecond: 20, inputTokens: 100, cachedTokens: 60, outputTokens: 20, totalTokens: 120 },
     messages: [
       { itemId: "reasoning_1", outputIndex: 0, parts: [{ kind: "reasoning", text: "推理正文" }] },
       { itemId: "message_1", outputIndex: 1, parts: [{ kind: "text", text: "正文" }, { kind: "refusal", text: "拒绝部分" }] },
