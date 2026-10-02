@@ -51,4 +51,4 @@ YAML 使用 [yaml 库](https://eemeli.org/yaml/) 解析，支持带引号的字�
 
 桌面仅在最新轮次已中断时显示“继续任务”。turn.resume 创建新的轮次，保留原记录不变，由模型先核实项目状态。不会恢复旧执行栈、自动重放旧工具调用或生成摘要。正常停止和正常关闭服务仍记为 cancelled。
 
-内置提示词统一维护在packages/prompts/（@tilot/prompts 包），见该目录 README.md。
+系统、项目和恢复提示词维护在 packages/prompts/（@tilot/prompts 包），见该目录 README.md。工具及参数的描述直接写在 packages/tool 的工具声明中。

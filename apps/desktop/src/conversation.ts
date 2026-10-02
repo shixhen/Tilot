@@ -79,7 +79,16 @@ export function applyEvent(records: TurnRecord[], event: ServerEvent): TurnRecor
     return records.map((record) => record !== existing || (record.turn.status !== "running" && event.turn.status === "running") ? record : { ...record, turn: event.turn });
   }
   return records.map((record) => {
-    if (record.turn.id !== event.turnId) return record;
+    if (record.turn.id !== event.turnId || record.turn.threadId !== event.threadId) return record;
+    if (event.event === "tool.progress") {
+      if (record.turn.status !== "running") return record;
+      const attempts = record.attempts.map((attempt) => attempt.id !== event.attemptId ? attempt : { ...attempt,
+        tools: attempt.tools.map((tool) => tool.id !== event.toolId || tool.output !== null || !tool.running ? tool : {
+          ...tool, preview: { output: event.output, truncated: event.truncated, partialLine: event.partialLine },
+        }),
+      });
+      return { ...record, attempts };
+    }
     if (event.event === "attempt.updated") {
       const attempts = mergeAttempts(record.attempts, [event.attempt]);
       const persisted = new Set(event.attempt.messages.map((message) => message.itemId));

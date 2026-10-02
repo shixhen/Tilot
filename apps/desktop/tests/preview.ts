@@ -52,27 +52,68 @@ async function respond(request: RpcRequest): Promise<unknown> {
       const turn: Turn = { id: crypto.randomUUID(), threadId: request.params.threadId, sequence: turns.length + 1, status: "running", createdAt: Date.now(), finishedAt: null, error: null };
       turns.push(turn); inputs.set(turn.id, request.params.input);
       await notify({ event: "turn.started", turn });
-      // 模拟一次完整循环：流式思考 → 调用命令（执行中 → 完成）→ 第二次请求流式输出正文 → 结束。
+      // 模拟完整循环；普通对话只有网页读取，项目对话另演示本地工具。
       const { threadId } = turn;
-      const thinking = Array.from({ length: 8 }, (_, index) => `第 ${index + 1} 步：检查目录结构，确认 Server 与 Core 的职责边界，并判断需要读取哪些文件。\n\n`);
+      const project = Boolean(threads.find((thread) => thread.id === threadId)?.projectPath);
+      const thinking = Array.from({ length: 8 }, (_, index) => `第 ${index + 1} 步：${project ? "检查目录结构并确认需要读取哪些文件" : "读取用户提供的公开网页，检查来源与正文"}。\n\n`);
       const answer = ["## 项目结构\n\n- **Server**：管理服务\n- **Core**：调度执行\n\n", "```ts\nexport function greet(name: string) {\n  return `你好，${name}`;\n}\n```\n\n", "| 模块 | 状态 |\n| --- | --- |\n| 桌面对话 | 已接入 |\n\n[文档](https://example.com)"];
-      const tool = { id: `${turn.id}-tool`, outputIndex: 1, name: "shell", arguments: JSON.stringify({ command: "git ls-files apps packages | head -n 40" }), output: null as string | null, running: true };
+      const tool = { id: crypto.randomUUID(), outputIndex: 1, name: "shell", arguments: JSON.stringify({ command: "git ls-files apps packages | Select-Object -First 40" }), output: null as string | null, running: true };
+      const edit = { id: `${turn.id}-edit`, outputIndex: 2, name: "edit", arguments: JSON.stringify({ path: "src/greet.ts", edits: [
+        { oldText: 'const greeting = "Hello";', newText: 'const greeting = "你好";' },
+        { oldText: "return greeting;", newText: "return `${greeting}，${name}`;" },
+      ] }), output: null as string | null, running: false };
+      const searches = [
+        { name: "ls", arguments: {}, data: { path: "", entries: [{ path: "package.json", type: "file" }, { path: "src", type: "directory" }], truncated: false, truncatedBy: null } },
+        { name: "find", arguments: { pattern: "*.ts", path: "src" }, data: { path: "src", files: ["src/greet.ts"], truncated: false, truncatedBy: null } },
+        { name: "grep", arguments: { pattern: "greeting", path: "src", context: 1, limit: 1 }, data: { path: "src", matches: [
+          { path: "src/greet.ts", line: 1, text: 'const greeting = "你好";', textTruncated: false, before: [],
+            after: [{ line: 2, text: "export function greet(name: string) {", textTruncated: false }] },
+        ], truncated: true, truncatedBy: "items" } },
+      ].map((search, index) => ({ id: `${turn.id}-${search.name}`, outputIndex: index + 3, name: search.name,
+        arguments: JSON.stringify(search.arguments), output: JSON.stringify({ status: "ok", data: search.data }), running: false }));
+      const web = { id: `${turn.id}-web`, outputIndex: project ? 6 : 1, name: "web_fetch", arguments: '{"url":"https://example.com/docs"}',
+        output: JSON.stringify({ status: "ok", data: { url: "https://example.com/docs", finalUrl: "https://example.com/docs", title: "Tilot 网页读取示例", fetchedAt: Date.now(),
+          content: "# 网页读取\n\n网页正文已转换为 Markdown。\n\n- 保留来源链接\n- 缓存正文可继续读取\n\n[更多说明](https://example.com/guide)",
+          outputId: `${turn.id}-web-cache`, offset: 1, lineCount: 9, nextOffset: 10, truncatedBy: "lines", artifactTruncated: false,
+        } }), running: false };
       const first: AttemptView = { id: `${turn.id}-1`, turnId: turn.id, sequence: 1, inputThroughId: 1, status: "completed", error: null, createdAt: turn.createdAt, finishedAt: Date.now(),
-        messages: [{ itemId: `${turn.id}-thought`, outputIndex: 0, parts: [{ kind: "reasoning", text: thinking.join("") }] }], tools: [tool] };
+        messages: [{ itemId: `${turn.id}-thought`, outputIndex: 0, parts: [{ kind: "reasoning", text: thinking.join("") }] }], tools: project ? [tool] : [] };
       const second: AttemptView = { ...first, id: `${turn.id}-2`, sequence: 2, tools: [], messages: [{ itemId: `${turn.id}-answer`, outputIndex: 0, parts: [{ kind: "text", text: answer.join("") }] }] };
-      const steps = [
-        ...thinking.map((delta) => () => notify({ event: "message.delta", threadId, turnId: turn.id, itemId: `${turn.id}-thought`, contentIndex: 0, kind: "reasoning", delta })),
+      const projectSteps = [
         () => notify({ event: "attempt.updated", threadId, turnId: turn.id, attempt: first }),
-        () => undefined,
+        ...["apps/desktop/src/main.tsx", "apps/desktop/src/main.tsx\napps/desktop/src/workspace/page.tsx"].map((output) => () => notify({
+          event: "tool.progress", threadId, turnId: turn.id, attemptId: first.id, toolId: tool.id, output, truncated: false, partialLine: false,
+        })),
         () => {
           tool.running = false;
-          tool.output = JSON.stringify({ status: "ok", data: { output: "apps/desktop/src/main.tsx\napps/desktop/src/workspace/page.tsx\npackages/server/src/rpc.ts", exitCode: 0 } });
+          const output = "apps/desktop/src/main.tsx\napps/desktop/src/workspace/page.tsx\npackages/server/src/rpc.ts";
+          tool.output = JSON.stringify({ status: "ok", data: { status: "completed", output, exitCode: 0, durationMs: 1500,
+            outputId: tool.id, outputBytes: new TextEncoder().encode(output).length, outputLines: 3, truncated: false, truncatedBy: null, partialLine: false, artifactTruncated: false,
+          } });
           return notify({ event: "attempt.updated", threadId, turnId: turn.id, attempt: { ...first, tools: [{ ...tool }] } });
         },
+        () => {
+          edit.running = true;
+          return notify({ event: "attempt.updated", threadId, turnId: turn.id, attempt: { ...first, tools: [{ ...tool }, { ...edit }] } });
+        },
+        () => {
+          edit.running = false;
+          edit.output = JSON.stringify({ status: "ok", data: { path: "src/greet.ts", bytesWritten: 101, replacements: 2, firstChangedLine: 1,
+            diff: '--- a/src/greet.ts\n+++ b/src/greet.ts\n@@ -1,4 +1,4 @@\n-const greeting = "Hello";\n+const greeting = "你好";\n export function greet(name: string) {\n-  return greeting;\n+  return `${greeting}，${name}`;\n }\n', diffTruncated: false,
+          } });
+          return notify({ event: "attempt.updated", threadId, turnId: turn.id, attempt: { ...first, tools: [{ ...tool }, { ...edit }] } });
+        },
+        () => notify({ event: "attempt.updated", threadId, turnId: turn.id, attempt: { ...first, tools: [{ ...tool }, { ...edit }, ...searches] } }),
+      ];
+      const finalTools = () => [...(project ? [{ ...tool }, { ...edit }, ...searches] : []), web];
+      const steps = [
+        ...thinking.map((delta) => () => notify({ event: "message.delta", threadId, turnId: turn.id, itemId: `${turn.id}-thought`, contentIndex: 0, kind: "reasoning", delta })),
+        ...(project ? projectSteps : []),
+        () => notify({ event: "attempt.updated", threadId, turnId: turn.id, attempt: { ...first, tools: finalTools() } }),
         ...answer.map((delta) => () => notify({ event: "message.delta", threadId, turnId: turn.id, itemId: `${turn.id}-answer`, contentIndex: 0, kind: "text", delta })),
         () => {
           turn.status = "completed"; turn.finishedAt = Date.now();
-          attempts.set(turn.id, [{ ...first, tools: [{ ...tool }] }, second]);
+          attempts.set(turn.id, [{ ...first, tools: finalTools() }, second]);
           return notify({ event: "turn.finished", turn });
         },
       ];

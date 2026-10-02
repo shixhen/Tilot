@@ -6,7 +6,7 @@
 
 当前恢复实现：Node 服务在读取遗留运行状态前，持有数据目录内 service-lock.sqlite 的排他锁，退出时释放。重启将遗留轮次和模型请求标记为 interrupted，保留输入及结果。turn.resume 接收 turnId，只允许继续最新中断轮次，创建新的轮次，不重放旧工具调用。未决调用仅在回放上下文中标记结果未知，数据库结果保持为空。
 
-内置提示词集中在packages/prompts/（@tilot/prompts 包）。Server 为 turn.start 和 turn.resume 提供统一的正式系统策略，桌面只提交用户输入或待恢复轮次标识；Context 再追加项目根指令与技能元数据。
+系统、项目和恢复提示词集中在 packages/prompts/（@tilot/prompts 包）；工具及参数描述直接写在 packages/tool 的声明中。Server 为 turn.start 和 turn.resume 提供统一的正式系统策略，桌面只提交用户输入或待恢复轮次标识；Context 再追加项目根指令与技能元数据。
 
 整体设计遵循几个原则：
 

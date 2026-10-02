@@ -140,11 +140,16 @@ export interface ToolView {
   arguments: string;
   output: string | null;
   running: boolean;
+  preview?: ToolOutputPreview;
 }
+
+/** 临时输出快照，只用于界面；不能当成已保存的 function_call_output。 */
+export interface ToolOutputPreview { output: string; truncated: boolean; partialLine: boolean }
 
 /** 服务推送数据；不向界面传递 SDK 响应对象或模型请求参数。 */
 export type TurnNotification =
   | { event: "attempt.updated"; threadId: string; turnId: string; attempt: AttemptView }
+  | ({ event: "tool.progress"; threadId: string; turnId: string; attemptId: string; toolId: string } & ToolOutputPreview)
   | { event: "turn.started" | "turn.finished"; turn: Turn }
   | { event: "message.delta"; threadId: string; turnId: string; itemId: string; contentIndex: number; kind: TextKind; delta: string }
   | { event: "message.completed"; threadId: string; turnId: string; itemId: string; outputIndex: number; parts: MessagePart[] };

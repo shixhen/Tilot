@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { mkdir, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { test } from "node:test";
-import { openWorkspace, readProjectFile } from "../src/index.ts";
+import { createToolSet, openWorkspace, readProjectFile } from "../src/index.ts";
 import { temporaryDirectory } from "./helpers.ts";
 
 test("读取 BOM、中文、混合换行和末尾无换行的文件，分页可以重组原文", async (context) => {
@@ -11,11 +11,12 @@ test("读取 BOM、中文、混合换行和末尾无换行的文件，分页可�
   const content = "中文🙂\r\n\r\n第三行\n最后一行";
   await writeFile(join(directory, "代码.txt"), "\ufeff" + content, "utf8");
   const first = await readProjectFile(workspace, { path: "代码.txt", limit: 2 });
-  assert.deepEqual(first, { path: "代码.txt", content: "中文🙂\r\n\r\n", offset: 1, lineCount: 2, nextOffset: 3 });
+  assert.deepEqual(first, { path: "代码.txt", content: "中文🙂\r\n\r\n", offset: 1, lineCount: 2, nextOffset: 3, truncatedBy: "lines" });
   const second = await readProjectFile(workspace, { path: "代码.txt", offset: first.nextOffset! });
   assert.equal(first.content + second.content, content);
   assert.equal(second.lineCount, 2);
   assert.equal(second.nextOffset, null);
+  assert.equal(second.truncatedBy, null);
   await writeFile(join(directory, "empty.txt"), "", "utf8");
   assert.equal((await readProjectFile(workspace, { path: "empty.txt" })).lineCount, 0);
   await assert.rejects(readProjectFile(workspace, { path: "代码.txt", offset: 5 }), /超出文件行数/);
@@ -28,12 +29,18 @@ test("按行数和 UTF-8 字节限制截断，不切断字符或丢失续读内�
   const lines = await readProjectFile(workspace, { path: "many.txt" });
   assert.equal(lines.lineCount, 200);
   assert.equal(lines.nextOffset, 201);
+  assert.equal(lines.truncatedBy, "lines");
+  const extended = JSON.parse(await createToolSet(workspace).execute("read", '{"path":"many.txt","limit":2000}')).data;
+  assert.equal(extended.lineCount, 201);
+  assert.equal(extended.content, "x\n".repeat(201));
+  assert.equal(extended.nextOffset, null);
   assert.equal((await readProjectFile(workspace, { path: "many.txt", offset: 201 })).nextOffset, null);
   const line = "中".repeat(10000) + "\r\n";
   await writeFile(join(directory, "bytes.txt"), line.repeat(2), "utf8");
   const first = await readProjectFile(workspace, { path: "bytes.txt" });
   assert.equal(first.content, line);
   assert.equal(first.nextOffset, 2);
+  assert.equal(first.truncatedBy, "bytes");
   const second = await readProjectFile(workspace, { path: "bytes.txt", offset: 2 });
   assert.equal(second.content, line);
   assert.equal(second.nextOffset, null);
@@ -56,7 +63,7 @@ test("拒绝无效读取参数、目录和越界路径，已取消的读取立�
   const workspace = await openWorkspace(directory);
   await writeFile(join(directory, "file.txt"), "hello", "utf8");
   for (const input of [{ path: "" }, { path: "file.txt", offset: 0 },
-    { path: "file.txt", limit: 201 }, { path: "file.txt", limit: 1.5 }, { path: "../outside" }]) {
+    { path: "file.txt", limit: 2001 }, { path: "file.txt", limit: 1.5 }, { path: "../outside" }]) {
     await assert.rejects(readProjectFile(workspace, input));
   }
   await assert.rejects(readProjectFile(workspace, { path: "file.txt" }, AbortSignal.abort()), { name: "AbortError" });

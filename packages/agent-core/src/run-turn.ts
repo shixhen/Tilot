@@ -4,11 +4,14 @@ import { appendProjectInstructions, buildContext, checkContextBudget, loadProjec
 import { streamResponse } from "@tilot/responses";
 import { getResponseToolCallsFromResponse } from "@tilot/responses/output";
 import type { AppConfig, AttemptCompletion, Store, Turn } from "@tilot/store";
-import { executeTool, projectTools, type Workspace } from "@tilot/tool";
+import { createToolSet, OutputCache, type OutputSnapshot, type ToolSet, type Workspace } from "@tilot/tool";
+
+const outputCaches = new WeakMap<Store, OutputCache>();
 
 /** Core 的内部执行事件；Server 转换为界面协议，轮次 id 用于区分并行任务。 */
 export type TurnEvent =
   | { type: "tool.updated"; turnId: string; attemptId: string; runningToolId: string | null }
+  | { type: "tool.progress"; turnId: string; attemptId: string; toolId: string; snapshot: OutputSnapshot }
   | { type: "turn.started"; turn: Turn }
   | { type: "response.event"; turnId: string; attemptId: string; event: ResponseStreamEvent };
 
@@ -38,6 +41,9 @@ export async function runTurn(store: Store, client: OpenAI, options: RunTurnOpti
   // 使用任务自己选择的服务、模型和思考强度，其余配置取全局值。
   const config = { ...store.getConfig(), providerId: thread.providerId, model: thread.model, reasoningEffort: thread.reasoningEffort };
   const workspace = thread.projectPath === null ? undefined : { rootPath: thread.projectPath };
+  let outputs = outputCaches.get(store);
+  if (!outputs) { outputs = new OutputCache(store.dataDirectory); outputCaches.set(store, outputs); }
+  const tools = createToolSet(workspace, { outputs, threadId: thread.id });
   try {
     await options.onEvent?.({ type: "turn.started", turn });
   } catch (error) {
@@ -45,7 +51,7 @@ export async function runTurn(store: Store, client: OpenAI, options: RunTurnOpti
   }
 
   for (let step = 1; step <= config.maxStepsPerRun; step++) {
-    const { completion, attemptId, terminal } = await requestAttempt(store, client, turn, input.id, config, workspace, options);
+    const { completion, attemptId, terminal } = await requestAttempt(store, client, turn, input.id, config, workspace, tools, options);
     let finished: Turn | undefined;
     if (completion.status !== "completed") {
       const status = completion.status === "cancelled" ? "cancelled" : "failed";
@@ -61,9 +67,27 @@ export async function runTurn(store: Store, client: OpenAI, options: RunTurnOpti
           const skipped = options.signal?.aborted ? "轮次已取消，工具未执行。"
             : step === config.maxStepsPerRun ? "已达到最大模型请求次数，工具未执行。" : null;
           if (!skipped) await notifyTool(attemptId!, records[index]!.id);
+          const controller = new AbortController();
+          let progressError: unknown;
+          const signal = options.signal ? AbortSignal.any([options.signal, controller.signal]) : controller.signal;
           const output = skipped ? JSON.stringify({ status: "not_executed", error: skipped })
-            : await executeTool(workspace!, call.name, call.arguments, options.signal);
+            : await tools.execute(call.name, call.arguments, signal, { executionId: records[index]!.id,
+              ...(options.onEvent ? { onUpdate: async (snapshot: OutputSnapshot) => {
+                if (progressError !== undefined) return;
+                try { await options.onEvent!({ type: "tool.progress", turnId: turn.id, attemptId: attemptId!, toolId: records[index]!.id, snapshot }); }
+                catch (error) { progressError = error; controller.abort(); }
+              } } : {}),
+            });
           store.history.saveToolResult(records[index]!.id, { type: "function_call_output", call_id: call.call_id, output });
+          if (progressError !== undefined) {
+            // 先保存停止后的实际结果，再给后续调用补未执行结果；不能重跑有副作用的命令。
+            for (let remaining = index + 1; remaining < calls.length; remaining++) store.history.saveToolResult(records[remaining]!.id, {
+              type: "function_call_output", call_id: calls[remaining]!.call_id,
+              output: JSON.stringify({ status: "not_executed", error: "工具进度交付失败，后续调用未执行。" }),
+            });
+            store.finishTurn(turn.id, "failed", errorMessage(progressError));
+            throw progressError;
+          }
           await notifyTool(attemptId!, null);
         }
         if (options.signal?.aborted) finished = store.finishTurn(turn.id, "cancelled");
@@ -95,7 +119,7 @@ export async function runTurn(store: Store, client: OpenAI, options: RunTurnOpti
 /** 请求并保存一次完整模型响应；仅捕获执行错误，数据库保存失败不能伪装成普通模型错误。 */
 async function requestAttempt(
   store: Store, client: OpenAI, turn: Turn, inputThroughId: number, config: AppConfig,
-  workspace: Workspace | undefined, options: RunTurnOptions,
+  workspace: Workspace | undefined, tools: ToolSet, options: RunTurnOptions,
 ): Promise<AttemptResult> {
   let attemptId: string | undefined;
   let snapshot: Response | undefined;
@@ -109,7 +133,7 @@ async function requestAttempt(
       const project = await loadProjectContext(workspace.rootPath, options.signal);
       context.instructions = appendProjectInstructions(context.instructions, project);
     }
-    checkContextBudget(context, workspace ? projectTools : [], config);
+    checkContextBudget(context, tools.definitions, config);
     options.signal?.throwIfAborted();
   } catch (error) {
     return { attemptId, terminal, completion: { status: options.signal?.aborted ? "cancelled" : "failed", error: errorMessage(error) } };
@@ -127,7 +151,7 @@ async function requestAttempt(
     for await (const event of streamResponse(client, {
       ...context, model: config.model, reasoning: { effort: config.reasoningEffort },
       max_output_tokens: config.maxOutputTokens,
-      tools: workspace ? projectTools : [], tool_choice: workspace ? "auto" : "none",
+      tools: tools.definitions, tool_choice: tools.definitions.length ? "auto" : "none",
     }, options.signal)) {
       // 创建事件不是 token；推理、正文、拒绝文本和工具参数的首个非空增量均算首 token。
       if (firstTokenMs === null && (
@@ -141,9 +165,6 @@ async function requestAttempt(
         if (event.response.output.some((item) => (item.id && previousIds.has(item.id)) ||
           (item.type === "function_call" && previousCallIds.has(item.call_id)))) {
           throw new Error("模型响应重复使用历史输出或工具调用标识，拒绝重复执行。");
-        }
-        if (!workspace && event.response.output.some((item) => item.type === "function_call")) {
-          throw new Error("无工具对话收到未声明的工具调用。");
         }
         completion = { status: "completed", response: event.response };
         terminal = event;

@@ -26,7 +26,7 @@ function CodeBlock({ children }: ComponentProps<"pre">) {
 }
 
 /** 通过系统浏览器打开链接，失败时留在当前对话并展示原因。 */
-function WebLink({ href, children, title }: ComponentProps<"a">) {
+export function WebLink({ href, children, title, className }: ComponentProps<"a">) {
   const [failed, setFailed] = useState(false);
   if (!href) return <span>{children}</span>;
 
@@ -36,7 +36,7 @@ function WebLink({ href, children, title }: ComponentProps<"a">) {
     catch { setFailed(true); }
   }
 
-  return <><a href={href} title={title ?? href} onClick={(event) => { event.preventDefault(); void open(); }}>{children}</a>{failed && <span role="status" className="text-destructive">（无法打开链接）</span>}</>;
+  return <><a href={href} title={title ?? href} className={className} onClick={(event) => { event.preventDefault(); void open(); }}>{children}</a>{failed && <span role="status" className="text-destructive">（无法打开链接）</span>}</>;
 }
 
 /** 按可见字符切分，不拆开组合字符或 emoji。 */

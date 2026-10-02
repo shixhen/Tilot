@@ -1,12 +1,13 @@
 import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
-import { existsSync, mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { test, type TestContext } from "node:test";
 import { Store } from "@tilot/store";
 import { createResponsesClient } from "@tilot/responses";
 import { runTurn } from "@tilot/agent-core";
+import { httpFixture } from "../../tool/tests/http-fixture.ts";
 
 /** 创建独立项目目录，与测试数据库分开，并在测试后清理。 */
 function projectDirectory(context: TestContext): string {
@@ -111,8 +112,8 @@ test("完成一轮并回放历史，冻结输入与配置，终态事件在保�
   assert.equal(body.max_output_tokens, 2048);
   assert.deepEqual(body.reasoning, { effort: config.reasoningEffort });
   assert.deepEqual(body.input, [{ role: "user", content: "你好" }]);
-  assert.deepEqual(body.tools, []);
-  assert.equal(body.tool_choice, "none");
+  assert.deepEqual(body.tools.map((tool: { name: string }) => tool.name), ["web_fetch"]);
+  assert.equal(body.tool_choice, "auto");
   await runTurn(store, client, { threadId: thread.id, input: "继续", instructions: "新策略" });
   const next = JSON.parse(String(requests[1]!.body));
   assert.equal(next.instructions, "新策略");
@@ -121,13 +122,12 @@ test("完成一轮并回放历史，冻结输入与配置，终态事件在保�
   assert.equal(requests[0]!.signal?.aborted, true);
 });
 
-test("失败、截断、断流及未声明工具均结束为失败，不重试或登记工具意图", async (context) => {
+test("失败、截断和断流结束为失败，不重试或登记工具意图", async (context) => {
   const store = openTestStore(context);
   const samples = [
     [{ type: "response.failed", sequence_number: 0, response: { id: "failed", status: "failed", output: [], error: { message: "服务错误" } } }],
     [{ type: "response.incomplete", sequence_number: 0, response: { id: "incomplete", status: "incomplete", output: [], incomplete_details: { reason: "max_output_tokens" } } }],
     [],
-    sampleEvents(true),
   ];
   for (const [index, events] of samples.entries()) {
     const { client, requests } = mockClient(() => events);
@@ -139,7 +139,6 @@ test("失败、截断、断流及未声明工具均结束为失败，不重试�
     assert.equal(attempts[0]!.status, index === 1 ? "incomplete" : "failed");
     assert.deepEqual(store.history.listToolCalls(attempts[0]!.id), []);
     assert.equal(requests.length, 1);
-    if (index === 3) assert.equal(attempts[0]!.response?.output[0]?.type, "function_call");
   }
 });
 
@@ -236,9 +235,10 @@ test("项目工具按顺序执行并配对落库，下一次请求保留推理�
   const calls = store.history.listToolCalls(attempts[0]!.id);
   assert.equal(calls.length, 2);
   const first = JSON.parse(String(requests[0]!.body));
-  assert.deepEqual(first.tools.map((tool: { name: string }) => tool.name), ["write", "edit", "read", "shell"]);
+  assert.deepEqual(first.tools.map((tool: { name: string }) => tool.name), ["write", "edit", "read", "shell", "ls", "find", "grep", "web_fetch"]);
   assert.equal(first.tool_choice, "auto");
   const second = JSON.parse(String(requests[1]!.body));
+  assert.deepEqual(second.tools, first.tools);
   assert.deepEqual(second.input.map((item: { type?: string }) => item.type ?? "user"),
     ["user", "reasoning", "function_call", "function_call", "function_call_output", "function_call_output"]);
   assert.equal(second.input[1].content[0].text, "先使用工具检查项目。");
@@ -248,13 +248,94 @@ test("项目工具按顺序执行并配对落库，下一次请求保留推理�
   assert.equal(second.input[5].call_id, calls[1]!.callId);
 });
 
-test("模型可连续写入、精确编辑并读取文件，结果进入下一次请求", async (context) => {
+test("目录和代码搜索进入真实工具循环，返回的路径和行号可继续读取并回放", async (context) => {
+  const store = openTestStore(context);
+  const directory = projectDirectory(context);
+  mkdirSync(join(directory, "src"));
+  writeFileSync(join(directory, "src", "你好.ts"), "前文\nneedle 中文\n后文\n", "utf8");
+  const thread = store.createThread("查找并读取", directory);
+  let count = 0;
+  const { client, requests } = mockClient(() => {
+    count++;
+    if (count === 1) return toolEvents([
+      { name: "ls", arguments: "{}" },
+      { name: "find", arguments: JSON.stringify({ pattern: "*.ts" }) },
+      { name: "grep", arguments: JSON.stringify({ pattern: "needle", glob: "*.ts" }) },
+    ]);
+    if (count === 2) {
+      const body = JSON.parse(String(requests[1]!.body));
+      const results = body.input.filter((item: { type: string }) => item.type === "function_call_output");
+      const match = JSON.parse(results[2].output).data.matches[0];
+      return toolEvents([{ name: "read", arguments: JSON.stringify({ path: match.path, offset: match.line, limit: 1 }) }]);
+    }
+    return sampleEvents();
+  });
+  const turn = await runTurn(store, client, { threadId: thread.id, input: "查找 needle 并读取", instructions: "" });
+  assert.equal(turn.status, "completed");
+  assert.equal(requests.length, 3);
+  const attempts = store.history.listAttempts(turn.id);
+  const calls = store.history.listToolCalls(attempts[0]!.id);
+  assert.deepEqual(attempts[0]!.response!.output.filter((item) => item.type === "function_call").map((item) => item.name), ["ls", "find", "grep"]);
+  const outputs = JSON.parse(String(requests[1]!.body)).input.filter((item: { type: string }) => item.type === "function_call_output");
+  assert.deepEqual(outputs.map((item: { call_id: string }) => item.call_id), calls.map((call) => call.callId));
+  assert.equal(JSON.parse(outputs[0].output).data.entries[0].path, "src");
+  assert.deepEqual(JSON.parse(outputs[1].output).data.files, ["src/你好.ts"]);
+  const last = JSON.parse(String(requests[2]!.body)).input.at(-1);
+  assert.equal(last.type, "function_call_output");
+  assert.equal(JSON.parse(last.output).data.content, "needle 中文\n");
+  assert.deepEqual(JSON.parse(String(requests[2]!.body)).tools, JSON.parse(String(requests[0]!.body)).tools);
+});
+
+test("普通对话可抓取并续读网页，来源与结果配对回放，不开放项目工具", async (context) => {
+  const fixture = await httpFixture(context, (_request, response) => {
+    response.writeHead(200, { "content-type": "text/html; charset=utf-8" });
+    response.end("<title>示例网页</title><p>第一段</p><p>第二段</p>");
+  });
+  const store = openTestStore(context);
+  const thread = store.createThread("网页阅读");
+  let count = 0;
+  const { client, requests } = mockClient(() => {
+    count++;
+    if (count === 1) return toolEvents([{ name: "web_fetch", arguments: '{"url":"https://public.example/page","limit":1}' }]);
+    if (count === 2) {
+      const first = JSON.parse(String(requests[1]!.body)).input.find((item: { type: string }) => item.type === "function_call_output");
+      const page = JSON.parse(first.output).data;
+      return toolEvents([
+        { name: "web_fetch", arguments: JSON.stringify({ outputId: page.outputId, offset: page.nextOffset }) },
+        { name: "read", arguments: '{"path":"local.txt"}' },
+      ]);
+    }
+    return sampleEvents();
+  });
+  const turn = await runTurn(store, client, { threadId: thread.id, input: "读取网页", instructions: "" });
+  assert.equal(turn.status, "completed");
+  assert.equal(requests.length, 3);
+  assert.equal(fixture.calls.length, 1);
+  for (const request of requests) assert.deepEqual(JSON.parse(String(request.body)).tools.map((tool: { name: string }) => tool.name), ["web_fetch"]);
+  const final = JSON.parse(String(requests[2]!.body));
+  const outputs = final.input.filter((item: { type: string }) => item.type === "function_call_output");
+  const first = JSON.parse(outputs[0].output).data;
+  const second = JSON.parse(outputs[1].output).data;
+  assert.equal(first.title, "示例网页");
+  assert.equal(first.finalUrl, "https://public.example/page");
+  assert.equal(second.fetchedAt, first.fetchedAt);
+  assert.equal(second.outputId, first.outputId);
+  assert.equal(first.content + second.content, "第一段\n\n第二段");
+  assert.match(JSON.parse(outputs[2].output).error, /未声明的工具/);
+  const calls = store.history.listAttempts(turn.id).flatMap((attempt) => store.history.listToolCalls(attempt.id));
+  assert.deepEqual(outputs.map((item: { call_id: string }) => item.call_id), calls.map((call) => call.callId));
+  assert.deepEqual(outputs.map((item: { output: string }) => item.output), calls.map((call) => String(call.result!.output)));
+});
+
+test("模型可连续写入、多处编辑并读取文件，差异保存并进入下一次请求", async (context) => {
   const store = openTestStore(context);
   const thread = store.createThread("文件修改", projectDirectory(context));
   let count = 0;
   const { client, requests } = mockClient(() => ++count === 1 ? toolEvents([
     { name: "write", arguments: JSON.stringify({ path: "src/a.txt", content: "第一行\r\n旧内容\n" }) },
-    { name: "edit", arguments: JSON.stringify({ path: "src/a.txt", oldText: "旧内容", newText: "新内容" }) },
+    { name: "edit", arguments: JSON.stringify({ path: "src/a.txt", edits: [
+      { oldText: "第一行\n", newText: "更新首行\n" }, { oldText: "旧内容", newText: "新内容" },
+    ] }) },
     { name: "read", arguments: JSON.stringify({ path: "src/a.txt" }) },
   ]) : sampleEvents());
   const turn = await runTurn(store, client, { threadId: thread.id, input: "修改文件", instructions: "" });
@@ -262,7 +343,13 @@ test("模型可连续写入、精确编辑并读取文件，结果进入下一�
   const next = JSON.parse(String(requests[1]!.body));
   const results = next.input.filter((item: { type: string }) => item.type === "function_call_output").map((item: { output: string }) => JSON.parse(item.output));
   assert.deepEqual(results.map((result: { status: string }) => result.status), ["ok", "ok", "ok"]);
-  assert.equal(results[2].data.content, "第一行\r\n新内容\n");
+  assert.equal(results[2].data.content, "更新首行\r\n新内容\n");
+  assert.equal(results[1].data.replacements, 2);
+  assert.equal(results[1].data.firstChangedLine, 1);
+  assert.equal(results[1].data.diffTruncated, false);
+  assert.match(results[1].data.diff, /\+更新首行\r\n/);
+  const calls = store.history.listToolCalls(store.history.listAttempts(turn.id)[0]!.id);
+  assert.deepEqual(JSON.parse(String(calls[1]!.result!.output)), results[1]);
 });
 
 test("请求加载项目根指令和技能元数据，预算超限时不请求模型", async (context) => {
@@ -371,4 +458,74 @@ test("重复历史调用标识不会再次执行工具；工具后取消不会�
   const batchCalls = store.history.listToolCalls(store.history.listAttempts(batchTurn.id)[0]!.id);
   assert.equal(JSON.parse(String(batchCalls[1]!.result!.output)).status, "not_executed");
   assert.equal(existsSync(join(directory, "skipped.txt")), false);
+});
+
+test("命令进度不提前落库或进入上下文，正式日志结果可驱动下一次 read 调用", { skip: process.platform !== "win32" }, async (context) => {
+  const store = openTestStore(context);
+  const thread = store.createThread("读取执行日志", projectDirectory(context));
+  let count = 0;
+  let outputId = "";
+  const { client, requests } = mockClient(() => {
+    count++;
+    if (count === 1) return toolEvents([{ name: "shell", arguments: JSON.stringify({
+      command: "[Console]::WriteLine('第一段🙂'); Start-Sleep -Milliseconds 250; [Console]::Write('第二段'); Start-Sleep -Milliseconds 150",
+    }) }]);
+    if (count === 2) {
+      const body = JSON.parse(String(requests[1]!.body));
+      const result = body.input.find((item: { type: string }) => item.type === "function_call_output");
+      outputId = JSON.parse(result.output).data.outputId;
+      return toolEvents([{ name: "read", arguments: JSON.stringify({ outputId, offset: 2 }) }]);
+    }
+    return sampleEvents();
+  });
+  let progress = 0;
+  const turn = await runTurn(store, client, { threadId: thread.id, input: "执行并续读", instructions: "", onEvent(event) {
+    if (event.type !== "tool.progress") return;
+    progress++;
+    const call = store.history.listToolCalls(event.attemptId)[0]!;
+    assert.equal(event.toolId, call.id);
+    assert.equal(call.result, null);
+    assert.ok(event.snapshot.output.includes("第一段🙂"));
+  } });
+  assert.equal(turn.status, "completed");
+  assert.ok(progress > 0);
+  assert.equal(requests.length, 3);
+  const attempts = store.history.listAttempts(turn.id);
+  const shell = store.history.listToolCalls(attempts[0]!.id)[0]!;
+  assert.equal(outputId, shell.id);
+  assert.notEqual(outputId, shell.callId);
+  const final = JSON.parse(String(requests[2]!.body));
+  const results = final.input.filter((item: { type: string }) => item.type === "function_call_output");
+  assert.equal(results.length, 2);
+  assert.equal(JSON.parse(results[1].output).data.content, "第二段");
+  assert.doesNotMatch(String(requests[2]!.body), /tool\.progress|"preview"/);
+});
+
+test("命令进度交付失败先停止进程并保存实际结果，后续工具不执行且模型不重试", { skip: process.platform !== "win32", timeout: 15000 }, async (context) => {
+  const store = openTestStore(context);
+  const directory = projectDirectory(context);
+  const thread = store.createThread("进度交付失败", directory);
+  const pidFile = join(directory, "child.pid");
+  const script = join(directory, "child.cjs");
+  writeFileSync(script, `require('node:fs').writeFileSync(${JSON.stringify(pidFile)}, String(process.pid)); process.stdout.write('实际输出'); setInterval(() => {}, 1000);`, "utf8");
+  const literal = (value: string) => "'" + value.replaceAll("'", "''") + "'";
+  const { client, requests } = mockClient(() => toolEvents([
+    { name: "shell", arguments: JSON.stringify({ command: `& ${literal(process.execPath)} ${literal(script)}`, timeoutSeconds: 5 }) },
+    { name: "write", arguments: JSON.stringify({ path: "skipped.txt", content: "不应写入" }) },
+  ]));
+  await assert.rejects(runTurn(store, client, { threadId: thread.id, input: "执行", instructions: "", onEvent(event) {
+    if (event.type === "tool.progress") throw new Error("进度交付失败");
+  } }), /进度交付失败/);
+  const turn = store.listTurns(thread.id)[0]!;
+  assert.equal(turn.status, "failed");
+  const calls = store.history.listToolCalls(store.history.listAttempts(turn.id)[0]!.id);
+  const actual = JSON.parse(String(calls[0]!.result!.output));
+  assert.equal(actual.status, "ok");
+  assert.equal(actual.data.status, "cancelled");
+  assert.equal(actual.data.output, "实际输出");
+  assert.equal(actual.data.outputId, calls[0]!.id);
+  assert.equal(JSON.parse(String(calls[1]!.result!.output)).status, "not_executed");
+  assert.equal(existsSync(join(directory, "skipped.txt")), false);
+  assert.equal(requests.length, 1);
+  assert.throws(() => process.kill(Number(readFileSync(pidFile, "utf8")), 0), { code: "ESRCH" });
 });

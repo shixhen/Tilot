@@ -29,6 +29,27 @@ test("工具历史保留调用参数、输出位置与已保存结果", (context
   }]);
 });
 
+test("新旧 edit 历史投影保留参数和差异，不要求修改数据库格式", (context) => {
+  const { store } = openHistory(context);
+  const turn = store.startTurn(store.createThread("编辑历史").id, "编辑");
+  const attempt = store.history.startAttempt(turn.id, store.listTurnInputs(turn.id)[0]!.id);
+  const response = sampleResponse();
+  const argumentsList = [' { "path": "old.ts", "oldText": "旧", "newText": "新" } ', '{"path":"new.ts","edits":[{"oldText":"旧","newText":"新"}]}'];
+  const outputs = [JSON.stringify({ status: "ok", data: { path: "old.ts", bytesWritten: 3 } }),
+    JSON.stringify({ status: "ok", data: { path: "new.ts", bytesWritten: 3, replacements: 1, firstChangedLine: 1, diff: "--- a/new.ts\n+++ b/new.ts\n@@ -1 +1 @@\n-旧\n+新\n", diffTruncated: false } })];
+  for (const [index, args] of argumentsList.entries()) response.output.push({
+    type: "function_call", id: `edit_${index}`, call_id: `edit_${index}`, name: "edit", arguments: args, status: "completed",
+  });
+  store.history.finishAttempt(attempt.id, { status: "completed", response });
+  for (const [index, call] of store.history.listToolCalls(attempt.id).entries()) {
+    store.history.saveToolResult(call.id, { type: "function_call_output", call_id: call.callId, output: outputs[index]! });
+  }
+  const tools = listAttemptViews(store, turn.id)[0]!.tools;
+  assert.deepEqual(tools.map((tool) => tool.arguments), argumentsList);
+  assert.deepEqual(tools.map((tool) => tool.output), outputs);
+  assert.ok(tools.every((tool) => !tool.running));
+});
+
 /** 创建独立数据库和真实 RPC 查询入口；测试不调用模型。 */
 function openHistory(context: TestContext) {
   const directory = mkdtempSync(join(tmpdir(), "tilot-history-"));

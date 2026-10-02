@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { EventEmitter, once } from "node:events";
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync } from "node:fs";
 import { createServer, type ServerResponse } from "node:http";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
@@ -39,7 +39,7 @@ async function mockModel(context: TestContext) {
   const address = server.address();
   assert.ok(address && typeof address !== "string");
   /** 为指定请求发送成功或失败终态，完整正文特意比增量长，以验证替换行为。 */
-  function finish(index: number, failed = false): void {
+  function finish(index: number, failed = false, calls: { name: string; arguments: string }[] = []): void {
     const { response, id } = pending[index]!;
     if (failed) {
       response.end(sse({ type: "response.failed", sequence_number: 5, response: { id, status: "failed", output: [], error: { message: "模拟模型失败" } } }));
@@ -48,9 +48,14 @@ async function mockModel(context: TestContext) {
     const output = [
       { type: "reasoning", id: `${id}_reasoning`, status: "completed", summary: [], content: [{ type: "reasoning_text", text: "思考正文" }] },
       { type: "message", id: `${id}_message`, role: "assistant", status: "completed", content: [{ type: "output_text", text: "答案", annotations: [] }] },
+      ...calls.map((call, index) => ({ type: "function_call", id: `${id}_tool_${index}`, call_id: `${id}_call_${index}`, status: "completed", ...call })),
     ];
-    for (const [output_index, item] of output.entries()) response.write(sse({ type: "response.output_item.done", sequence_number: 5 + output_index, output_index, item }));
-    response.end(sse({ type: "response.completed", sequence_number: 7, response: { id, status: "completed", output } }));
+    let sequence_number = 5;
+    for (const [output_index, item] of output.entries()) {
+      if (output_index >= 2) response.write(sse({ type: "response.output_item.added", sequence_number: sequence_number++, output_index, item }));
+      response.write(sse({ type: "response.output_item.done", sequence_number: sequence_number++, output_index, item }));
+    }
+    response.end(sse({ type: "response.completed", sequence_number, response: { id, status: "completed", output } }));
   }
   return { baseURL: `http://127.0.0.1:${address.port}`, finish, requests };
 }
@@ -202,4 +207,38 @@ test("缺少密钥不创建轮次，模型失败和输出断连均正确收尾",
   session.output.destroy(new Error("桌面连接断开"));
   await assert.rejects(session.serving, /桌面连接断开/);
   assert.equal(session.store.getTurn(disconnected)?.status, "cancelled");
+});
+
+test("真实命令进度通过行协议交付，历史查询只包含最终结果和可续读的日志标识", { skip: process.platform !== "win32", timeout: 15000 }, async (context) => {
+  const model = await mockModel(context);
+  const session = openSession(context, model.baseURL);
+  const directory = join(session.store.dataDirectory, "project");
+  mkdirSync(directory);
+  const thread = session.store.createThread("命令进度", directory);
+  const turnId = await session.start(thread.id, "shell");
+  await session.waitFor((message) => "event" in message && message.event === "message.delta");
+  model.finish(0, false, [{ name: "shell", arguments: JSON.stringify({
+    command: "[Console]::Write('进行中🙂'); Start-Sleep -Milliseconds 250; [Console]::Write('完成'); Start-Sleep -Milliseconds 150",
+  }) }]);
+  const progress = await session.waitFor((message) => "event" in message && message.event === "tool.progress");
+  assert.ok("event" in progress && progress.event === "tool.progress");
+  assert.equal(progress.threadId, thread.id);
+  assert.equal(progress.turnId, turnId);
+  const call = session.store.history.listToolCalls(progress.attemptId)[0]!;
+  assert.equal(progress.toolId, call.id);
+  assert.equal(call.result, null);
+  assert.equal(progress.output, "进行中🙂");
+  const saved = await session.waitFor((message) => "event" in message && message.event === "attempt.updated" && message.attempt.tools.some((tool) => tool.output !== null));
+  assert.ok("event" in saved && saved.event === "attempt.updated");
+  const result = JSON.parse(saved.attempt.tools[0]!.output!);
+  assert.equal(result.data.exitCode, 0);
+  assert.equal(result.data.outputId, call.id);
+  assert.equal(result.data.output, "进行中🙂完成");
+  const history = await session.request({ id: "history", method: "turn.attempts", params: { turnId } });
+  assert.ok(history.success);
+  assert.doesNotMatch(JSON.stringify(history), /"preview"|tool\.progress/);
+  await session.waitFor((message) => "event" in message && message.event === "message.delta" && message.itemId === "response_1_message");
+  model.finish(1);
+  await session.waitFor((message) => "event" in message && message.event === "turn.finished" && message.turn.id === turnId);
+  assert.equal(session.store.getTurn(turnId)?.status, "completed");
 });

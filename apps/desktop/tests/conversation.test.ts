@@ -99,3 +99,28 @@ test("历史读取覆盖轮次、输入与请求的全部分页", async () => {
   assert.equal(records.at(-1)?.inputs.at(-1)?.content, "最后一页");
   assert.equal(records.at(-1)?.attempts.length, 100);
 });
+
+test("命令进度替换临时快照、保留于旧查询之后，最终结果清除预览且拒绝迟到进度", () => {
+  const running = turn();
+  const attempt: AttemptView = { id: "attempt", turnId: running.id, sequence: 1, inputThroughId: 1,
+    status: "completed", error: null, createdAt: 1, finishedAt: 2, messages: [],
+    tools: [{ id: "tool", outputIndex: 0, name: "shell", arguments: "{}", output: null, running: true }],
+  };
+  let records: TurnRecord[] = [{ turn: running, inputs: [], attempts: [attempt], previews: [] }];
+  const progress = { event: "tool.progress" as const, seq: 1, threadId: "thread", turnId: "turn", attemptId: "attempt", toolId: "tool",
+    output: "第一段", truncated: false, partialLine: false,
+  };
+  records = applyEvent(records, progress);
+  records = applyEvent(records, { ...progress, seq: 2, output: "尾部", truncated: true, partialLine: true });
+  records = mergeHistory(records, [{ turn: running, inputs: [], attempts: [attempt], previews: [] }]);
+  assert.deepEqual(records[0]!.attempts[0]!.tools[0]!.preview, { output: "尾部", truncated: true, partialLine: true });
+  for (const wrong of [{ threadId: "other" }, { turnId: "other" }, { attemptId: "other" }, { toolId: "other" }]) {
+    assert.deepEqual(applyEvent(records, { ...progress, ...wrong }), records);
+  }
+  const finished = { ...attempt, tools: [{ ...attempt.tools[0]!, running: false, output: '{"status":"ok","data":{"output":"正式结果"}}' }] };
+  records = applyEvent(records, { event: "attempt.updated", threadId: "thread", turnId: "turn", seq: 3, attempt: finished });
+  assert.equal(records[0]!.attempts[0]!.tools[0]!.preview, undefined);
+  assert.deepEqual(applyEvent(records, progress), records);
+  const terminal = [{ ...records[0]!, turn: { ...running, status: "cancelled" as const }, attempts: [attempt] }];
+  assert.deepEqual(applyEvent(terminal, progress), terminal);
+});

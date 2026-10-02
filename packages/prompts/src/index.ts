@@ -2,4 +2,3 @@
 export { SYSTEM_PROMPT } from "./system.ts";
 export { PROJECT_INSTRUCTIONS_LABEL, SKILLS_INSTRUCTIONS } from "./project.ts";
 export { RESUME_INPUT, UNKNOWN_TOOL_RESULT } from "./recovery.ts";
-export { TOOL_DESCRIPTIONS, READ_OFFSET_DESCRIPTION } from "./tools.ts";

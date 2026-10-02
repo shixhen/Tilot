@@ -1,5 +1,15 @@
 export { openWorkspace, pathSegments, resolveWorkspacePath, type Workspace } from "./workspace.ts";
-export { readProjectFile, type ReadInput, type ReadResult } from "./read.ts";
+export { readProjectFile, readOutputLog, type ReadInput, type ReadResult, type LogReadInput, type LogReadResult, type LogByteResult } from "./read.ts";
 export { runShell, type ShellInput, type ShellResult } from "./shell.ts";
-export { projectTools, executeTool } from "./execute.ts";
-export { writeProjectFile, editProjectFile, type WriteInput, type EditInput, type WriteResult } from "./write.ts";
+export { createToolSet } from "./execute.ts";
+export type { Tool, ToolSet, ToolHost, ToolExecution } from "./tool.ts";
+export { OutputCache, type OutputCacheLimits, type OutputArtifact } from "./output-cache.ts";
+export type { OutputSnapshot } from "./output-accumulator.ts";
+export { writeProjectFile, type WriteInput } from "./write.ts";
+export { editProjectFile, type EditInput, type EditResult } from "./edit.ts";
+export type { TextEdit } from "./edit-diff.ts";
+export type { WriteResult } from "./file-write.ts";
+export { listProjectDirectory, type LsInput, type DirectoryEntry } from "./ls.ts";
+export { findProjectFiles, type FindInput } from "./find.ts";
+export { grepProject, type GrepInput, type GrepLine, type GrepMatch } from "./grep.ts";
+export { webFetch, type WebFetchInput } from "./web-fetch.ts";

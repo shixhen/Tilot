@@ -21,6 +21,8 @@ export type { AttemptStatus, ModelAttempt, AttemptCompletion, ToolResult, Stored
 
 /** 本地 SQLite 存储；由 Server 创建和关闭，负责配置、任务及对话历史。 */
 export class Store {
+  /** 宿主数据目录供输出缓存使用，不传给模型或桌面。 */
+  readonly dataDirectory: string;
   private readonly database: Database.Database;
   /** 模型请求和工具结果的存储入口，与配置、任务共用同一数据库。 */
   readonly history: ModelHistoryStore;
@@ -33,6 +35,7 @@ export class Store {
       throw new Error("应用数据目录必须是绝对路径。");
     }
     mkdirSync(dataDirectory, { recursive: true });
+    this.dataDirectory = dataDirectory;
     this.database = new Database(join(dataDirectory, "tilot.sqlite"));
     try {
       this.database.pragma("foreign_keys = ON");

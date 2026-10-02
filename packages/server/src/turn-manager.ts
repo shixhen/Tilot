@@ -48,6 +48,9 @@ export class TurnManager {
           this.active.set(current.id, execution);
           started.resolve(current);
           await this.emit({ event: "turn.started", turn: current });
+        } else if (event.type === "tool.progress") {
+          await this.emit({ event: "tool.progress", threadId, turnId: event.turnId, attemptId: event.attemptId, toolId: event.toolId,
+            output: event.snapshot.output, truncated: event.snapshot.truncated, partialLine: event.snapshot.partialLine });
         } else if (event.type === "tool.updated") {
           const saved = this.store.history.getAttempt(event.attemptId)!;
           const attempt = listAttemptViews(this.store, event.turnId, saved.sequence - 1, 1)[0]!;

@@ -56,6 +56,30 @@ test("恢复中断历史时保留已知结果，仅在上下文中为未决调�
   assert.equal(store.getTurn(old.id)?.status, "interrupted");
 });
 
+test("新旧 edit 参数与结果原样回放，不将历史调用改成新格式", (context) => {
+  const store = openTestStore(context);
+  const thread = store.createThread("编辑历史");
+  const old = store.startTurn(thread.id, "编辑文件");
+  const attempt = store.history.startAttempt(old.id, store.listTurnInputs(old.id)[0]!.id);
+  const items: ResponseOutputItem[] = [
+    { type: "function_call", id: "old_edit", call_id: "old_edit", name: "edit", arguments: ' { "path": "a.ts", "oldText": "旧", "newText": "新" } ', status: "completed" },
+    { type: "function_call", id: "new_edit", call_id: "new_edit", name: "edit", arguments: '{"path":"a.ts","edits":[{"oldText":"新","newText":"更新"}]}', status: "completed" },
+  ];
+  store.history.finishAttempt(attempt.id, { status: "completed", response: response(items) });
+  const outputs = [JSON.stringify({ status: "ok", data: { path: "a.ts", bytesWritten: 3 } }),
+    JSON.stringify({ status: "ok", data: { path: "a.ts", bytesWritten: 6, replacements: 1, firstChangedLine: 1, diff: "--- a/a.ts\n+++ b/a.ts\n@@ -1 +1 @@\n-新\n+更新\n", diffTruncated: false } })];
+  const results = store.history.listToolCalls(attempt.id).map((saved, index) => {
+    const result = { type: "function_call_output" as const, call_id: saved.callId, output: outputs[index]! };
+    store.history.saveToolResult(saved.id, result);
+    return result;
+  });
+  store.finishTurn(old.id, "completed");
+  const current = store.startTurn(thread.id, "继续");
+  const built = buildContext(store, { turnId: current.id, inputThroughId: store.listTurnInputs(current.id)[0]!.id, instructions: "" });
+  assert.deepEqual(built.input.slice(1, 5), [...items, ...results]);
+  assert.deepEqual(store.history.getAttempt(attempt.id)!.response!.output, items);
+});
+
 test("按输入边界回放完整消息组，保留推理并跳过诊断，固定本次输入范围", (context) => {
   const store = openTestStore(context);
   const thread = store.createThread("多轮历史");
