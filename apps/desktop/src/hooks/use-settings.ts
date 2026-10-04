@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState, type FormEvent } from "react";
-import { DEFAULT_CONTEXT_TOKENS, type AppConfig, type ModelInfo } from "@tilot/protocol";
+import type { AppConfig, ModelInfo } from "@tilot/protocol";
 import type { Request } from "../client";
 
 /** 设置操作所需的服务入口与保存回调。 */
@@ -78,7 +78,7 @@ export function useSettings({ config, request, onSaved, onClose }: SettingsOptio
 
 /**
  * 加载一个服务的模型列表：地址有效且有密钥（本次填写，或该地址已保存）时，停止输入 0.5 秒后自动加载。
- * 同一地址保留已设置的上下文，换了地址整体替换；只采用最后一次请求的结果。
+ * 只采用最后一次请求的结果，模型限制由服务决定。
  */
 export function useModelLoader(draft: ProviderDraft, savedKey: boolean, request: Request, update: ReturnType<typeof useSettings>["update"]) {
   const [loading, setLoading] = useState(false);
@@ -95,8 +95,7 @@ export function useModelLoader(draft: ProviderDraft, savedKey: boolean, request:
     try {
       const ids = await request("models.fetch", { providerId: draft.id, baseURL: url, apiKey: draft.apiKey.trim() });
       if (id !== latest.current) return;
-      update(draft.id, (current) => ({ ...current, loadedURL: url, models: ids.map((model) =>
-        (current.loadedURL === url ? current.models : []).find((item) => item.id === model) ?? { id: model, contextTokens: DEFAULT_CONTEXT_TOKENS }) }));
+      update(draft.id, (current) => ({ ...current, loadedURL: url, models: ids.map((id) => ({ id })) }));
     } catch (error) {
       if (id === latest.current) setError(String(error));
     } finally {

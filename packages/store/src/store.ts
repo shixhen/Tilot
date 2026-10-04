@@ -52,21 +52,20 @@ export class Store {
   /** 读取已保存配置及全部服务和模型（按保存顺序）；数据库缺少配置记录时报告错误，不用默认值掩盖损坏。 */
   getConfig(): AppConfig {
     const config = this.database.prepare<[], Omit<AppConfig, "providers">>(`
-      SELECT providerId, model, reasoningEffort, maxOutputTokens, reserveTokens, maxStepsPerRun, maxAutomaticRetries
+      SELECT providerId, model, reasoningEffort, maxAutomaticRetries
       FROM app_config WHERE id = 1
     `).get();
     if (!config) {
       throw new Error("数据库缺少应用配置记录。");
     }
-    const models = this.database.prepare<[], ModelInfo & { providerId: string }>("SELECT providerId, id, contextTokens FROM provider_models ORDER BY rowid").all();
+    const models = this.database.prepare<[], ModelInfo & { providerId: string }>("SELECT providerId, id FROM provider_models ORDER BY rowid").all();
     const providers = this.database.prepare<[], Omit<Provider, "models">>("SELECT id, name, baseURL FROM providers ORDER BY rowid").all()
-      .map((provider) => ({ ...provider, models: models.filter((model) => model.providerId === provider.id).map(({ id, contextTokens }) => ({ id, contextTokens })) }));
+      .map((provider) => ({ ...provider, models: models.filter((model) => model.providerId === provider.id).map(({ id }) => ({ id })) }));
     return { ...config, providers };
   }
 
   /** 校验后整份保存配置并替换服务和模型列表；仍被任务使用的服务不能删除。在同一事务中执行，失败时不会留下部分修改。 */
   saveConfig(config: AppConfig): void {
-    const minimum = config.maxOutputTokens + config.reserveTokens;
     if (config.providers.length === 0 || new Set(config.providers.map((provider) => provider.id)).size !== config.providers.length) {
       throw new Error("服务列表不能为空，也不能有重复的服务。");
     }
@@ -75,11 +74,6 @@ export class Store {
       if (!provider.name.trim()) throw new Error("服务名称不能为空。");
       if (new Set(provider.models.map((model) => model.id)).size !== provider.models.length) {
         throw new Error(`${provider.name} 中有重复的模型。`);
-      }
-      for (const model of provider.models) {
-        if (!Number.isInteger(model.contextTokens) || model.contextTokens <= minimum) {
-          throw new Error(`${model.id} 的最大上下文必须大于输出上限与预留量之和（${minimum} token）。`);
-        }
       }
     }
     if (!config.providers.find((provider) => provider.id === config.providerId)?.models.some((model) => model.id === config.model)) {
@@ -96,8 +90,7 @@ export class Store {
       const result = this.database.prepare(`
         UPDATE app_config SET
           providerId = @providerId, model = @model, reasoningEffort = @reasoningEffort,
-          maxOutputTokens = @maxOutputTokens, reserveTokens = @reserveTokens,
-          maxStepsPerRun = @maxStepsPerRun, maxAutomaticRetries = @maxAutomaticRetries
+          maxAutomaticRetries = @maxAutomaticRetries
         WHERE id = 1
       `).run(config);
       if (result.changes !== 1) {
@@ -106,10 +99,10 @@ export class Store {
       this.database.prepare("DELETE FROM provider_models").run();
       this.database.prepare("DELETE FROM providers").run();
       const insertProvider = this.database.prepare("INSERT INTO providers (id, name, baseURL) VALUES (?, ?, ?)");
-      const insertModel = this.database.prepare("INSERT INTO provider_models (providerId, id, contextTokens) VALUES (?, ?, ?)");
+      const insertModel = this.database.prepare("INSERT INTO provider_models (providerId, id) VALUES (?, ?)");
       for (const provider of config.providers) {
         insertProvider.run(provider.id, provider.name.trim(), provider.baseURL);
-        for (const model of provider.models) insertModel.run(provider.id, model.id, model.contextTokens);
+        for (const model of provider.models) insertModel.run(provider.id, model.id);
       }
     })();
   }
@@ -220,6 +213,13 @@ export class Store {
       `).run(input.createdAt, turnId);
       return input;
     })();
+  }
+
+  /** 读取轮次最新输入，用于下一次模型请求的边界；不会遗漏分页后的引导。 */
+  getLatestTurnInput(turnId: string): TurnInput | undefined {
+    return this.database.prepare<[string], TurnInput>(`
+      SELECT id, turnId, content, createdAt FROM turn_inputs WHERE turnId = ? ORDER BY id DESC LIMIT 1
+    `).get(turnId);
   }
 
   /** 按保存顺序分页读取用户输入；下一页传入本页最后一个 id，不修改原始内容。 */

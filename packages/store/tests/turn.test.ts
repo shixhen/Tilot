@@ -95,7 +95,7 @@ test("版本 2 升级保留配置和任务，新增轮次表可用", (context) =
   const store = new Store(directory);
   const thread = store.createThread("旧任务");
   const original = store.getConfig();
-  const config = { ...original, model: "saved-model", providers: [{ ...original.providers[0]!, models: [{ id: "saved-model", contextTokens: 131072 }] }] };
+  const config = { ...original, model: "saved-model", providers: [{ ...original.providers[0]!, models: [{ id: "saved-model" }] }] };
   try {
     store.saveConfig(config);
   } finally {

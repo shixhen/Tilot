@@ -1,6 +1,6 @@
 import { runTurn, type TurnEvent } from "@tilot/agent-core";
 import { createResponsesClient } from "@tilot/responses";
-import type { Store, Turn } from "@tilot/store";
+import type { Store, Turn, TurnInput } from "@tilot/store";
 import type { ServerEvent, TurnNotification } from "@tilot/protocol";
 import { listAttemptViews, projectMessages } from "./history.ts";
 import { SYSTEM_PROMPT, RESUME_INPUT } from "@tilot/prompts";
@@ -79,6 +79,17 @@ export class TurnManager {
     if (!turn || turn.status !== "interrupted") throw new Error("只能继续已中断的轮次。");
     if (this.store.listTurns(turn.threadId, turn.sequence, 1).length) throw new Error("该任务已经有后续轮次，请继续最新对话。");
     return this.start(turn.threadId, RESUME_INPUT);
+  }
+
+  /** 将引导保存到当前轮次，不取消模型或工具；已结束时返回 null，供界面保留等待消息。 */
+  async steer(turnId: string, content: string): Promise<TurnInput | null> {
+    if (!content.trim()) throw new Error("引导消息不能为空。");
+    const execution = this.active.get(turnId);
+    const turn = this.store.getTurn(turnId);
+    if (this.closed || !execution || execution.controller.signal.aborted || turn?.status !== "running") return null;
+    const input = this.store.appendTurnInput(turnId, content);
+    await this.emit({ event: "turn.input", threadId: turn.threadId, turnId, input });
+    return input;
   }
 
   /** 请求取消当前连接拥有的轮次；不存在或已结束返回 false，不改写历史。 */

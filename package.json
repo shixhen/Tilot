@@ -9,6 +9,8 @@
   },
   "scripts": {
     "test": "npm test --workspaces --if-present",
+    "test:deepseek": "node scripts/deepseek-smoke.mjs",
+    "test:deepseek:steering": "node scripts/deepseek-steering.mjs",
     "typecheck": "tsc --noEmit && npm run typecheck --workspace @tilot/desktop",
     "desktop": "npm run tauri --workspace @tilot/desktop -- dev",
     "test:desktop": "cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml"

@@ -1,12 +1,11 @@
 import type Database from "better-sqlite3";
-import { DEFAULT_CONTEXT_TOKENS } from "@tilot/protocol";
 import { DEFAULT_CONFIG } from "./config.ts";
 
 /** 按数据库版本依次升级结构；建表、默认数据和版本号在同一事务中提交。 */
 export function migrateDatabase(database: Database.Database): void {
   database.transaction(() => {
     const version = database.pragma("user_version", { simple: true });
-    if (typeof version !== "number" || !Number.isInteger(version) || version < 0 || version > 7) {
+    if (typeof version !== "number" || !Number.isInteger(version) || version < 0 || version > 9) {
       throw new Error("不支持此数据库版本，请使用匹配的 Tilot 版本。");
     }
     if (version === 0) {
@@ -24,12 +23,14 @@ export function migrateDatabase(database: Database.Database): void {
           CHECK (maxOutputTokens + reserveTokens < contextBudgetTokens)
         ) STRICT;
       `);
+      // 初始旧结构沿用当时的默认值，后续迁移移除请求次数与 Token 限制。
       database.prepare(`
         INSERT INTO app_config VALUES (
           1, @baseURL, @model, @reasoningEffort, @contextBudgetTokens,
           @maxOutputTokens, @reserveTokens, @maxStepsPerRun, @maxAutomaticRetries
         )
-      `).run({ ...DEFAULT_CONFIG, baseURL: DEFAULT_CONFIG.providers[0]!.baseURL, contextBudgetTokens: DEFAULT_CONTEXT_TOKENS });
+      `).run({ ...DEFAULT_CONFIG, baseURL: DEFAULT_CONFIG.providers[0]!.baseURL,
+        contextBudgetTokens: 65536, maxOutputTokens: 16384, reserveTokens: 4096, maxStepsPerRun: 30 });
       database.pragma("user_version = 1");
     }
     if (version < 2) {
@@ -164,6 +165,18 @@ export function migrateDatabase(database: Database.Database): void {
         ALTER TABLE model_attempts ADD COLUMN durationMs REAL CHECK (durationMs >= 0);
       `);
       database.pragma("user_version = 7");
+    }
+    if (version < 8) {
+      database.exec("ALTER TABLE app_config DROP COLUMN maxStepsPerRun;");
+      database.pragma("user_version = 8");
+    }
+    if (version < 9) {
+      database.exec(`
+        ALTER TABLE app_config DROP COLUMN maxOutputTokens;
+        ALTER TABLE app_config DROP COLUMN reserveTokens;
+        ALTER TABLE provider_models DROP COLUMN contextTokens;
+      `);
+      database.pragma("user_version = 9");
     }
   }).immediate();
 }

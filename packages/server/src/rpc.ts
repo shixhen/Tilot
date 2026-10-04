@@ -17,7 +17,7 @@ function isEffort(value: unknown): value is ReasoningEffort {
 
 /** 判断是否为模型列表中的一项。 */
 function isModel(value: unknown): value is ModelInfo {
-  return isObject(value) && typeof value.id === "string" && typeof value.contextTokens === "number";
+  return isObject(value) && typeof value.id === "string";
 }
 
 /** 判断是否为服务配置。 */
@@ -69,6 +69,11 @@ function parseRequest(value: unknown): RpcRequest {
     case "turn.start":
       if (typeof params.threadId === "string" && typeof params.input === "string") {
         return { id: value.id, method: value.method, params: { threadId: params.threadId, input: params.input } };
+      }
+      break;
+    case "turn.steer":
+      if (typeof params.turnId === "string" && typeof params.input === "string" && params.input.trim()) {
+        return { id: value.id, method: value.method, params: { turnId: params.turnId, input: params.input } };
       }
       break;
     case "turn.read":
@@ -133,21 +138,17 @@ function parseRequest(value: unknown): RpcRequest {
   throw new Error("RPC 参数类型不正确。");
 }
 
-/** 从未知 JSON 提取完整配置，忽略未声明字段；数值范围和预算关系由 Store 校验。 */
+/** 从未知 JSON 提取完整配置，忽略未声明字段；数值范围由 Store 校验。 */
 function parseConfig(value: unknown): AppConfig {
   if (!isObject(value) || typeof value.providerId !== "string" || typeof value.model !== "string" ||
       !isEffort(value.reasoningEffort) || !Array.isArray(value.providers) || !value.providers.every(isProvider) ||
-      typeof value.maxOutputTokens !== "number" ||
-      typeof value.reserveTokens !== "number" || typeof value.maxStepsPerRun !== "number" ||
       typeof value.maxAutomaticRetries !== "number") {
     throw new Error("配置字段缺失或类型不正确。");
   }
   return {
     providerId: value.providerId, model: value.model, reasoningEffort: value.reasoningEffort,
     providers: value.providers.map((provider) => ({ id: provider.id, name: provider.name, baseURL: provider.baseURL,
-      models: provider.models.map((model) => ({ id: model.id, contextTokens: model.contextTokens })) })),
-    maxOutputTokens: value.maxOutputTokens,
-    reserveTokens: value.reserveTokens, maxStepsPerRun: value.maxStepsPerRun,
+      models: provider.models.map((model) => ({ id: model.id })) })),
     maxAutomaticRetries: value.maxAutomaticRetries,
   };
 }
@@ -182,6 +183,9 @@ export async function handleRpcLine(store: Store, line: string, turns: TurnManag
         break;
       case "turn.start":
         result = await turns.start(request.params.threadId, request.params.input);
+        break;
+      case "turn.steer":
+        result = await turns.steer(request.params.turnId, request.params.input);
         break;
       case "turn.resume":
         result = await turns.resume(request.params.turnId);

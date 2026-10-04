@@ -33,7 +33,6 @@ export function listAttemptViews(store: Store, turnId: string, afterSequence = 0
         inputTokens: attempt.response?.usage?.input_tokens ?? null,
         cachedTokens: attempt.response?.usage?.input_tokens_details?.cached_tokens ?? null,
         outputTokens: attempt.response?.usage?.output_tokens ?? null,
-        totalTokens: attempt.response?.usage?.total_tokens ?? null,
       },
     };
   });

@@ -144,6 +144,34 @@ function openSession(context: TestContext, baseURL: string) {
   return { store, input, output, serving, received, waitFor, request, start };
 }
 
+test("流中引导保留同一轮次及原输出，不取消请求；多条补充进入下一请求", { timeout: 10000 }, async (context) => {
+  const model = await mockModel(context);
+  const session = openSession(context, model.baseURL);
+  const thread = session.store.createThread("同轮引导");
+  const turnId = await session.start(thread.id, "start-steer");
+  await session.waitFor((message) => "event" in message && message.event === "message.delta" && message.turnId === turnId);
+  const first = await session.request({ id: "steer-1", method: "turn.steer", params: { turnId, input: "补充中文🙂" } });
+  const second = await session.request({ id: "steer-2", method: "turn.steer", params: { turnId, input: "保留原任务" } });
+  assert.equal(first.success, true); assert.equal(second.success, true);
+  assert.equal(session.store.getTurn(turnId)?.status, "running");
+  assert.equal(session.store.history.listAttempts(turnId)[0]!.status, "running");
+  assert.equal(model.requests.length, 1);
+  assert.equal(session.store.listTurnInputs(turnId).length, 3);
+  const notifications = session.received.filter((message) => "event" in message && message.event === "turn.input");
+  assert.equal(notifications.length, 2);
+  assert.equal((await session.request({ id: "empty", method: "turn.steer", params: { turnId, input: " " } })).success, false);
+  model.finish(0);
+  await session.waitFor((message) => "event" in message && message.event === "message.delta" && message.itemId === "response_1_message");
+  assert.equal(session.store.listTurns(thread.id).length, 1);
+  assert.deepEqual((model.requests[1]!.input as unknown[]).slice(-2), [{ role: "user", content: "补充中文🙂" }, { role: "user", content: "保留原任务" }]);
+  assert.equal(session.store.history.listAttempts(turnId)[0]!.status, "completed");
+  model.finish(1);
+  await session.waitFor((message) => "event" in message && message.event === "turn.finished" && message.turn.id === turnId);
+  assert.deepEqual(session.store.history.listAttempts(turnId).map((attempt) => attempt.status), ["completed", "completed"]);
+  assert.deepEqual(await session.request({ id: "late", method: "turn.steer", params: { turnId, input: "迟到引导" } }), { id: "late", success: true, result: null });
+  assert.equal(session.store.listTurnInputs(turnId).length, 3);
+});
+
 test("启动立即应答，并行任务事件有序且互不串流，完成内容替换预览", { timeout: 10000 }, async (context) => {
   const model = await mockModel(context);
   const session = openSession(context, model.baseURL);

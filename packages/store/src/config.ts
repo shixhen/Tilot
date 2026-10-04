@@ -1,4 +1,4 @@
-import { DEFAULT_CONTEXT_TOKENS, type AppConfig } from "@tilot/protocol";
+import type { AppConfig } from "@tilot/protocol";
 
 export type { AppConfig } from "@tilot/protocol";
 
@@ -8,9 +8,6 @@ export const DEFAULT_CONFIG: Readonly<AppConfig> = {
   model: "deepseek-flash",
   reasoningEffort: "high",
   providers: [{ id: "default", name: "api.deepseek.com", baseURL: "https://api.deepseek.com",
-    models: [{ id: "deepseek-flash", contextTokens: DEFAULT_CONTEXT_TOKENS }] }],
-  maxOutputTokens: 16384,
-  reserveTokens: 4096,
-  maxStepsPerRun: 30,
+    models: [{ id: "deepseek-flash" }] }],
   maxAutomaticRetries: 2,
 };

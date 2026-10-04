@@ -3,6 +3,7 @@ import type { AppConfig, ReasoningEffort, ServerEvent, Thread } from "@tilot/pro
 import { BackendConnection } from "./backend";
 import { createClient, type Request } from "./client";
 import { applyEvent, loadConversation, mergeHistory, type TurnRecord } from "./conversation";
+import { InputQueue, type QueueView } from "./input-queue";
 
 /** 管理连接、任务历史和实时事件；每个任务单独保存界面数据，切换不会串流。 */
 export function useChat() {
@@ -21,6 +22,8 @@ export function useChat() {
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
   const [historyLoading, setHistoryLoading] = useState<Record<string, boolean>>({});
+  const [queues, setQueues] = useState<Record<string, QueueView>>({});
+  const queue = useRef<InputQueue | null>(null);
 
   /** 使用当前服务连接，连接中断后拒绝新操作。 */
   const request: Request = (method, params) => {
@@ -32,6 +35,20 @@ export function useChat() {
   function report(error: unknown): void {
     if (mounted.current) setError(error instanceof Error ? error.message : String(error));
   }
+
+  if (!queue.current) queue.current = new InputQueue({
+    start: async (threadId, input) => {
+      const turn = await request("turn.start", { threadId, input });
+      if (mounted.current) {
+        setConversations((state) => ({ ...state, [threadId]: applyEvent(state[threadId] ?? [], { event: "turn.started", turn, seq: 0 }) }));
+        void refreshHistory(threadId).catch(report);
+      }
+      return turn;
+    },
+    steer: (turnId, input) => request("turn.steer", { turnId, input }),
+    changed: (threadId, view) => { if (mounted.current) setQueues((state) => ({ ...state, [threadId]: view })); },
+    error: report,
+  });
 
   /** 读完任务列表；固定分页大小，不遗漏第 100 条以后的任务。 */
   async function refreshThreads(): Promise<void> {
@@ -53,6 +70,8 @@ export function useChat() {
       const history = await loadConversation(request, threadId);
       if (mounted.current && loading.current.get(threadId) === version) {
         setConversations((state) => ({ ...state, [threadId]: mergeHistory(state[threadId] ?? [], history) }));
+        const latest = history.at(-1)?.turn;
+        if (latest) queue.current!.observe(latest);
       }
     } finally {
       if (mounted.current && loading.current.get(threadId) === version) setHistoryLoading((state) => ({ ...state, [threadId]: false }));
@@ -63,6 +82,7 @@ export function useChat() {
   function receive(event: ServerEvent): void {
     const threadId = "turn" in event ? event.turn.threadId : event.threadId;
     setConversations((state) => ({ ...state, [threadId]: applyEvent(state[threadId] ?? [], event) }));
+    if ("turn" in event) queue.current!.observe(event.turn);
     if (event.event === "turn.finished") {
       void Promise.all([refreshHistory(threadId), refreshThreads()]).catch(report);
     }
@@ -73,6 +93,7 @@ export function useChat() {
     let connection: BackendConnection | undefined;
     void BackendConnection.connect(receive, (error) => {
       client.current = null;
+      queue.current!.setConnected(false);
       setConnected(false);
       report(error);
     }).then(async (backend) => {
@@ -80,10 +101,11 @@ export function useChat() {
       if (!mounted.current) { backend.dispose(); return; }
       client.current = createClient(backend);
       setConnected(true);
+      queue.current!.setConnected(true);
       const [config, status] = await Promise.all([request("config.get", {}), request("credentials.status", {}), refreshThreads()]);
       if (mounted.current) { setConfig(config); setConfigured(status.configured); }
     }).catch(report);
-    return () => { mounted.current = false; client.current = null; connection?.dispose(); };
+    return () => { mounted.current = false; queue.current!.setConnected(false); client.current = null; connection?.dispose(); };
   }, []);
 
   /** 切换或新建空白会话；已存在任务按需读取最新历史。 */
@@ -97,6 +119,10 @@ export function useChat() {
   /** 首次发送时创建任务，输入经服务确认后清空；已结束状态不会被启动应答覆盖。 */
   async function send(input: string): Promise<{ accepted: boolean; threadId: string | null }> {
     let threadId = selected;
+    if (threadId && queue.current!.hasActivity(threadId)) {
+      queue.current!.enqueue(threadId, input);
+      return { accepted: true, threadId };
+    }
     if (submitting.current) return { accepted: false, threadId };
     submitting.current = true;
     setBusy(true);
@@ -108,6 +134,7 @@ export function useChat() {
         setThreads((threads) => [thread, ...threads]);
         setSelected(threadId);
       }
+      queue.current!.resume(threadId);
       const turn = await request("turn.start", { threadId, input });
       setConversations((state) => ({ ...state, [turn.threadId]: applyEvent(state[turn.threadId] ?? [], { event: "turn.started", turn, seq: 0 }) }));
       void refreshHistory(threadId).catch(report);
@@ -132,6 +159,8 @@ export function useChat() {
 
   /** 请求停止执行；按钮状态以服务最终事件为准，不提前伪造取消。 */
   async function stop(turnId: string): Promise<void> {
+    const thread = Object.entries(conversations).find(([, records]) => records.some((record) => record.turn.id === turnId));
+    if (thread) queue.current!.pause(thread[0]);
     try { await request("turn.interrupt", { turnId }); }
     catch (error) { report(error); }
   }
@@ -158,6 +187,10 @@ export function useChat() {
   }
 
   return { connected, threads, selected, newProjectPath, records: selected ? conversations[selected] ?? [] : [], config, configured,
+    queue: selected ? queues[selected] ?? { messages: [], paused: false, busy: false } : { messages: [], paused: false, busy: false },
+    steer: (id: string) => selected ? queue.current!.steer(selected, id) : Promise.resolve(),
+    removeQueued: (id: string) => { if (selected) queue.current!.remove(selected, id); },
+    resumeQueue: () => { if (selected) queue.current!.resume(selected); },
     error, busy, historyLoading: selected ? historyLoading[selected] ?? false : false,
     request, select, send, resume, stop, updateThread, updateDefaults, refreshConfig };
 }

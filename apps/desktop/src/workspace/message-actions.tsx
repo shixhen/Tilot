@@ -16,16 +16,18 @@ interface MessageActionsProps {
 
 /** 展示服务端统计，不将未返回的数据误记为零；缓存命中属于输入 token 的一部分。 */
 export function MetricsDetails({ metrics }: { metrics?: ResponseMetrics | undefined }) {
+  const cacheHitRate = metrics?.inputTokens != null && metrics.inputTokens > 0 && metrics.cachedTokens != null
+    ? `${Math.round(metrics.cachedTokens / metrics.inputTokens * 100)}%` : "暂无数据";
   const rows = [
     ["首 token 耗时", metrics?.firstTokenMs == null ? "暂无数据" : `${(metrics.firstTokenMs / 1000).toFixed(2)} s`],
     ["生成速度（TPS）", metrics?.tokensPerSecond == null ? "暂无数据" : `${metrics.tokensPerSecond.toFixed(1)} token/s`],
-    ["总 token", metrics?.totalTokens?.toLocaleString() ?? "暂无数据"],
+    ["缓存命中率", cacheHitRate],
     ["缓存命中", metrics?.cachedTokens?.toLocaleString() ?? "暂无数据"],
     ["缓存未命中", metrics?.inputTokens == null || metrics.cachedTokens == null ? "暂无数据" : (metrics.inputTokens - metrics.cachedTokens).toLocaleString()],
     ["输出 token", metrics?.outputTokens?.toLocaleString() ?? "暂无数据"],
   ];
   return <div className="w-60 text-sm">
-    <p className="mb-2 font-medium">本次模型请求</p>
+    <p className="mb-2 font-medium">本轮模型请求</p>
     <dl className="grid grid-cols-[1fr_auto] gap-x-5 gap-y-1.5">{rows.map(([label, value]) =>
       <div key={label} className="contents"><dt className="text-muted-foreground">{label}</dt><dd className="text-right tabular-nums">{value}</dd></div>)}</dl>
   </div>;

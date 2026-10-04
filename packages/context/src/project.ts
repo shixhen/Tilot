@@ -60,20 +60,20 @@ async function readSkill(path: string, relativePath: string, signal?: AbortSigna
   } finally { await file.close(); }
 }
 
-/** 只加载根目录 AGENTS.md 和 .codex/skills 各技能目录的 SKILL.md，不搜索父目录或全局目录。 */
+/** 只加载根目录 AGENTS.md 和 .tilot/skills 各技能目录的 SKILL.md，不搜索父目录或全局目录。 */
 export async function loadProjectContext(root: string, signal?: AbortSignal): Promise<ProjectContext> {
   signal?.throwIfAborted();
   const result: ProjectContext = { instructions: "", skills: [] };
   const agents = join(root, "AGENTS.md");
   if (await existsAs(agents, "file")) result.instructions = decode(await readFile(agents, { signal }), "AGENTS.md");
-  if (!await existsAs(join(root, ".codex"), "directory")) return result;
-  const directory = join(root, ".codex", "skills");
+  if (!await existsAs(join(root, ".tilot"), "directory")) return result;
+  const directory = join(root, ".tilot", "skills");
   if (!await existsAs(directory, "directory")) return result;
   const names = new Set<string>();
   for (const entry of (await readdir(directory, { withFileTypes: true })).sort((a, b) => a.name.localeCompare(b.name))) {
     signal?.throwIfAborted();
     if (entry.isSymbolicLink() || !entry.isDirectory()) continue;
-    const relativePath = `.codex/skills/${entry.name}/SKILL.md`;
+    const relativePath = `.tilot/skills/${entry.name}/SKILL.md`;
     const path = join(directory, entry.name, "SKILL.md");
     if (!await existsAs(path, "file")) continue;
     const skill = await readSkill(path, relativePath, signal);

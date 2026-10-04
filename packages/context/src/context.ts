@@ -3,7 +3,6 @@ import type { ResponseInputItem } from "openai/resources/responses/responses";
 import type { ModelAttempt, Store, Turn, TurnInput } from "@tilot/store";
 import { getResponseToolCallsFromResponse } from "@tilot/responses/output";
 import { UNKNOWN_TOOL_RESULT } from "@tilot/prompts";
-export { checkContextBudget, type ContextBudget } from "./budget.ts";
 export { loadProjectContext, appendProjectInstructions, type ProjectContext, type SkillMetadata } from "./project.ts";
 
 /** 本次构建的边界；Core 在开始请求前选定轮次、用户输入边界和系统策略。 */

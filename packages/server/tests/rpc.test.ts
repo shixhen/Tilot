@@ -165,20 +165,20 @@ test("配置与凭据 RPC 保存并恢复多个服务，地址切换隔离密钥
   const directory = temporaryDirectory(context);
   const store = new Store(directory);
   const original = store.getConfig();
-  const provider = { ...original.providers[0]!, baseURL: "https://example.test/", models: [{ id: "saved-model", contextTokens: 65536 }] };
-  const second = { id: "second", name: "second.test", baseURL: "https://second.test/", models: [{ id: "other-model", contextTokens: 65536 }] };
+  const provider = { ...original.providers[0]!, baseURL: "https://example.test/", models: [{ id: "saved-model" }] };
+  const second = { id: "second", name: "second.test", baseURL: "https://second.test/", models: [{ id: "other-model" }] };
   const config = { ...original, model: "saved-model", providers: [provider, second] };
   store.close();
   const key = "local-test-rpc-secret";
   const requests = [
-    { id: "config", method: "config.set", params: { config: { ...config, apiKey: key } } },
+    { id: "config", method: "config.set", params: { config: { ...config, apiKey: key, maxStepsPerRun: 1, maxOutputTokens: 16, reserveTokens: 10 } } },
     { id: "save", method: "credentials.set", params: { providerId: "default", apiKey: key } },
     { id: "save-second", method: "credentials.set", params: { providerId: "second", apiKey: `${key}-2` } },
     { id: "empty", method: "credentials.set", params: { providerId: "default", apiKey: " " } },
     { id: "unknown", method: "credentials.set", params: { providerId: "missing", apiKey: key } },
     { id: "status", method: "credentials.status", params: {} },
-    { id: "bad-budget", method: "config.set", params: { config: { ...config, providers: [{ ...provider, models: [{ id: "saved-model", contextTokens: 1 }] }, second] } } },
-    { id: "bad-type", method: "config.set", params: { config: { ...config, maxStepsPerRun: "20" } } },
+    { id: "bad-model", method: "config.set", params: { config: { ...config, providers: [{ ...provider, models: [{ id: " " }] }, second] } } },
+    { id: "bad-type", method: "config.set", params: { config: { ...config, providers: [{ ...provider, models: [{ id: 123 }] }, second] } } },
     { id: "read", method: "config.get", params: {} },
     { id: "change", method: "config.set", params: { config: { ...config, providers: [{ ...provider, baseURL: "https://other.test/" }, second] } } },
     { id: "changed-status", method: "credentials.status", params: {} },
@@ -223,8 +223,8 @@ test("模型列表使用填写或已保存的密钥加载，任务可单独切�
     assert.match(JSON.stringify(await call("models.fetch", { providerId: "new", baseURL, apiKey: " " })), /请填写 API Key/);
     assert.equal((await call("models.fetch", { providerId: "new", baseURL, apiKey: "wrong-key" })).success, false);
     const original = store.getConfig();
-    const second = { id: "second", name: "second", baseURL, models: [{ id: "model-b", contextTokens: 131072 }] };
-    store.saveConfig({ ...original, model: "model-a", providers: [{ ...original.providers[0]!, baseURL, models: [{ id: "model-a", contextTokens: 65536 }] }, second] });
+    const second = { id: "second", name: "second", baseURL, models: [{ id: "model-b" }] };
+    store.saveConfig({ ...original, model: "model-a", providers: [{ ...original.providers[0]!, baseURL, models: [{ id: "model-a" }] }, second] });
     store.credentials.saveApiKey("default", baseURL, "saved-key");
     assert.equal((await call("models.fetch", { providerId: "default", baseURL, apiKey: "" })).success, true);
     assert.match(JSON.stringify(await call("models.fetch", { providerId: "second", baseURL, apiKey: "" })), /请填写 API Key/);

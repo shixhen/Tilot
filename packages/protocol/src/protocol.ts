@@ -13,10 +13,9 @@ export interface Thread {
 /** 思考强度；none 表示不启用推理。 */
 export type ReasoningEffort = "none" | "low" | "high" | "max";
 
-/** 服务提供的一个模型；contextTokens 是用户为它设置的最大上下文。 */
+/** 服务提供的一个模型；输入和输出限制由模型服务决定。 */
 export interface ModelInfo {
   id: string;
-  contextTokens: number;
 }
 
 /** 一个模型服务：一组地址和密钥，以及从这个服务加载的模型；密钥单独保存，不在这里。 */
@@ -27,9 +26,6 @@ export interface Provider {
   models: ModelInfo[];
 }
 
-/** 新加载的模型默认使用的最大上下文（64K）。 */
-export const DEFAULT_CONTEXT_TOKENS = 65536;
-
 /** 当前已实现的任务、配置和凭据 RPC；请求 id 由调用方生成，用于对应返回结果。 */
 export type RpcRequest =
   | { id: string; method: "turn.list"; params: { threadId: string; afterSequence?: number; limit?: number } }
@@ -37,6 +33,7 @@ export type RpcRequest =
   | { id: string; method: "turn.inputs"; params: { turnId: string; afterId?: number; limit?: number } }
   | { id: string; method: "turn.attempts"; params: { turnId: string; afterSequence?: number; limit?: number } }
   | { id: string; method: "turn.start"; params: { threadId: string; input: string } }
+  | { id: string; method: "turn.steer"; params: { turnId: string; input: string } }
   | { id: string; method: "turn.resume"; params: { turnId: string } }
   | { id: string; method: "turn.interrupt"; params: { turnId: string } }
   | { id: string; method: "config.get"; params: Record<string, never> }
@@ -63,7 +60,7 @@ export type RpcResponse =
 
 /** 已实现方法的返回数据；凭据只返回哪些服务已配置密钥，不返回原文。 */
 export type RpcResult =
-  | Thread | Thread[] | Turn | Turn[] | TurnInput[] | AttemptView[] | AppConfig | string[]
+  | Thread | Thread[] | Turn | Turn[] | TurnInput | TurnInput[] | AttemptView[] | AppConfig | string[]
   | { configured: string[] } | { interrupted: boolean } | null;
 
 /** 轮次的结束状态；interrupted 表示旧执行进程退出，区别于用户主动取消。 */
@@ -129,7 +126,6 @@ export interface ResponseMetrics {
   inputTokens: number | null;
   cachedTokens: number | null;
   outputTokens: number | null;
-  totalTokens: number | null;
 }
 
 /** 工具展示记录；结果为空时尚未保存结果，不代表可以重新执行。 */
@@ -151,6 +147,7 @@ export type TurnNotification =
   | { event: "attempt.updated"; threadId: string; turnId: string; attempt: AttemptView }
   | ({ event: "tool.progress"; threadId: string; turnId: string; attemptId: string; toolId: string } & ToolOutputPreview)
   | { event: "turn.started" | "turn.finished"; turn: Turn }
+  | { event: "turn.input"; threadId: string; turnId: string; input: TurnInput }
   | { event: "message.delta"; threadId: string; turnId: string; itemId: string; contentIndex: number; kind: TextKind; delta: string }
   | { event: "message.completed"; threadId: string; turnId: string; itemId: string; outputIndex: number; parts: MessagePart[] };
 
@@ -166,8 +163,5 @@ export interface AppConfig {
   model: string;
   reasoningEffort: ReasoningEffort;
   providers: Provider[];
-  maxOutputTokens: number;
-  reserveTokens: number;
-  maxStepsPerRun: number;
   maxAutomaticRetries: number;
 }

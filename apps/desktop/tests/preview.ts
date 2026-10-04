@@ -1,17 +1,17 @@
 import { mockIPC } from "@tauri-apps/api/mocks";
 import { emit } from "@tauri-apps/api/event";
-import type { AppConfig, AttemptView, RpcRequest, Thread, Turn, TurnNotification } from "@tilot/protocol";
+import type { AppConfig, AttemptView, RpcRequest, Thread, Turn, TurnInput, TurnNotification } from "@tilot/protocol";
 
 // 仅供浏览器手动验收，不进入应用入口或生产构建，不读取本地真实配置或密钥。
 let config: AppConfig = { providerId: "default", model: "deepseek-flash", reasoningEffort: "high",
-  providers: [{ id: "default", name: "example.invalid", baseURL: "https://example.invalid", models: [{ id: "deepseek-flash", contextTokens: 65536 }] }], maxOutputTokens: 16384, reserveTokens: 4096, maxStepsPerRun: 30, maxAutomaticRetries: 2 };
+  providers: [{ id: "default", name: "example.invalid", baseURL: "https://example.invalid", models: [{ id: "deepseek-flash" }] }], maxAutomaticRetries: 2 };
 // 已配置密钥的服务 id。
 let configured: string[] = [];
 let seq = 0;
 let pickCount = 0;
 const threads: Thread[] = [];
 const turns: Turn[] = [];
-const inputs = new Map<string, string>();
+const inputs = new Map<string, TurnInput[]>();
 const attempts = new Map<string, AttemptView[]>();
 
 /** 模拟本地服务事件，消息顺序和正式协议相同。 */
@@ -46,11 +46,11 @@ async function respond(request: RpcRequest): Promise<unknown> {
       await new Promise((resolve) => setTimeout(resolve, 400));
       return request.params.baseURL.includes("deepseek") ? ["deepseek-flash", "deepseek-pro"] : ["model-a", "model-b", "model-c"];
     case "turn.list": return turns.filter((turn) => turn.threadId === request.params.threadId);
-    case "turn.inputs": return [{ id: 1, turnId: request.params.turnId, content: inputs.get(request.params.turnId), createdAt: Date.now() }];
+    case "turn.inputs": return inputs.get(request.params.turnId) ?? [];
     case "turn.attempts": return attempts.get(request.params.turnId) ?? [];
     case "turn.start": {
       const turn: Turn = { id: crypto.randomUUID(), threadId: request.params.threadId, sequence: turns.length + 1, status: "running", createdAt: Date.now(), finishedAt: null, error: null };
-      turns.push(turn); inputs.set(turn.id, request.params.input);
+      turns.push(turn); inputs.set(turn.id, [{ id: 1, turnId: turn.id, content: request.params.input, createdAt: Date.now() }]);
       await notify({ event: "turn.started", turn });
       // 模拟完整循环；普通对话只有网页读取，项目对话另演示本地工具。
       const { threadId } = turn;
@@ -112,6 +112,9 @@ async function respond(request: RpcRequest): Promise<unknown> {
         () => notify({ event: "attempt.updated", threadId, turnId: turn.id, attempt: { ...first, tools: finalTools() } }),
         ...answer.map((delta) => () => notify({ event: "message.delta", threadId, turnId: turn.id, itemId: `${turn.id}-answer`, contentIndex: 0, kind: "text", delta })),
         () => {
+          const turnInputs = inputs.get(turn.id)!;
+          second.inputThroughId = turnInputs.at(-1)!.id;
+          if (turnInputs.length > 1) second.messages[0]!.parts[0]!.text += "\n\n已将运行中的引导纳入当前任务：\n" + turnInputs.slice(1).map((input) => input.content).join("\n");
           turn.status = "completed"; turn.finishedAt = Date.now();
           attempts.set(turn.id, [{ ...first, tools: finalTools() }, second]);
           return notify({ event: "turn.finished", turn });
@@ -123,6 +126,15 @@ async function respond(request: RpcRequest): Promise<unknown> {
         if (!steps.length) clearInterval(timer);
       }, 500);
       return turn;
+    }
+    case "turn.steer": {
+      const turn = turns.find((turn) => turn.id === request.params.turnId);
+      if (!turn || turn.status !== "running") return null;
+      const saved = inputs.get(turn.id)!;
+      const input = { id: saved.at(-1)!.id + 1, turnId: turn.id, content: request.params.input, createdAt: Date.now() };
+      saved.push(input);
+      await notify({ event: "turn.input", threadId: turn.threadId, turnId: turn.id, input });
+      return input;
     }
     case "turn.interrupt": {
       const turn = turns.find((turn) => turn.id === request.params.turnId)!;

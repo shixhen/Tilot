@@ -78,11 +78,11 @@ function mockClient(events: () => Record<string, unknown>[] = sampleEvents, gate
   return { client, requests };
 }
 
-test("完成一轮并回放历史，冻结输入与配置，终态事件在保存后交付", async (context) => {
+test("首请求保持原输入与冻结配置，补充输入在同一轮后续请求中处理并完整回放", async (context) => {
   const store = openTestStore(context);
   const original = store.getConfig();
-  const config = { ...original, model: "configured-model", maxOutputTokens: 2048, providers: [{ ...original.providers[0]!,
-    models: [{ id: "configured-model", contextTokens: 65536 }, { id: "changed-model", contextTokens: 65536 }] }] };
+  const config = { ...original, model: "configured-model", providers: [{ ...original.providers[0]!,
+    models: [{ id: "configured-model" }, { id: "changed-model" }] }] };
   store.saveConfig(config);
   const thread = store.createThread("连续对话");
   const { client, requests } = mockClient();
@@ -95,7 +95,7 @@ test("完成一轮并回放历史，冻结输入与配置，终态事件在保�
         store.appendTurnInput(event.turn.id, "稍后补充");
         store.updateThreadModel(thread.id, "default", "changed-model", "none");
       } else if (event.type === "response.event" && event.event.type === "response.completed") {
-        assert.equal(store.getTurn(event.turnId)?.status, "completed");
+        assert.equal(store.getTurn(event.turnId)?.status, requests.length === 1 ? "running" : "completed");
         assert.equal(store.history.getAttempt(event.attemptId)?.status, "completed");
         const saved = store.history.getAttempt(event.attemptId)!;
         assert.ok(saved.firstTokenMs !== null && saved.firstTokenMs >= 0);
@@ -109,17 +109,71 @@ test("完成一轮并回放历史，冻结输入与配置，终态事件在保�
   const body = JSON.parse(String(requests[0]!.body));
   assert.equal(body.model, config.model);
   assert.equal(body.instructions, "系统策略");
-  assert.equal(body.max_output_tokens, 2048);
+  assert.equal("max_output_tokens" in body, false);
   assert.deepEqual(body.reasoning, { effort: config.reasoningEffort });
   assert.deepEqual(body.input, [{ role: "user", content: "你好" }]);
   assert.deepEqual(body.tools.map((tool: { name: string }) => tool.name), ["web_fetch"]);
   assert.equal(body.tool_choice, "auto");
+  const steered = JSON.parse(String(requests[1]!.body));
+  assert.equal(steered.model, config.model);
+  assert.deepEqual(steered.reasoning, { effort: config.reasoningEffort });
+  assert.deepEqual(steered.input.slice(2), [{ role: "user", content: "稍后补充" }]);
   await runTurn(store, client, { threadId: thread.id, input: "继续", instructions: "新策略" });
-  const next = JSON.parse(String(requests[1]!.body));
+  const next = JSON.parse(String(requests[2]!.body));
   assert.equal(next.instructions, "新策略");
   assert.equal(next.input[1].type, "message");
-  assert.deepEqual(next.input.slice(2), [{ role: "user", content: "稍后补充" }, { role: "user", content: "继续" }]);
+  assert.deepEqual(next.input[2], { role: "user", content: "稍后补充" });
+  assert.equal(next.input[3].type, "message");
+  assert.deepEqual(next.input[4], { role: "user", content: "继续" });
   assert.equal(requests[0]!.signal?.aborted, true);
+});
+
+test("工具期间的引导在全部配对结果保存后进入下一请求，不中止或重跑已排定工具", async (context) => {
+  const store = openTestStore(context);
+  const project = projectDirectory(context);
+  const thread = store.createThread("工具边界引导", project);
+  let modelRequests = 0;
+  const { client, requests } = mockClient(() => ++modelRequests === 1 ? toolEvents([
+    { name: "write", arguments: JSON.stringify({ path: "one.txt", content: "一" }) },
+    { name: "write", arguments: JSON.stringify({ path: "two.txt", content: "二" }) },
+  ]) : sampleEvents());
+  let appended = false;
+  const turn = await runTurn(store, client, { threadId: thread.id, input: "创建两个文件", instructions: "",
+    onEvent: (event) => {
+      if (!appended && event.type === "tool.updated" && event.runningToolId === null) {
+        appended = true;
+        store.appendTurnInput(event.turnId, "补充：最后用中文说明");
+      }
+    },
+  });
+  assert.equal(turn.status, "completed");
+  assert.equal(readFileSync(join(project, "one.txt"), "utf8"), "一");
+  assert.equal(readFileSync(join(project, "two.txt"), "utf8"), "二");
+  const nextInput = JSON.parse(String(requests[1]!.body)).input;
+  assert.equal(nextInput.filter((item: { type?: string }) => item.type === "function_call_output").length, 2);
+  assert.deepEqual(nextInput.at(-1), { role: "user", content: "补充：最后用中文说明" });
+  assert.equal(store.listTurns(thread.id).length, 1);
+});
+
+test("连续引导超过 30 次模型请求仍在同一轮处理完成", async (context) => {
+  const store = openTestStore(context);
+  const thread = store.createThread("持续引导");
+  const { client, requests } = mockClient();
+  const turn = await runTurn(store, client, { threadId: thread.id, input: "原任务", instructions: "",
+    onEvent: (event) => {
+      if (event.type === "response.event" && event.event.type === "response.output_text.delta" && requests.length <= 32) {
+        store.appendTurnInput(event.turnId, `补充 ${requests.length}`);
+      }
+    },
+  });
+  assert.equal(turn.status, "completed");
+  assert.equal(requests.length, 33);
+  assert.equal(store.listTurns(thread.id).length, 1);
+  const attempts = store.history.listAttempts(turn.id);
+  assert.equal(attempts.length, 33);
+  assert.ok(attempts.every((attempt) => attempt.status === "completed"));
+  assert.equal(attempts.at(-1)!.inputThroughId, store.getLatestTurnInput(turn.id)!.id);
+  assert.equal(store.getLatestTurnInput(turn.id)!.content, "补充 32");
 });
 
 test("失败、截断和断流结束为失败，不重试或登记工具意图", async (context) => {
@@ -352,13 +406,43 @@ test("模型可连续写入、多处编辑并读取文件，差异保存并进�
   assert.deepEqual(JSON.parse(String(calls[1]!.result!.output)), results[1]);
 });
 
-test("请求加载项目根指令和技能元数据，预算超限时不请求模型", async (context) => {
+test("大输入完整发送且不设置输出上限，API 超限错误保存并结束轮次", async (context) => {
+  const store = openTestStore(context);
+  const thread = store.createThread("服务端限制");
+  const input = "中文原文🙂".repeat(10000);
+  let count = 0;
+  const client = createResponsesClient({ apiKey: "local-test-placeholder", baseURL: "http://localhost:1234" }).withOptions({
+    fetch: async (_url, options) => {
+      count++;
+      const body = JSON.parse(String(options?.body));
+      assert.equal("max_output_tokens" in body, false);
+      assert.equal("truncation" in body, false);
+      assert.deepEqual(body.input, [{ role: "user", content: input }]);
+      return new Response(JSON.stringify({ error: { message: "Context length exceeded", type: "invalid_request_error", code: "context_length_exceeded" } }),
+        { status: 400, headers: { "content-type": "application/json" } });
+    },
+  });
+  const turn = await runTurn(store, client, { threadId: thread.id, input, instructions: "原始策略" });
+  assert.equal(turn.status, "failed");
+  assert.match(turn.error!, /400.*Context length exceeded/);
+  assert.equal(count, 1);
+  const attempts = store.history.listAttempts(turn.id);
+  assert.equal(attempts.length, 1);
+  assert.equal(attempts[0]!.status, "failed");
+  assert.equal(attempts[0]!.error, turn.error);
+  assert.equal(store.listTurnInputs(turn.id)[0]!.content, input);
+});
+
+test("请求加载 Tilot 技能元数据并可按需读取正文", async (context) => {
   const store = openTestStore(context);
   const directory = projectDirectory(context);
-  mkdirSync(join(directory, ".codex/skills/demo"), { recursive: true });
+  mkdirSync(join(directory, ".tilot/skills/demo"), { recursive: true });
   writeFileSync(join(directory, "AGENTS.md"), "只修改当前项目", "utf8");
-  writeFileSync(join(directory, ".codex/skills/demo/SKILL.md"), "---\nname: demo\ndescription: 示例技能\n---\n不自动发送的技能正文", "utf8");
-  const { client, requests } = mockClient();
+  writeFileSync(join(directory, ".tilot/skills/demo/SKILL.md"), "---\nname: demo\ndescription: 示例技能\n---\n不自动发送的技能正文", "utf8");
+  let count = 0;
+  const { client, requests } = mockClient(() => ++count === 1 ? toolEvents([
+    { name: "read", arguments: '{"path":".tilot/skills/demo/SKILL.md"}' },
+  ]) : sampleEvents());
   const thread = store.createThread("项目上下文", directory);
   const first = await runTurn(store, client, { threadId: thread.id, input: "你好", instructions: "基础策略" });
   assert.equal(first.status, "completed");
@@ -366,16 +450,12 @@ test("请求加载项目根指令和技能元数据，预算超限时不请求�
   assert.match(sent.instructions, /基础策略/);
   assert.match(sent.instructions, /只修改当前项目/);
   assert.match(sent.instructions, /示例技能/);
+  assert.ok(sent.instructions.includes(".tilot/skills/demo/SKILL.md"));
   assert.doesNotMatch(sent.instructions, /不自动发送的技能正文/);
-  const config = store.getConfig();
-  store.saveConfig({ ...config, providers: config.providers.map((provider) => ({ ...provider,
-    models: provider.models.map((model) => ({ ...model, contextTokens: config.maxOutputTokens + config.reserveTokens + 1 })) })) });
-  const stopped = await runTurn(store, client, { threadId: thread.id, input: "继续", instructions: "基础策略" });
-  assert.equal(stopped.status, "failed");
-  assert.match(stopped.error!, /上下文超出预算/);
-  assert.equal(requests.length, 1);
-  assert.deepEqual(store.history.listAttempts(stopped.id), []);
-  assert.equal(store.listTurnInputs(stopped.id)[0]!.content, "继续");
+  const nextInput = JSON.parse(String(requests[1]!.body)).input;
+  const result = JSON.parse(nextInput.find((item: { type?: string }) => item.type === "function_call_output").output);
+  assert.equal(result.status, "ok");
+  assert.match(result.data.content, /不自动发送的技能正文/);
 });
 
 test("未知工具、非法参数及读取失败都有配对结果，模型可继续作答", async (context) => {
@@ -397,23 +477,30 @@ test("未知工具、非法参数及读取失败都有配对结果，模型可�
   assert.equal(requests.length, 2);
 });
 
-test("达到步骤限制不执行末次命令，历史配对完整，下一轮仍能继续", async (context) => {
+test("超过 30 次模型请求仍执行后续工具，保存全部结果并正常完成", async (context) => {
   const store = openTestStore(context);
-  store.saveConfig({ ...store.getConfig(), maxStepsPerRun: 1 });
   const directory = projectDirectory(context);
-  const thread = store.createThread("步骤限制", directory);
-  const { client, requests } = mockClient(() => toolEvents([
-    { name: "shell", arguments: '{"command":"Set-Content blocked.txt changed"}' },
-  ]));
+  writeFileSync(join(directory, "source.txt"), "内容", "utf8");
+  const thread = store.createThread("长工具循环", directory);
+  let count = 0;
+  const { client, requests } = mockClient(() => {
+    count++;
+    if (count > 36) return sampleEvents();
+    return toolEvents([count === 31
+      ? { name: "write", arguments: '{"path":"after-30.txt","content":"仍执行"}' }
+      : { name: "read", arguments: '{"path":"source.txt"}' }]);
+  });
   const turn = await runTurn(store, client, { threadId: thread.id, input: "检查", instructions: "" });
-  assert.equal(turn.status, "failed");
-  assert.match(turn.error!, /最大模型请求次数/);
-  assert.equal(requests.length, 1);
-  assert.equal(existsSync(join(directory, "blocked.txt")), false);
-  const result = store.history.listToolCalls(store.history.listAttempts(turn.id)[0]!.id)[0]!.result!;
-  assert.equal(JSON.parse(String(result.output)).status, "not_executed");
-  const next = await runTurn(store, mockClient().client, { threadId: thread.id, input: "继续", instructions: "" });
-  assert.equal(next.status, "completed");
+  assert.equal(turn.status, "completed");
+  assert.equal(requests.length, 37);
+  assert.equal(readFileSync(join(directory, "after-30.txt"), "utf8"), "仍执行");
+  const attempts = store.history.listAttempts(turn.id);
+  assert.equal(attempts.length, 37);
+  const calls = attempts.flatMap((attempt) => store.history.listToolCalls(attempt.id));
+  assert.equal(calls.length, 36);
+  assert.ok(calls.every((call) => JSON.parse(String(call.result!.output)).status === "ok"));
+  const lastInput = JSON.parse(String(requests.at(-1)!.body)).input;
+  assert.equal(lastInput.filter((item: { type?: string }) => item.type === "function_call_output").length, 36);
 });
 
 test("重复历史调用标识不会再次执行工具；工具后取消不会再次请求模型", async (context) => {

@@ -53,7 +53,7 @@ test("版本 1 数据库升级后保留配置；迁移失败时版本号不会�
   const directory = temporaryDirectory(context);
   const store = new Store(directory);
   const original = store.getConfig();
-  const config = { ...original, model: "saved-model", providers: [{ ...original.providers[0]!, models: [{ id: "saved-model", contextTokens: 131072 }] }] };
+  const config = { ...original, model: "saved-model", providers: [{ ...original.providers[0]!, models: [{ id: "saved-model" }] }] };
   try {
     store.saveConfig(config);
   } finally {

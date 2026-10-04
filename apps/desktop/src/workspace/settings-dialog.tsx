@@ -11,15 +11,13 @@ interface ProviderCardProps {
   savedKey: boolean;
   /** 不能删除的原因；可以删除时为空。 */
   lockReason: string;
-  /** 最大上下文的最小值（K），必须大于输出上限与预留量之和。 */
-  minimumK: number;
   request: Request;
   update: ReturnType<typeof useSettings>["update"];
   remove: (id: string) => void;
 }
 
-/** 一个服务：名称、地址、密钥，以及从它加载的模型和每个模型的最大上下文。 */
-function ProviderCard({ draft, savedKey, lockReason, minimumK, request, update, remove }: ProviderCardProps) {
+/** 一个服务：名称、地址、密钥，以及从它加载的模型。 */
+function ProviderCard({ draft, savedKey, lockReason, request, update, remove }: ProviderCardProps) {
   const loader = useModelLoader(draft, savedKey, request, update);
   const url = draft.baseURL.trim();
   const loaded = draft.loadedURL === url && draft.models.length > 0;
@@ -52,20 +50,14 @@ function ProviderCard({ draft, savedKey, lockReason, minimumK, request, update, 
     {loaded && <ul className="max-h-48 divide-y overflow-y-auto rounded-lg border">
       {draft.models.map((model) => <li key={model.id} className="flex items-center gap-3 px-3 py-1.5 text-sm">
         <span className="min-w-0 flex-1 truncate" title={model.id}>{model.id}</span>
-        <Input type="number" required min={minimumK} step={1} className="h-7 w-20 text-right" aria-label={`${model.id} 的最大上下文（K）`}
-          value={model.contextTokens ? model.contextTokens / 1024 : ""}
-          onChange={(event) => update(draft.id, (current) => ({ ...current,
-            models: current.models.map((item) => item.id === model.id ? { ...item, contextTokens: Number(event.target.value) * 1024 } : item) }))} />
-        <span className="text-muted-foreground">K</span>
       </li>)}
     </ul>}
   </section>;
 }
 
-/** 连接设置：可添加多个服务，每个服务填写地址和密钥后自动加载模型，并为每个模型设置最大上下文。 */
+/** 连接设置：可添加多个服务，每个服务填写地址和密钥后自动加载模型。 */
 export function SettingsDialog(props: SettingsOptions) {
   const form = useSettings(props);
-  const minimumK = Math.floor((props.config.maxOutputTokens + props.config.reserveTokens) / 1024) + 1;
 
   return <Dialog open onOpenChange={(open) => { if (!open && !form.busy) props.onClose(); }}>
     <DialogContent showCloseButton={false} className="max-h-[calc(100dvh-2rem)] overflow-y-auto sm:max-w-xl">
@@ -76,7 +68,7 @@ export function SettingsDialog(props: SettingsOptions) {
         <fieldset disabled={form.busy} className="grid gap-3">
           {form.drafts.map((draft) => {
             const original = props.config.providers.find((provider) => provider.id === draft.id);
-            return <ProviderCard key={draft.id} draft={draft} minimumK={minimumK} request={props.request} update={form.update} remove={form.remove}
+            return <ProviderCard key={draft.id} draft={draft} request={props.request} update={form.update} remove={form.remove}
               savedKey={props.configured.includes(draft.id) && original?.baseURL === draft.baseURL.trim()}
               lockReason={props.used.includes(draft.id) ? "仍有对话在使用这个服务，不能删除" : form.drafts.length === 1 ? "至少保留一个服务" : ""} />;
           })}

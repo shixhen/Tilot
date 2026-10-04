@@ -1,6 +1,6 @@
 import type OpenAI from "openai";
 import type { Response, ResponseStreamEvent } from "openai/resources/responses/responses";
-import { appendProjectInstructions, buildContext, checkContextBudget, loadProjectContext } from "@tilot/context";
+import { appendProjectInstructions, buildContext, loadProjectContext } from "@tilot/context";
 import { streamResponse } from "@tilot/responses";
 import { getResponseToolCallsFromResponse } from "@tilot/responses/output";
 import type { AppConfig, AttemptCompletion, Store, Turn } from "@tilot/store";
@@ -32,7 +32,7 @@ interface AttemptResult {
   terminal: ResponseStreamEvent | undefined;
 }
 
-/** 执行模型与工具循环；冻结配置和首条输入，不自动重试，存储与终态通知错误向上抛出。 */
+/** 执行模型与工具循环；冻结配置，后续请求吸收当前轮次的引导，不自动重试。 */
 export async function runTurn(store: Store, client: OpenAI, options: RunTurnOptions): Promise<Turn> {
   options.signal?.throwIfAborted();
   const turn = store.startTurn(options.threadId, options.input);
@@ -50,8 +50,10 @@ export async function runTurn(store: Store, client: OpenAI, options: RunTurnOpti
     return store.finishTurn(turn.id, options.signal?.aborted ? "cancelled" : "failed", errorMessage(error));
   }
 
-  for (let step = 1; step <= config.maxStepsPerRun; step++) {
-    const { completion, attemptId, terminal } = await requestAttempt(store, client, turn, input.id, config, workspace, tools, options);
+  let inputThroughId = input.id;
+  // 不限制请求次数；模型完成任务或执行被取消、失败时结束。
+  while (true) {
+    const { completion, attemptId, terminal } = await requestAttempt(store, client, turn, inputThroughId, config, workspace, tools, options);
     let finished: Turn | undefined;
     if (completion.status !== "completed") {
       const status = completion.status === "cancelled" ? "cancelled" : "failed";
@@ -59,13 +61,12 @@ export async function runTurn(store: Store, client: OpenAI, options: RunTurnOpti
     } else {
       const calls = getResponseToolCallsFromResponse(completion.response!);
       if (calls.length === 0) {
-        finished = store.finishTurn(turn.id, "completed");
+        if (options.signal?.aborted) finished = store.finishTurn(turn.id, "cancelled");
+        else if (store.getLatestTurnInput(turn.id)!.id <= inputThroughId) finished = store.finishTurn(turn.id, "completed");
       } else {
         const records = store.history.listToolCalls(attemptId!);
-        // 最后一步不再执行无法交回模型的命令；仍保存配对结果，保证历史可继续。
         for (const [index, call] of calls.entries()) {
-          const skipped = options.signal?.aborted ? "轮次已取消，工具未执行。"
-            : step === config.maxStepsPerRun ? "已达到最大模型请求次数，工具未执行。" : null;
+          const skipped = options.signal?.aborted ? "轮次已取消，工具未执行。" : null;
           if (!skipped) await notifyTool(attemptId!, records[index]!.id);
           const controller = new AbortController();
           let progressError: unknown;
@@ -91,7 +92,6 @@ export async function runTurn(store: Store, client: OpenAI, options: RunTurnOpti
           await notifyTool(attemptId!, null);
         }
         if (options.signal?.aborted) finished = store.finishTurn(turn.id, "cancelled");
-        else if (step === config.maxStepsPerRun) finished = store.finishTurn(turn.id, "failed", "已达到最大模型请求次数。");
       }
     }
     // 成功响应和全部工具结果已经保存；通知失败不能改写响应或重跑工具。
@@ -102,8 +102,9 @@ export async function runTurn(store: Store, client: OpenAI, options: RunTurnOpti
       throw error;
     }
     if (finished) return finished;
+    // 首次处理原输入；后续请求在模型及工具完整收尾后吸收已保存的补充输入。
+    inputThroughId = store.getLatestTurnInput(turn.id)!.id;
   }
-  throw new Error("maxStepsPerRun 必须大于零。");
 
   /** 工具通知失败时结束轮次并向上传递错误，已执行的工具不重跑。 */
   async function notifyTool(attemptId: string, runningToolId: string | null): Promise<void> {
@@ -133,7 +134,6 @@ async function requestAttempt(
       const project = await loadProjectContext(workspace.rootPath, options.signal);
       context.instructions = appendProjectInstructions(context.instructions, project);
     }
-    checkContextBudget(context, tools.definitions, config);
     options.signal?.throwIfAborted();
   } catch (error) {
     return { attemptId, terminal, completion: { status: options.signal?.aborted ? "cancelled" : "failed", error: errorMessage(error) } };
@@ -150,7 +150,6 @@ async function requestAttempt(
     }
     for await (const event of streamResponse(client, {
       ...context, model: config.model, reasoning: { effort: config.reasoningEffort },
-      max_output_tokens: config.maxOutputTokens,
       tools: tools.definitions, tool_choice: tools.definitions.length ? "auto" : "none",
     }, options.signal)) {
       // 创建事件不是 token；推理、正文、拒绝文本和工具参数的首个非空增量均算首 token。

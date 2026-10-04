@@ -1,0 +1,357 @@
+{
+  "date": "2026-10-02",
+  "node": "v24.14.0",
+  "platform": "win32",
+  "scope": "正式 Server 子进程与真实 DeepSeek API；不含原生桌面交互",
+  "status": "passed",
+  "endpoint": "https://api.deepseek.com",
+  "model": "deepseek-flash",
+  "responseModels": [
+    "deepseek-flash"
+  ],
+  "reasoningEffort": "high",
+  "maxOutputTokens": 4096,
+  "maxStepsPerRun": 12,
+  "attemptCount": 20,
+  "reasoningItems": 12,
+  "usage": {
+    "inputTokens": 65797,
+    "cachedTokens": 61312,
+    "outputTokens": 4467,
+    "attemptsWithoutUsage": 1
+  },
+  "results": [
+    {
+      "name": "ordinary-web-fetch-and-pagination",
+      "status": "completed",
+      "error": null,
+      "durationMs": 5769,
+      "attempts": [
+        {
+          "status": "completed",
+          "tools": [
+            "web_fetch"
+          ],
+          "metrics": {
+            "firstTokenMs": 491.25840000000005,
+            "tokensPerSecond": 400.2465963752115,
+            "inputTokens": 1207,
+            "cachedTokens": 1024,
+            "outputTokens": 72,
+            "totalTokens": 1279
+          }
+        },
+        {
+          "status": "completed",
+          "tools": [
+            "web_fetch"
+          ],
+          "metrics": {
+            "firstTokenMs": 589.817,
+            "tokensPerSecond": 293.1860988800007,
+            "inputTokens": 1417,
+            "cachedTokens": 1152,
+            "outputTokens": 103,
+            "totalTokens": 1520
+          }
+        },
+        {
+          "status": "completed",
+          "tools": [],
+          "metrics": {
+            "firstTokenMs": 480.06100000000015,
+            "tokensPerSecond": 238.13882555498904,
+            "inputTokens": 1642,
+            "cachedTokens": 1408,
+            "outputTokens": 787,
+            "totalTokens": 2429
+          }
+        }
+      ],
+      "reasoningDeltas": 426,
+      "textDeltas": 401,
+      "shellProgressEvents": 0
+    },
+    {
+      "name": "project-seven-tools-and-skill",
+      "status": "completed",
+      "error": null,
+      "durationMs": 9154,
+      "attempts": [
+        {
+          "status": "completed",
+          "tools": [
+            "ls",
+            "find",
+            "read",
+            "grep"
+          ],
+          "metrics": {
+            "firstTokenMs": 757.1765999999998,
+            "tokensPerSecond": 316.70332094671414,
+            "inputTokens": 3389,
+            "cachedTokens": 3200,
+            "outputTokens": 147,
+            "totalTokens": 3536
+          }
+        },
+        {
+          "status": "completed",
+          "tools": [
+            "read",
+            "read"
+          ],
+          "metrics": {
+            "firstTokenMs": 413.02509999999984,
+            "tokensPerSecond": 217.8392572129822,
+            "inputTokens": 4055,
+            "cachedTokens": 3456,
+            "outputTokens": 272,
+            "totalTokens": 4327
+          }
+        },
+        {
+          "status": "completed",
+          "tools": [
+            "edit"
+          ],
+          "metrics": {
+            "firstTokenMs": 471.65020000000004,
+            "tokensPerSecond": 222.32188530575647,
+            "inputTokens": 4559,
+            "cachedTokens": 4224,
+            "outputTokens": 110,
+            "totalTokens": 4669
+          }
+        },
+        {
+          "status": "completed",
+          "tools": [
+            "shell"
+          ],
+          "metrics": {
+            "firstTokenMs": 859.6676000000007,
+            "tokensPerSecond": 495.34276708579097,
+            "inputTokens": 4796,
+            "cachedTokens": 4608,
+            "outputTokens": 49,
+            "totalTokens": 4845
+          }
+        },
+        {
+          "status": "completed",
+          "tools": [
+            "write"
+          ],
+          "metrics": {
+            "firstTokenMs": 370.64789999999994,
+            "tokensPerSecond": 304.36841516059917,
+            "inputTokens": 4955,
+            "cachedTokens": 4736,
+            "outputTokens": 351,
+            "totalTokens": 5306
+          }
+        },
+        {
+          "status": "completed",
+          "tools": [],
+          "metrics": {
+            "firstTokenMs": 959.9588999999996,
+            "tokensPerSecond": 294.53479601353973,
+            "inputTokens": 5337,
+            "cachedTokens": 5120,
+            "outputTokens": 279,
+            "totalTokens": 5616
+          }
+        }
+      ],
+      "reasoningDeltas": 326,
+      "textDeltas": 307,
+      "shellProgressEvents": 1
+    },
+    {
+      "name": "restart-history-and-shell-log",
+      "status": "completed",
+      "error": null,
+      "durationMs": 3293,
+      "attempts": [
+        {
+          "status": "completed",
+          "tools": [
+            "read",
+            "read"
+          ],
+          "metrics": {
+            "firstTokenMs": 641.7527999999999,
+            "tokensPerSecond": 147.34337856131486,
+            "inputTokens": 5676,
+            "cachedTokens": 5504,
+            "outputTokens": 145,
+            "totalTokens": 5821
+          }
+        },
+        {
+          "status": "completed",
+          "tools": [],
+          "metrics": {
+            "firstTokenMs": 377.5750000000003,
+            "tokensPerSecond": 295.36795623674266,
+            "inputTokens": 6154,
+            "cachedTokens": 5760,
+            "outputTokens": 368,
+            "totalTokens": 6522
+          }
+        }
+      ],
+      "reasoningDeltas": 55,
+      "textDeltas": 362,
+      "shellProgressEvents": 0
+    },
+    {
+      "name": "restart-web-cache",
+      "status": "completed",
+      "error": null,
+      "durationMs": 3125,
+      "attempts": [
+        {
+          "status": "completed",
+          "tools": [
+            "web_fetch"
+          ],
+          "metrics": {
+            "firstTokenMs": 543.3237000000004,
+            "tokensPerSecond": 273.9308830514897,
+            "inputTokens": 2463,
+            "cachedTokens": 2304,
+            "outputTokens": 229,
+            "totalTokens": 2692
+          }
+        },
+        {
+          "status": "completed",
+          "tools": [],
+          "metrics": {
+            "firstTokenMs": 694.1352999999999,
+            "tokensPerSecond": 255.4258159490145,
+            "inputTokens": 2844,
+            "cachedTokens": 2688,
+            "outputTokens": 248,
+            "totalTokens": 3092
+          }
+        }
+      ],
+      "reasoningDeltas": 136,
+      "textDeltas": 247,
+      "shellProgressEvents": 0
+    },
+    {
+      "name": "real-stream-cancellation",
+      "status": "cancelled",
+      "error": null,
+      "durationMs": 445,
+      "attempts": [
+        {
+          "status": "cancelled",
+          "tools": [],
+          "metrics": {
+            "firstTokenMs": 434.6881000000003,
+            "tokensPerSecond": null,
+            "inputTokens": null,
+            "cachedTokens": null,
+            "outputTokens": null,
+            "totalTokens": null
+          }
+        }
+      ],
+      "reasoningDeltas": 1,
+      "textDeltas": 0,
+      "shellProgressEvents": 0,
+      "cancellationMs": 12
+    },
+    {
+      "name": "crash-and-resume-without-rewriting",
+      "status": "completed",
+      "error": null,
+      "durationMs": 6306,
+      "attempts": [
+        {
+          "status": "completed",
+          "tools": [
+            "read"
+          ],
+          "metrics": {
+            "firstTokenMs": 648.2441,
+            "tokensPerSecond": 224.42394066164266,
+            "inputTokens": 3713,
+            "cachedTokens": 3456,
+            "outputTokens": 538,
+            "totalTokens": 4251
+          }
+        },
+        {
+          "status": "completed",
+          "tools": [],
+          "metrics": {
+            "firstTokenMs": 604.5803000000001,
+            "tokensPerSecond": 231.16367409546842,
+            "inputTokens": 4306,
+            "cachedTokens": 4096,
+            "outputTokens": 602,
+            "totalTokens": 4908
+          }
+        }
+      ],
+      "reasoningDeltas": 987,
+      "textDeltas": 110,
+      "shellProgressEvents": 0,
+      "interruptedStatus": "interrupted",
+      "pendingToolResults": 0
+    },
+    {
+      "name": "real-output-token-limit",
+      "status": "failed",
+      "error": "模型响应未完成：max_output_tokens。",
+      "durationMs": 501,
+      "attempts": [
+        {
+          "status": "incomplete",
+          "tools": [],
+          "metrics": {
+            "firstTokenMs": 378.20790000000034,
+            "tokensPerSecond": 138.0962738172914,
+            "inputTokens": 1165,
+            "cachedTokens": 1024,
+            "outputTokens": 16,
+            "totalTokens": 1181
+          }
+        }
+      ],
+      "reasoningDeltas": 0,
+      "textDeltas": 16,
+      "shellProgressEvents": 0
+    },
+    {
+      "name": "continue-after-incomplete-without-reasoning",
+      "status": "completed",
+      "error": null,
+      "durationMs": 787,
+      "attempts": [
+        {
+          "status": "completed",
+          "tools": [],
+          "metrics": {
+            "firstTokenMs": 676.8544000000002,
+            "tokensPerSecond": 60.81843366178657,
+            "inputTokens": 1187,
+            "cachedTokens": 1024,
+            "outputTokens": 6,
+            "totalTokens": 1193
+          }
+        }
+      ],
+      "reasoningDeltas": 0,
+      "textDeltas": 6,
+      "shellProgressEvents": 0
+    }
+  ]
+}

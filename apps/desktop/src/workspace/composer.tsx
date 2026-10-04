@@ -6,6 +6,7 @@ import { Button } from "../components/ui/button";
 import { Card, CardContent, CardFooter } from "../components/ui/card";
 import { Textarea } from "../components/ui/textarea";
 import { ModelPicker } from "./model-picker";
+import { PendingInputs } from "./pending-inputs";
 
 /** Codex 风格输入框：圆角卡片内上方输入、下方工具栏，保留中文输入法和多行编辑行为。 */
 export function Composer({ state }: { state: WorkspaceState }) {
@@ -34,6 +35,8 @@ export function Composer({ state }: { state: WorkspaceState }) {
   }, []);
 
   return <form className="min-w-0 w-full" onSubmit={(event) => void state.submit(event)}>
+    <PendingInputs queue={state.chat.queue} running={!!state.running} connected={state.chat.connected}
+      onSteer={(id) => void state.chat.steer(id)} onRemove={state.chat.removeQueued} onResume={state.chat.resumeQueue} />
     <Card className="min-w-0 gap-0 rounded-[20px] border-0 py-0 shadow-lg shadow-black/20">
       <CardContent className="min-w-0 px-4 pt-3.5 pb-1">
         <Textarea ref={editor} rows={1} value={state.draft} disabled={state.busy} aria-label="消息" placeholder="描述任务，或提出一个问题…"
@@ -61,9 +64,8 @@ export function Composer({ state }: { state: WorkspaceState }) {
             ? <ModelPicker providerId={state.choice.providerId} model={state.choice.model} reasoningEffort={state.choice.reasoningEffort}
               providers={state.chat.config.providers} onChange={state.chooseModel} />
             : <span className="px-2.5 text-sm text-muted-foreground">{state.chat.error ? "未连接" : "连接中"}</span>}
-          {state.running
-            ? <Button type="button" size="icon-sm" className="rounded-full bg-foreground text-background hover:bg-foreground/85" aria-label="停止生成" title="停止生成" disabled={!state.chat.connected} onClick={() => void state.chat.stop(state.running!.turn.id)}><Square className="size-3 fill-current" /></Button>
-            : <Button type="submit" size="icon-sm" className="rounded-full bg-brand text-white hover:bg-brand/90 disabled:bg-white/10 disabled:text-muted-foreground disabled:opacity-100" aria-label="发送消息" title="发送 (Enter)" disabled={!state.canSend}>{state.busy ? <LoaderCircle className="animate-spin" /> : <ArrowUp />}</Button>}
+          {state.running && <Button type="button" size="icon-sm" className="rounded-full bg-foreground text-background hover:bg-foreground/85" aria-label="停止生成" title="停止生成" disabled={!state.chat.connected} onClick={() => void state.chat.stop(state.running!.turn.id)}><Square className="size-3 fill-current" /></Button>}
+          {(!state.running || !!state.draft.trim()) && <Button type="submit" size="icon-sm" className="rounded-full bg-brand text-white hover:bg-brand/90 disabled:bg-white/10 disabled:text-muted-foreground disabled:opacity-100" aria-label={state.running ? "加入等待区" : "发送消息"} title={state.running ? "加入等待区 (Enter)" : "发送 (Enter)"} disabled={!state.canSend}>{state.busy ? <LoaderCircle className="animate-spin" /> : <ArrowUp />}</Button>}
         </div>
       </CardFooter>
     </Card>

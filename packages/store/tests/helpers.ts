@@ -5,8 +5,28 @@ import { dirname, join, resolve } from "node:path";
 import type { TestContext } from "node:test";
 import type Database from "better-sqlite3";
 
+/** 把测试数据库退回版本 8，恢复旧的输入与输出 Token 限制。 */
+export function downgradeToVersion8(database: Database.Database): void {
+  database.exec(`
+    ALTER TABLE app_config ADD COLUMN maxOutputTokens INTEGER NOT NULL DEFAULT 16384 CHECK (maxOutputTokens > 0);
+    ALTER TABLE app_config ADD COLUMN reserveTokens INTEGER NOT NULL DEFAULT 4096 CHECK (reserveTokens >= 0);
+    ALTER TABLE provider_models ADD COLUMN contextTokens INTEGER NOT NULL DEFAULT 65536 CHECK (contextTokens > 0);
+    PRAGMA user_version = 8;
+  `);
+}
+
+/** 把测试数据库退回版本 7，恢复旧的每轮请求次数配置。 */
+export function downgradeToVersion7(database: Database.Database): void {
+  downgradeToVersion8(database);
+  database.exec(`
+    ALTER TABLE app_config ADD COLUMN maxStepsPerRun INTEGER NOT NULL DEFAULT 30 CHECK (maxStepsPerRun > 0);
+    PRAGMA user_version = 7;
+  `);
+}
+
 /** 把测试数据库退回版本 5 的结构：default 服务的模型回到 models 表，恢复全局 baseURL，删除服务表和任务的服务列。 */
 export function downgradeToVersion5(database: Database.Database): void {
+  downgradeToVersion7(database);
   database.exec(`
     ALTER TABLE model_attempts DROP COLUMN firstTokenMs;
     ALTER TABLE model_attempts DROP COLUMN durationMs;

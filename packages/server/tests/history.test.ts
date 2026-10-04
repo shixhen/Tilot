@@ -21,7 +21,7 @@ test("工具历史保留调用参数、输出位置与已保存结果", (context
   const call = store.history.listToolCalls(attempt.id)[0]!;
   assert.equal(listAttemptViews(store, turn.id)[0]!.tools[0]!.output, null);
   assert.deepEqual(listAttemptViews(store, turn.id)[0]!.metrics, {
-    firstTokenMs: null, tokensPerSecond: null, inputTokens: null, cachedTokens: null, outputTokens: null, totalTokens: null,
+    firstTokenMs: null, tokensPerSecond: null, inputTokens: null, cachedTokens: null, outputTokens: null,
   });
   store.history.saveToolResult(call.id, { type: "function_call_output", call_id: call.callId, output: "文件内容" });
   assert.deepEqual(listAttemptViews(store, turn.id)[0]!.tools, [{
@@ -104,7 +104,7 @@ test("历史查询保留原文、输入边界和消息位置，只返回展示�
   const expected = [{
     id: saved.id, turnId: turn.id, sequence: 1, inputThroughId: input.id, status: "completed",
     error: null, createdAt: saved.createdAt, finishedAt: saved.finishedAt, tools: [],
-    metrics: { firstTokenMs: 250, tokensPerSecond: 20, inputTokens: 100, cachedTokens: 60, outputTokens: 20, totalTokens: 120 },
+    metrics: { firstTokenMs: 250, tokensPerSecond: 20, inputTokens: 100, cachedTokens: 60, outputTokens: 20 },
     messages: [
       { itemId: "reasoning_1", outputIndex: 0, parts: [{ kind: "reasoning", text: "推理正文" }] },
       { itemId: "message_1", outputIndex: 1, parts: [{ kind: "text", text: "正文" }, { kind: "refusal", text: "拒绝部分" }] },

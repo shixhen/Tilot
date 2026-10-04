@@ -1,6 +1,6 @@
 # DeepSeek Responses 接入规范
 
-API 核查日期：2026-09-18
+API 核查日期：2026-10-04。正式 Server 链路此前已通过 deepseek-flash 真实联调，结果与复跑方式见 [联调记录](deepseek-live-testing.md)。本次取消应用 Token 限制的改动以本地测试验证，未新增付费请求。
 
 ## 1. 协议与配置
 
@@ -14,16 +14,13 @@ Responses 模块位于 `packages/responses`，使用 OpenAI SDK 的 `client.resp
   "reasoningEffort": "high",
   "providers": [{
     "id": "default", "name": "api.deepseek.com", "baseURL": "https://api.deepseek.com",
-    "models": [{ "id": "deepseek-flash", "contextTokens": 65536 }]
+    "models": [{ "id": "deepseek-flash" }]
   }],
-  "maxOutputTokens": 16384,
-  "reserveTokens": 4096,
-  "maxStepsPerRun": 30,
   "maxAutomaticRetries": 2
 }
 ```
 
-`providers` 是用户添加的模型服务（名称、地址），保存在 providers 表中；每个服务的模型从它的 `/models` 加载，连同各自的最大上下文保存在 provider_models 表中，更换服务地址后该服务的模型整体替换。`providerId`、`model` 与 `reasoningEffort` 是新任务的默认值，每个任务另外保存自己的服务、模型和思考强度；仍被任务使用的服务不能删除。密钥按服务 id 保存在 credentials.json，并记录保存时的地址，服务改地址后旧密钥不再使用，删除服务时一并删除。普通配置保存在 SQLite 的 app_config 表中，数据库结构版本由 `PRAGMA user_version` 管理。首版协议固定为 Responses，不重复保存 provider/api 标记；凭据不包含在此配置中。
+`providers` 是用户添加的模型服务（名称、地址），保存在 providers 表中；每个服务的模型从它的 `/models` 加载，名称保存在 provider_models 表中，更换服务地址后该服务的模型整体替换。`providerId`、`model` 与 `reasoningEffort` 是新任务的默认值，每个任务另外保存自己的服务、模型和思考强度；仍被任务使用的服务不能删除。密钥按服务 id 保存在 credentials.json，并记录保存时的地址，服务改地址后旧密钥不再使用，删除服务时一并删除。普通配置保存在 SQLite 的 app_config 表中，数据库结构版本由 `PRAGMA user_version` 管理。首版协议固定为 Responses，不重复保存 provider/api 标记；凭据不包含在此配置中。
 
 | 应用数据 | 请求字段 |
 | --- | --- |
@@ -31,11 +28,10 @@ Responses 模块位于 `packages/responses`，使用 OpenAI SDK 的 `client.resp
 | 系统策略 | instructions，每次请求都发送 |
 | 本次所需历史 | input，按顺序排列消息、推理、调用及结果 |
 | reasoningEffort | reasoning.effort |
-| maxOutputTokens | max_output_tokens |
 | 工具声明 | tools 中的平铺 function 对象 |
 | 流式开关 | stream: true |
 
-“快速”对应 effort=none，“标准”对应 high；高级设置提供 low/max。输出预算包含推理与正文。模型 ID、能力和核查日期使用版本化配置，记录实际响应 model，不自动改换用户选择。[推理参数][A2]、[模型说明][A3]
+“快速”对应 effort=none，“标准”对应 high；高级设置提供 low/max。请求省略可选的 max_output_tokens，由服务决定默认输出上限；应用也不设置输入预算或预留量。模型 ID、能力和核查日期使用版本化配置，记录实际响应 model，不自动改换用户选择。[请求参数][A2]、[模型说明][A3]
 
 不发送 Chat Completions 的 messages、thinking、reasoning_effort 或 max_tokens 字段，不实现该协议的兼容分支。Tauri Client 不请求模型 API。服务地址由用户配置，模型不能更改 endpoint；地址支持 HTTP/HTTPS，不能包含凭据、查询参数或片段。关闭 HTTP 重定向，HTTPS 请求保持 TLS 校验。下文的兼容性约束针对 DeepSeek，自定义服务的能力需另行核对。
 
@@ -55,7 +51,7 @@ DeepSeek 的实现无服务端会话存储，不支持 previous_response_id、co
 
 parallel_tool_calls 和 max_tool_calls 被服务忽略，调用数量及串行策略由 Agent Core 控制，通过 Tool 执行。instructions 用于系统策略；该实现将 developer 角色作为 user 处理，不能靠它承载更高优先级指令。[兼容表][A4]
 
-首版按当前产品决定声明 read、write、edit、shell 四个 function 工具；shell 在 Windows 上使用 PowerShell。不使用 custom apply_patch 或服务端内置工具。对未支持的参数主动拒绝或省略，不以“服务端未报错”判断功能生效。
+项目任务声明 read、write、edit、shell、ls、find、grep、web_fetch 八个 function 工具；普通任务只声明 web_fetch。shell 在 Windows 上使用 PowerShell。不使用 custom apply_patch 或服务端内置工具。工具描述与参数直接写在工具声明中。对未支持的参数主动拒绝或省略，不以“服务端未报错”判断功能生效。
 
 ## 3. 输出项与工具回放
 
@@ -107,7 +103,7 @@ Responses 的 function 字段位于工具对象顶层。以下仅示意读取工
 1. 保留待回放响应中的 reasoning 项及其正文，不以 summary 或 encrypted_content 替代。
 2. 新用户轮次、界面折叠或重连不删除 Responses 回放所需字段。
 3. 以一个完整模型响应及其全部工具结果为完整消息组；禁止保留孤立调用或结果。
-4. 新请求先校验配对、ID 和类型。缺失必要历史时建立有明确摘要的新上下文，不伪造推理或执行记录。
+4. 新请求先校验配对、ID 和类型。缺失必要历史时明确停止，不伪造推理或执行记录；恢复中的未决工具只在上下文中补充“执行结果未知”的配对说明。按当前产品决定不启用摘要。
 5. 协议允许补入宿主实际执行的工具记录，但首版不主动使用这一能力，不虚构模型调用。[工具历史说明][A5]
 
 ## 4. 流式处理
@@ -123,7 +119,7 @@ Responses 的 function 字段位于工具对象顶层。以下仅示意读取工
 | function_call_arguments.delta / done | 按输出项聚合参数，done 仍不触发执行 |
 | response.completed | 校验最终 response.status、完整 output 和 usage |
 | response.incomplete | 记录截断或过滤，不执行本次工具 |
-| response.failed | 按错误类别结束或有限重试，不执行本次工具 |
+| response.failed | 保存诊断并结束本轮；当前不自动重试，不执行本次工具 |
 
 表中省略前缀的事件均以 `response.` 开头。该流以终态事件结束，没有 `data: [DONE]`。连接关闭、item.done 或参数 done 均不能代替最终成功事件。[事件定义][A4]
 
@@ -139,22 +135,17 @@ Responses 的 function 字段位于工具对象顶层。以下仅示意读取工
 
 每次重试建立新 attemptId、清空临时缓冲，复用冻结请求；不把新流接在旧流尾部。SDK 设置 `maxRetries: 0`，重试由应用统一管理，避免两层重试叠加。结束、失败和取消时结束事件消费；主动中断时取消 SDK 请求，由 SDK 释放底层连接资源。
 
+运行中引导由 harness 接收并保存，不中止当前 HTTP/SSE 请求，也不修改已经发出的 input。当前完整响应及其工具结果保存后，下一次 `responses.create()` 纳入最新引导，沿用同一轮次、冻结配置和完整历史；没有工具调用但仍有引导时也继续请求。等待区的普通消息则在成功结束后创建新轮次。正式 DeepSeek 的同轮引导和自动续发已通过独立真实联调，详见 [行为与验证](queued-input-and-steering.md)。
+
 ## 5. 上下文管理
 
-发送前满足：
+2026-10-04 起，按开发者要求取消应用的输入预算、输出上限和安全预留量，不再以 UTF-8 字节数估算并提前拒绝请求。输入包含 instructions、工具 schema、消息、推理和工具结果，Context 完整回放历史并检查配对。
 
-```text
-估算输入 token + 最大输出 token + 安全余量
-    <= min(模型上下文上限, 应用预算)
-```
+不启用摘要或历史裁剪。服务返回 HTTP 错误、response.failed 或 response.incomplete 时，Core 保存失败尝试及已收到的响应对象，结束本轮并展示原因；不自动重试，不回放失败响应。工具自身的分页及输出限制仍由工具声明和执行器负责。
 
-输入包括 instructions、工具 schema、消息、推理和工具结果。默认可用输入预算为 45,056 token。当前使用序列化输入的 UTF-8 字节数作保守估算，尚未接入模型专用 tokenizer 或 usage 校准；实际可能提前触发限制。
+原始历史与当前输入保留。项目上下文仅加载根目录 AGENTS.md 及项目 .tilot/skills 中的技能元数据，正文按需读取；详见 [上下文与项目技能](context-and-skills.md)。
 
-当前按开发者确认不启用摘要或历史裁剪。Tool 保留自身的分页及输出限制，Context 完整回放历史并检查配对；超限明确停止，不静默丢弃内容。
-
-原始历史与当前输入保留。项目上下文仅加载根目录 AGENTS.md 及项目 .codex/skills 中的技能元数据，正文按需读取；详见 [上下文与项目技能](context-and-skills.md)。
-
-不发送 truncation 或 context_management 期待服务自动处理超限；Context 负责预算检查与压缩，Agent Core 根据结果继续或暂停执行。[兼容限制][A4]
+不发送 truncation 或 context_management 期待服务自动裁剪历史；上下文超限由 API 报错，Agent Core 按现有错误流程结束本轮并保留原始历史。[兼容限制][A4]
 
 ## 6. 缓存与费用
 
@@ -167,7 +158,7 @@ Responses 的 function 字段位于工具对象顶层。以下仅示意读取工
 - 未命中输入：输入总量减缓存命中量。
 - 输出总量：output_tokens；其中 reasoning_tokens 是子项，不重复计费。
 
-费用按有日期的模型价格配置计算。缺失 usage 不按零处理，断流费用单列未知；请求前成本估算和 Run 费用限制属于软预算。
+当前只展示服务返回的用量，不估算请求成本或设置 Run 费用限制。缺失 usage 显示未知，不按零补齐；失败响应带 usage 时原样保存，失败请求的 Token 统计尚未接入界面。
 
 [A1]: https://api-docs.deepseek.com/zh-cn/guides/responses_api/
 [A2]: https://api-docs.deepseek.com/api/create-response/

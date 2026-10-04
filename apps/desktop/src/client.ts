@@ -5,6 +5,7 @@ import type { BackendConnection } from "./backend";
 interface Results {
   "thread.create": Thread; "thread.read": Thread | null; "thread.list": Thread[]; "thread.rename": Thread;
   "turn.start": Turn; "turn.resume": Turn; "turn.interrupt": { interrupted: boolean }; "turn.read": Turn | null;
+  "turn.steer": TurnInput | null;
   "turn.list": Turn[]; "turn.inputs": TurnInput[]; "turn.attempts": AttemptView[];
   "config.get": AppConfig; "config.set": AppConfig;
   "credentials.status": { configured: string[] }; "credentials.set": null;

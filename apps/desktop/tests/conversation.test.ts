@@ -13,6 +13,18 @@ function turn(id = "turn"): Turn {
   return { id, threadId: "thread", sequence: 1, status: "running", createdAt: 1, finishedAt: null, error: null };
 }
 
+test("实时引导立即显示，重复事件不重添，旧历史不能移除新输入或覆盖流式内容", () => {
+  const running = turn();
+  const input = { id: 2, turnId: running.id, content: "补充中文🙂", createdAt: 2 };
+  let records = applyEvent([], { event: "turn.started", turn: running, seq: 1 });
+  records = applyEvent(records, { event: "message.delta", threadId: "thread", turnId: running.id, itemId: "partial", contentIndex: 0, kind: "text", delta: "仍在生成", seq: 2 });
+  const event = { event: "turn.input" as const, threadId: "thread", turnId: running.id, input, seq: 3 };
+  records = applyEvent(applyEvent(records, event), event);
+  records = mergeHistory(records, [{ turn: running, inputs: [{ id: 1, turnId: running.id, content: "原任务", createdAt: 1 }], attempts: [], previews: [] }]);
+  assert.deepEqual(records[0]!.inputs.map((input) => input.content), ["原任务", "补充中文🙂"]);
+  assert.equal(records[0]!.previews[0]!.parts[0]!.text, "仍在生成");
+});
+
 // 前端更新而旧 Node 服务仍在运行时，缺少新增字段不能让历史渲染白屏。
 test("旧服务未返回 tools 时仍可加载、合并并渲染回答", async () => {
   const savedTurn = { ...turn(), status: "completed" as const };

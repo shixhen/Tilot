@@ -51,7 +51,10 @@ export function mergeHistory(current: TurnRecord[], history: TurnRecord[]): Turn
     const turn = live && live.turn.status !== "running" && saved.turn.status === "running" ? live.turn : saved.turn;
     const attempts = mergeAttempts(live?.attempts ?? [], saved.attempts);
     const persisted = new Set(attempts.flatMap((attempt) => attempt.messages.map((message) => message.itemId)));
-    records.set(turn.id, { ...saved, attempts, turn, previews: live?.previews.filter((preview) => !persisted.has(preview.itemId)) ?? [] });
+    const inputs = new Map(live?.inputs.map((input) => [input.id, input]));
+    for (const input of saved.inputs) inputs.set(input.id, input);
+    records.set(turn.id, { ...saved, inputs: [...inputs.values()].sort((a, b) => a.id - b.id), attempts, turn,
+      previews: live?.previews.filter((preview) => !persisted.has(preview.itemId)) ?? [] });
   }
   return [...records.values()].sort((a, b) => a.turn.sequence - b.turn.sequence);
 }
@@ -80,6 +83,10 @@ export function applyEvent(records: TurnRecord[], event: ServerEvent): TurnRecor
   }
   return records.map((record) => {
     if (record.turn.id !== event.turnId || record.turn.threadId !== event.threadId) return record;
+    if (event.event === "turn.input") {
+      if (record.inputs.some((input) => input.id === event.input.id)) return record;
+      return { ...record, inputs: [...record.inputs, event.input].sort((a, b) => a.id - b.id) };
+    }
     if (event.event === "tool.progress") {
       if (record.turn.status !== "running") return record;
       const attempts = record.attempts.map((attempt) => attempt.id !== event.attemptId ? attempt : { ...attempt,

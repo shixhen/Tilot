@@ -1,11 +1,14 @@
-import { useEffect, useRef, useState, type ComponentProps } from "react";
+import { useEffect, useMemo, useRef, useState, type ComponentProps } from "react";
 import Markdown from "react-markdown";
 import remarkGfm from "remark-gfm";
+import remarkMath from "remark-math";
+import rehypeKatex from "rehype-katex";
 import type { Element, Root } from "hast";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { Check, Copy } from "lucide-react";
 import { Button } from "../components/ui/button";
 import { useCopyText } from "../hooks/use-copy-text";
+import { normalizeMathDelimiters } from "./math";
 
 /** 只允许完整网页地址，阻止模型生成的脚本和本地路径导航。 */
 export function webURL(url: string): string {
@@ -56,7 +59,14 @@ function rehypeStreamTail() {
     const split = (node: Root | Element): void => {
       for (let index = node.children.length - 1; index >= 0 && remaining > 0; index--) {
         const child = node.children[index]!;
-        if (child.type === "element") split(child);
+        if (child.type === "element") {
+          // 公式作为完整内容显示，不能在 KaTeX 的字形或 MathML 内插入渐变 span。
+          if (Array.isArray(child.properties.className) && child.properties.className.includes("katex")) {
+            remaining = 0;
+            continue;
+          }
+          split(child);
+        }
         if (child.type !== "text" || !child.value.trim()) continue;
         const characters = Array.from(segmenter.segment(child.value));
         const tail: Element["children"] = [];
@@ -81,19 +91,21 @@ function rehypeStreamTail() {
   };
 }
 
-/** 渲染 GFM 正文，禁用 HTML 和自动图片请求，宽表格单独滚动；streaming 时新文字淡入。 */
+/** 渲染 GFM 与数学公式，禁用 HTML 和自动图片请求；streaming 时普通新文字淡入。 */
 export function MessageMarkdown({ text, streaming = false }: { text: string; streaming?: boolean }) {
   const [settledText, setSettledText] = useState<string | null>(null);
+  const markdown = useMemo(() => normalizeMathDelimiters(text), [text]);
   // 输出暂停时显示完整末尾，避免等待网络或工具期间最后几个字一直透明。
   useEffect(() => {
     if (!streaming) return;
     const timer = setTimeout(() => setSettledText(text), 240);
     return () => clearTimeout(timer);
   }, [text, streaming]);
-  return <div className="message-prose"><Markdown skipHtml remarkPlugins={[remarkGfm]} rehypePlugins={streaming && settledText !== text ? [rehypeStreamTail] : []} urlTransform={webURL} components={{
+  return <div className="message-prose"><Markdown skipHtml remarkPlugins={[remarkGfm, remarkMath]}
+    rehypePlugins={[[rehypeKatex, { trust: false, strict: false }], ...(streaming && settledText !== text ? [rehypeStreamTail] : [])]} urlTransform={webURL} components={{
     pre: CodeBlock,
     a: WebLink,
     img: ({ alt }) => <span className="text-muted-foreground">[图片：{alt || "未提供说明"}]</span>,
     table: ({ children }) => <div className="my-4 overflow-x-auto rounded-lg border"><table>{children}</table></div>,
-  }}>{text}</Markdown></div>;
+  }}>{markdown}</Markdown></div>;
 }

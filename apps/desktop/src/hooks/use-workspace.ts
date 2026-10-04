@@ -19,7 +19,7 @@ export function useWorkspace() {
   // 已有任务用它自己的服务，新对话用默认服务；该服务配置了密钥才能发送。
   const choice = thread ?? chat.config;
   const configured = !!choice && chat.configured.includes(choice.providerId);
-  const canSend = chat.connected && configured && !busy && !chat.historyLoading && !running && !!draft.trim();
+  const canSend = chat.connected && configured && !busy && !chat.historyLoading && !!draft.trim();
 
   /** 更新当前任务草稿，其他任务草稿保持独立。 */
   function editDraft(value: string): void {
