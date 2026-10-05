@@ -17,15 +17,20 @@ test("工具历史保留调用参数、输出位置与已保存结果", (context
   const attempt = store.history.startAttempt(turn.id, store.listTurnInputs(turn.id)[0]!.id);
   const response = sampleResponse();
   response.output.push({ type: "function_call", id: "function_1", call_id: "call_1", name: "read", arguments: '{"path":"a.ts"}', status: "completed" });
-  store.history.finishAttempt(attempt.id, { status: "completed", response });
+  store.history.finishAttempt(attempt.id, { status: "completed", response, reasoningTimings: [
+    { itemId: "reasoning_1", contentIndex: 0, startedAt: 1000, durationMs: 1200 },
+  ] });
   const call = store.history.listToolCalls(attempt.id)[0]!;
   assert.equal(listAttemptViews(store, turn.id)[0]!.tools[0]!.output, null);
   assert.deepEqual(listAttemptViews(store, turn.id)[0]!.metrics, {
-    firstTokenMs: null, tokensPerSecond: null, inputTokens: null, cachedTokens: null, outputTokens: null,
+    firstTokenMs: null, durationMs: null, inputTokens: null, cachedTokens: null, outputTokens: null,
   });
-  store.history.saveToolResult(call.id, { type: "function_call_output", call_id: call.callId, output: "文件内容" });
+  store.history.startTool(call.id);
+  const startedAt = store.history.listToolCalls(attempt.id)[0]!.startedAt;
+  store.history.saveToolResult(call.id, { type: "function_call_output", call_id: call.callId, output: "文件内容" }, 22);
+  assert.deepEqual(listAttemptViews(store, turn.id)[0]!.messages[0]!.parts[0]!.timing, { startedAt: 1000, durationMs: 1200 });
   assert.deepEqual(listAttemptViews(store, turn.id)[0]!.tools, [{
-    id: call.id, outputIndex: response.output.length - 1, name: "read", arguments: '{"path":"a.ts"}', output: "文件内容", running: false,
+    id: call.id, outputIndex: response.output.length - 1, name: "read", arguments: '{"path":"a.ts"}', output: "文件内容", running: false, startedAt, durationMs: 22,
   }]);
 });
 
@@ -103,8 +108,8 @@ test("历史查询保留原文、输入边界和消息位置，只返回展示�
   assert.deepEqual(await query({ id: "inputs", method: "turn.inputs", params: { turnId: turn.id } }), [input, extra]);
   const expected = [{
     id: saved.id, turnId: turn.id, sequence: 1, inputThroughId: input.id, status: "completed",
-    error: null, createdAt: saved.createdAt, finishedAt: saved.finishedAt, tools: [],
-    metrics: { firstTokenMs: 250, tokensPerSecond: 20, inputTokens: 100, cachedTokens: 60, outputTokens: 20 },
+    error: null, createdAt: saved.createdAt, finishedAt: saved.finishedAt, tools: [], reasoningTimings: [],
+    metrics: { firstTokenMs: 250, durationMs: 1250, inputTokens: 100, cachedTokens: 60, outputTokens: 20 },
     messages: [
       { itemId: "reasoning_1", outputIndex: 0, parts: [{ kind: "reasoning", text: "推理正文" }] },
       { itemId: "message_1", outputIndex: 1, parts: [{ kind: "text", text: "正文" }, { kind: "refusal", text: "拒绝部分" }] },
@@ -144,6 +149,25 @@ test("失败、取消与中断只展示状态，运行中历史查询不改变�
   const interrupted = await query({ id: "refresh", method: "turn.attempts", params: { turnId: turn.id, afterSequence: running.sequence - 1 } });
   assert.ok(Array.isArray(interrupted) && typeof interrupted[0] === "object" && "status" in interrupted[0]);
   assert.equal(interrupted[0].status, "interrupted");
+});
+
+test("失败、截断及取消请求保留服务端用量和实测时间，供整轮累计且不回传失败片段", (context) => {
+  const { store } = openHistory(context);
+  const turn = store.startTurn(store.createThread("失败统计").id, "输入");
+  const input = store.listTurnInputs(turn.id)[0]!;
+  for (const status of ["failed", "incomplete", "cancelled"] as const) {
+    const attempt = store.history.startAttempt(turn.id, input.id);
+    const response = sampleResponse();
+    response.status = status;
+    response.usage = { input_tokens: 100, input_tokens_details: { cached_tokens: 60, cache_write_tokens: 0 },
+      output_tokens: 20, output_tokens_details: { reasoning_tokens: 5 }, total_tokens: 120 };
+    store.history.finishAttempt(attempt.id, { status, response, error: "诊断", firstTokenMs: 100, durationMs: 1100 });
+  }
+  for (const view of listAttemptViews(store, turn.id)) {
+    assert.deepEqual(view.metrics, { firstTokenMs: 100, durationMs: 1100, inputTokens: 100, cachedTokens: 60, outputTokens: 20 });
+    assert.deepEqual(view.messages, []);
+    assert.deepEqual(view.tools, []);
+  }
 });
 
 test("三类列表支持跨页读取且不串任务，非法分页被拒绝，不存在的记录不被创建", async (context) => {

@@ -6,6 +6,7 @@ import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { PassThrough } from "node:stream";
 import { test, type TestContext } from "node:test";
+import type { ResponseUsage } from "openai/resources/responses/responses";
 import type { RpcRequest, RpcResponse, ServerMessage } from "@tilot/protocol";
 import { Store } from "@tilot/store";
 import { serveStdio } from "../src/stdio.ts";
@@ -39,10 +40,10 @@ async function mockModel(context: TestContext) {
   const address = server.address();
   assert.ok(address && typeof address !== "string");
   /** 为指定请求发送成功或失败终态，完整正文特意比增量长，以验证替换行为。 */
-  function finish(index: number, failed = false, calls: { name: string; arguments: string }[] = []): void {
+  function finish(index: number, failed = false, calls: { name: string; arguments: string }[] = [], usage?: ResponseUsage): void {
     const { response, id } = pending[index]!;
     if (failed) {
-      response.end(sse({ type: "response.failed", sequence_number: 5, response: { id, status: "failed", output: [], error: { message: "模拟模型失败" } } }));
+      response.end(sse({ type: "response.failed", sequence_number: 5, response: { id, status: "failed", output: [], error: { message: "模拟模型失败" }, ...(usage ? { usage } : {}) } }));
       return;
     }
     const output = [
@@ -55,7 +56,7 @@ async function mockModel(context: TestContext) {
       if (output_index >= 2) response.write(sse({ type: "response.output_item.added", sequence_number: sequence_number++, output_index, item }));
       response.write(sse({ type: "response.output_item.done", sequence_number: sequence_number++, output_index, item }));
     }
-    response.end(sse({ type: "response.completed", sequence_number, response: { id, status: "completed", output } }));
+    response.end(sse({ type: "response.completed", sequence_number, response: { id, status: "completed", output, ...(usage ? { usage } : {}) } }));
   }
   return { baseURL: `http://127.0.0.1:${address.port}`, finish, requests };
 }
@@ -143,6 +144,54 @@ function openSession(context: TestContext, baseURL: string) {
   }
   return { store, input, output, serving, received, waitFor, request, start };
 }
+
+test("思考起点和结束通过行协议交付，正文仍在生成时计时已停止，成功和失败历史保留耗时", { timeout: 10000 }, async (context) => {
+  const model = await mockModel(context);
+  const session = openSession(context, model.baseURL);
+  const thread = session.store.createThread("思考计时事件");
+  for (const [index, failed] of [false, true].entries()) {
+    const turnId = await session.start(thread.id, `timing-${index}`);
+    const started = await session.waitFor((message) => "event" in message && message.event === "message.timing" &&
+      message.turnId === turnId && message.timing.durationMs === null);
+    const stopped = await session.waitFor((message) => "event" in message && message.event === "message.timing" &&
+      message.turnId === turnId && message.timing.durationMs !== null);
+    assert.ok("event" in started && started.event === "message.timing");
+    assert.ok("event" in stopped && stopped.event === "message.timing");
+    assert.equal(stopped.timing.startedAt, started.timing.startedAt);
+    assert.ok(stopped.timing.durationMs! >= 0);
+    assert.equal(session.store.getTurn(turnId)?.status, "running");
+    model.finish(index, failed);
+    await session.waitFor((message) => "event" in message && message.event === "turn.finished" && message.turn.id === turnId);
+    const attempt = session.store.history.listAttempts(turnId)[0]!;
+    assert.deepEqual(attempt.reasoningTimings, [stopped.timing]);
+  }
+});
+
+test("请求开始及成功/失败终态推送独立用量快照，统计不必等整轮重新查询", { timeout: 10000 }, async (context) => {
+  const model = await mockModel(context);
+  const session = openSession(context, model.baseURL);
+  const thread = session.store.createThread("实时统计");
+  const usage: ResponseUsage = { input_tokens: 100, input_tokens_details: { cached_tokens: 60, cache_write_tokens: 0 },
+    output_tokens: 20, output_tokens_details: { reasoning_tokens: 5 }, total_tokens: 120 };
+  for (const [index, status] of ["completed", "failed"].entries()) {
+    const turnId = await session.start(thread.id, `start-metrics-${index}`);
+    const started = await session.waitFor((message) => "event" in message && message.event === "attempt.updated" && message.turnId === turnId && message.attempt.status === "running");
+    assert.ok("event" in started && started.event === "attempt.updated");
+    assert.equal(started.attempt.metrics?.outputTokens, null);
+    await session.waitFor((message) => "event" in message && message.event === "message.delta" && message.turnId === turnId);
+    model.finish(index, status === "failed", [], usage);
+    const finished = await session.waitFor((message) => "event" in message && message.event === "attempt.updated" && message.turnId === turnId && message.attempt.status === status);
+    assert.ok("event" in finished && finished.event === "attempt.updated");
+    assert.equal(finished.attempt.id, started.attempt.id);
+    assert.equal(finished.attempt.metrics?.inputTokens, 100);
+    assert.equal(finished.attempt.metrics?.cachedTokens, 60);
+    assert.equal(finished.attempt.metrics?.outputTokens, 20);
+    assert.ok(finished.attempt.metrics?.firstTokenMs != null);
+    assert.ok(finished.attempt.metrics?.durationMs != null);
+    if (status === "failed") assert.deepEqual(finished.attempt.messages, []);
+    await session.waitFor((message) => "event" in message && message.event === "turn.finished" && message.turn.id === turnId);
+  }
+});
 
 test("流中引导保留同一轮次及原输出，不取消请求；多条补充进入下一请求", { timeout: 10000 }, async (context) => {
   const model = await mockModel(context);

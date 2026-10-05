@@ -4,7 +4,7 @@ import { test } from "node:test";
 import Database from "better-sqlite3";
 import type { Response, ResponseOutputItem } from "openai/resources/responses/responses";
 import { Store } from "@tilot/store";
-import { downgradeToVersion4, downgradeToVersion7, temporaryDirectory } from "./helpers.ts";
+import { downgradeToVersion4, downgradeToVersion7, downgradeToVersion9, temporaryDirectory } from "./helpers.ts";
 
 /** 构造完整的本地响应样本，不连接模型服务。 */
 function response(output: ResponseOutputItem[] = []): Response {
@@ -20,6 +20,41 @@ function response(output: ResponseOutputItem[] = []): Response {
 function call(id: string): ResponseOutputItem {
   return { type: "function_call", id: `item_${id}`, call_id: id, name: "read_file", arguments: ' { "path": "a.ts" } ', status: "completed" };
 }
+
+test("单段思考和工具执行时间重开后保留，版本 9 的旧过程不估算耗时", (context) => {
+  const directory = temporaryDirectory(context);
+  const store = new Store(directory);
+  const turn = store.startTurn(store.createThread("计时持久化").id, "输入");
+  const attempt = store.history.startAttempt(turn.id, store.listTurnInputs(turn.id)[0]!.id);
+  const snapshot = response([call("a"), call("b")]);
+  const reasoningTimings = [{ itemId: "r1", contentIndex: 0, startedAt: 1000, durationMs: 1250 }];
+  store.history.finishAttempt(attempt.id, { status: "completed", response: snapshot, reasoningTimings });
+  const calls = store.history.listToolCalls(attempt.id);
+  store.history.startTool(calls[0]!.id);
+  assert.throws(() => store.history.startTool(calls[0]!.id), /已开始/);
+  store.history.saveToolResult(calls[0]!.id, { type: "function_call_output", call_id: "a", output: "结果" }, 12.5);
+  store.history.saveToolResult(calls[1]!.id, { type: "function_call_output", call_id: "b", output: "未执行" });
+  store.finishTurn(turn.id, "completed");
+  store.close();
+  const reopened = new Store(directory);
+  try {
+    assert.deepEqual(reopened.history.getAttempt(attempt.id)?.reasoningTimings, reasoningTimings);
+    const persisted = reopened.history.listToolCalls(attempt.id);
+    assert.notEqual(persisted[0]!.startedAt, null);
+    assert.equal(persisted[0]!.durationMs, 12.5);
+    assert.equal(persisted[1]!.startedAt, null);
+    assert.equal(persisted[1]!.durationMs, null);
+    assert.deepEqual(reopened.history.getAttempt(attempt.id)?.response, snapshot);
+  } finally { reopened.close(); }
+  const legacy = new Database(join(directory, "tilot.sqlite"));
+  try { downgradeToVersion9(legacy); } finally { legacy.close(); }
+  const migrated = new Store(directory);
+  try {
+    assert.deepEqual(migrated.history.getAttempt(attempt.id)?.reasoningTimings, []);
+    assert.deepEqual(migrated.history.getAttempt(attempt.id)?.response, snapshot);
+    assert.deepEqual(migrated.history.listToolCalls(attempt.id).map((call) => [call.startedAt, call.durationMs]), [[null, null], [null, null]]);
+  } finally { migrated.close(); }
+});
 
 test("完整响应及工具结果持久化，结果按模型顺序读取，补充输入边界独立保存", (context) => {
   const directory = temporaryDirectory(context);

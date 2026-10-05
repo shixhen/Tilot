@@ -4,7 +4,7 @@ import type { AttemptCompletion, ModelAttempt, StoredToolCall, ToolResult } from
 import { validatePagination } from "./pagination.ts";
 
 /** 数据库中的请求记录；完整 SDK 响应以 JSON 保存。 */
-type AttemptRow = Omit<ModelAttempt, "response"> & { responseJson: string | null };
+type AttemptRow = Omit<ModelAttempt, "response" | "reasoningTimings"> & { responseJson: string | null; reasoningTimingsJson: string };
 
 /** 数据库中的工具记录；完整 SDK 结果以 JSON 保存。 */
 type ToolCallRow = Omit<StoredToolCall, "result"> & { resultJson: string | null };
@@ -55,12 +55,12 @@ export class ModelHistoryStore {
     }
     return this.database.transaction(() => {
       const now = Date.now();
-      const row = this.database.prepare<[string, string | null, string | null, number, number | null, number | null, string], AttemptRow>(`
-        UPDATE model_attempts SET status = ?, responseJson = ?, error = ?, finishedAt = ?, firstTokenMs = ?, durationMs = ?
+      const row = this.database.prepare<[string, string | null, string | null, number, number | null, number | null, string, string], AttemptRow>(`
+        UPDATE model_attempts SET status = ?, responseJson = ?, error = ?, finishedAt = ?, firstTokenMs = ?, durationMs = ?, reasoningTimingsJson = ?
         WHERE id = ? AND status = 'running'
           AND EXISTS (SELECT 1 FROM turns WHERE turns.id = model_attempts.turnId AND turns.status = 'running')
         RETURNING *
-      `).get(completion.status, response === null ? null : JSON.stringify(response), error, now, completion.firstTokenMs ?? null, completion.durationMs ?? null, id);
+      `).get(completion.status, response === null ? null : JSON.stringify(response), error, now, completion.firstTokenMs ?? null, completion.durationMs ?? null, JSON.stringify(completion.reasoningTimings ?? []), id);
       if (!row) {
         throw new Error("请求尝试不存在或已结束，或所属轮次已结束。");
       }
@@ -102,15 +102,23 @@ export class ModelHistoryStore {
     `).all(attemptId).map(decodeToolCall);
   }
 
+  /** 记录实际执行起点；登记工具意图和等待前一个工具不算执行耗时。 */
+  startTool(executionId: string): void {
+    const result = this.database.prepare(`
+      UPDATE tool_calls SET startedAt = ? WHERE id = ? AND startedAt IS NULL AND resultJson IS NULL
+    `).run(Date.now(), executionId);
+    if (result.changes !== 1) throw new Error("工具调用不存在、已开始执行或已有结果。");
+  }
+
   /** 按本地执行 id 保存匹配的 SDK 结果，结果只能写入一次；允许为中断轮次补录核实后的结果。 */
-  saveToolResult(executionId: string, result: ToolResult): StoredToolCall {
+  saveToolResult(executionId: string, result: ToolResult, durationMs: number | null = null): StoredToolCall {
     if (result.type !== "function_call_output" || typeof result.call_id !== "string" || !result.call_id.trim()) {
       throw new Error("工具结果必须是带有 call_id 的 function_call_output。");
     }
-    const row = this.database.prepare<[string, number, string, string], ToolCallRow>(`
-      UPDATE tool_calls SET resultJson = ?, finishedAt = ?
+    const row = this.database.prepare<[string, number, number | null, string, string], ToolCallRow>(`
+      UPDATE tool_calls SET resultJson = ?, finishedAt = ?, durationMs = ?
       WHERE id = ? AND callId = ? AND resultJson IS NULL RETURNING *
-    `).get(JSON.stringify(result), Date.now(), executionId, result.call_id);
+    `).get(JSON.stringify(result), Date.now(), durationMs, executionId, result.call_id);
     if (!row) {
       throw new Error("工具调用不存在、call_id 不匹配，或结果已保存。");
     }
@@ -120,8 +128,8 @@ export class ModelHistoryStore {
 
 /** 恢复完整 SDK 响应；数据库中的 JSON 损坏时直接报错，不丢弃历史或填充假响应。 */
 function decodeAttempt(row: AttemptRow): ModelAttempt {
-  const { responseJson, ...attempt } = row;
-  return { ...attempt, response: responseJson === null ? null : JSON.parse(responseJson) };
+  const { responseJson, reasoningTimingsJson, ...attempt } = row;
+  return { ...attempt, response: responseJson === null ? null : JSON.parse(responseJson), reasoningTimings: JSON.parse(reasoningTimingsJson) };
 }
 
 /** 恢复完整 SDK 工具结果，保留 output 字符串和原始 call_id。 */

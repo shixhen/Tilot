@@ -198,7 +198,7 @@ function Sidebar({
       <div
         data-slot="sidebar-gap"
         className={cn(
-          "relative w-(--sidebar-width) bg-transparent transition-[width] duration-240 ease-[cubic-bezier(0.2,0,0,1)]",
+          "relative w-(--sidebar-width) bg-transparent transition-[width] duration-200 ease-[cubic-bezier(0.2,0,0,1)]",
           "group-data-[collapsible=offcanvas]:w-0",
           "group-data-[side=right]:rotate-180",
           variant === "floating" || variant === "inset"
@@ -209,7 +209,7 @@ function Sidebar({
       <div
         data-slot="sidebar-container"
         className={cn(
-          "absolute inset-y-0 z-10 flex h-full w-(--sidebar-width) transition-[left,right,width] duration-240 ease-[cubic-bezier(0.2,0,0,1)]",
+          "absolute inset-y-0 z-10 flex h-full w-(--sidebar-width) transition-[left,right,width] duration-200 ease-[cubic-bezier(0.2,0,0,1)]",
           side === "left"
             ? "left-0 group-data-[collapsible=offcanvas]:left-[calc(var(--sidebar-width)*-1)]"
             : "right-0 group-data-[collapsible=offcanvas]:right-[calc(var(--sidebar-width)*-1)]",
@@ -365,7 +365,7 @@ function SidebarInset({ className, ...props }: React.ComponentProps<"main">) {
     <main
       data-slot="sidebar-inset"
       className={cn(
-        "relative flex w-full flex-1 flex-col bg-background transition-[margin] duration-240 ease-[cubic-bezier(0.2,0,0,1)]",
+        "relative flex w-full flex-1 flex-col bg-background transition-[margin] duration-200 ease-[cubic-bezier(0.2,0,0,1)]",
         // 主面板四周留出间距并使用圆角；与侧栏底色接近，用细边框勾出轮廓。
         "peer-data-[variant=inset]:m-2 peer-data-[variant=inset]:ml-0 peer-data-[variant=inset]:rounded-xl peer-data-[variant=inset]:border peer-data-[variant=inset]:shadow-sm peer-data-[variant=inset]:peer-data-[state=collapsed]:ml-2",
         className

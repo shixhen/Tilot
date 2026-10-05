@@ -1,4 +1,4 @@
-import type { AttemptView, MessagePart, ServerEvent, Turn, TurnInput } from "@tilot/protocol";
+import type { AttemptView, MessagePart, ReasoningTiming, ServerEvent, Turn, TurnInput } from "@tilot/protocol";
 import type { Request } from "./client";
 
 /** 尚未由历史查询替换的流式消息，按内容位置保存增量。 */
@@ -54,7 +54,7 @@ export function mergeHistory(current: TurnRecord[], history: TurnRecord[]): Turn
     const inputs = new Map(live?.inputs.map((input) => [input.id, input]));
     for (const input of saved.inputs) inputs.set(input.id, input);
     records.set(turn.id, { ...saved, inputs: [...inputs.values()].sort((a, b) => a.id - b.id), attempts, turn,
-      previews: live?.previews.filter((preview) => !persisted.has(preview.itemId)) ?? [] });
+      previews: updatePreviewTimings(live?.previews.filter((preview) => !persisted.has(preview.itemId)) ?? [], attempts.flatMap((attempt) => attempt.reasoningTimings ?? [])) });
   }
   return [...records.values()].sort((a, b) => a.turn.sequence - b.turn.sequence);
 }
@@ -64,7 +64,7 @@ function mergeAttempts(current: AttemptView[], incoming: AttemptView[]): Attempt
   const attempts = new Map(current.map((attempt) => [attempt.id, attempt]));
   for (const attempt of incoming) {
     const previous = attempts.get(attempt.id);
-    if (previous?.status === "completed" && attempt.status !== "completed") continue;
+    if (previous && previous.status !== "running" && attempt.status !== previous.status) continue;
     const tools = attempt.tools.map((tool) => {
       const live = previous?.tools.find((entry) => entry.id === tool.id);
       return live && tool.output === null && (live.output !== null || live.running) ? live : tool;
@@ -99,8 +99,9 @@ export function applyEvent(records: TurnRecord[], event: ServerEvent): TurnRecor
     if (event.event === "attempt.updated") {
       const attempts = mergeAttempts(record.attempts, [event.attempt]);
       const persisted = new Set(event.attempt.messages.map((message) => message.itemId));
-      return { ...record, attempts, previews: record.previews.filter((preview) => !persisted.has(preview.itemId)) };
+      return { ...record, attempts, previews: updatePreviewTimings(record.previews.filter((preview) => !persisted.has(preview.itemId)), event.attempt.reasoningTimings ?? []) };
     }
+    if (event.event === "message.timing") return { ...record, previews: updatePreviewTimings(record.previews, [event.timing]) };
     if (record.attempts.some((attempt) => attempt.messages.some((message) => message.itemId === event.itemId))) return record;
     const previews = [...record.previews];
     const index = previews.findIndex((preview) => preview.itemId === event.itemId);
@@ -111,11 +112,20 @@ export function applyEvent(records: TurnRecord[], event: ServerEvent): TurnRecor
     } else {
       if (previous?.complete) return record;
       const parts = [...(previous?.parts ?? [])];
-      parts[event.contentIndex] = { kind: event.kind, text: (parts[event.contentIndex]?.text ?? "") + event.delta };
+      parts[event.contentIndex] = { ...parts[event.contentIndex], kind: event.kind, text: (parts[event.contentIndex]?.text ?? "") + event.delta };
       preview = { itemId: event.itemId, parts, complete: false };
     }
     if (index < 0) previews.push(preview);
     else previews[index] = preview;
     return { ...record, previews };
   });
+}
+
+/** 已结束请求的计时也补到失败或取消后保留的临时片段。 */
+function updatePreviewTimings(previews: Preview[], timings: ReasoningTiming[]): Preview[] {
+  return previews.map((preview) => ({ ...preview, parts: preview.parts.map((part, contentIndex) => {
+    const timing = timings.find((entry) => entry.itemId === preview.itemId && entry.contentIndex === contentIndex);
+    if (!timing || part.kind !== "reasoning" || (part.timing?.durationMs !== null && part.timing?.durationMs !== undefined && timing.durationMs === null)) return part;
+    return { ...part, timing: { startedAt: timing.startedAt, durationMs: timing.durationMs } };
+  }) }));
 }

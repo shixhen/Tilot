@@ -5,7 +5,7 @@ import { DEFAULT_CONFIG } from "./config.ts";
 export function migrateDatabase(database: Database.Database): void {
   database.transaction(() => {
     const version = database.pragma("user_version", { simple: true });
-    if (typeof version !== "number" || !Number.isInteger(version) || version < 0 || version > 9) {
+    if (typeof version !== "number" || !Number.isInteger(version) || version < 0 || version > 10) {
       throw new Error("不支持此数据库版本，请使用匹配的 Tilot 版本。");
     }
     if (version === 0) {
@@ -177,6 +177,14 @@ export function migrateDatabase(database: Database.Database): void {
         ALTER TABLE provider_models DROP COLUMN contextTokens;
       `);
       database.pragma("user_version = 9");
+    }
+    if (version < 10) {
+      database.exec(`
+        ALTER TABLE model_attempts ADD COLUMN reasoningTimingsJson TEXT NOT NULL DEFAULT '[]' CHECK (json_valid(reasoningTimingsJson));
+        ALTER TABLE tool_calls ADD COLUMN startedAt INTEGER;
+        ALTER TABLE tool_calls ADD COLUMN durationMs REAL CHECK (durationMs >= 0);
+      `);
+      database.pragma("user_version = 10");
     }
   }).immediate();
 }

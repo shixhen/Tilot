@@ -3,6 +3,7 @@ import { Check, ChevronRight, CircleAlert, FileText, Folder, Globe, LoaderCircle
 import type { ToolView } from "@tilot/protocol";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "../components/ui/collapsible";
 import { ToolResult } from "./tool-result";
+import { ElapsedTime } from "./elapsed-time";
 
 /** 解析展示用 JSON；无效模型参数保留原文供用户查看。 */
 function readObject(text: string | null): Record<string, unknown> {
@@ -20,6 +21,7 @@ export function ToolCall({ tool, active }: { tool: ToolView; active: boolean }) 
   const data = result.data && typeof result.data === "object" ? result.data as Record<string, unknown> : {};
   const running = active && tool.running && tool.output === null;
   const [open, setOpen] = useState(running);
+  const [compact, setCompact] = useState(running);
   useEffect(() => setOpen(running), [running]);
   let status = running ? "执行中" : active ? "等待结果" : "执行结果未知";
   let failed = false;
@@ -36,21 +38,10 @@ export function ToolCall({ tool, active }: { tool: ToolView; active: boolean }) 
   const webTool = tool.name === "web_fetch";
   const labels: Record<string, string> = { read: "读取文件", write: "写入文件", edit: "编辑文件", shell: "执行命令", ls: "列出目录", find: "查找文件", grep: "搜索代码", web_fetch: "读取网页" };
   const summary = fileTool ? args.path ?? (typeof args.outputId === "string" ? "命令日志" : undefined)
-    : tool.name === "shell" ? args.command : tool.name === "ls" ? args.path || "项目根目录" : searchTool ? args.pattern : webTool ? args.url ?? data.finalUrl ?? "网页缓存" : tool.name;
-  const details = [
-    typeof data.exitCode === "number" ? `退出码 ${data.exitCode}` : null,
-    typeof data.durationMs === "number" ? `耗时 ${(data.durationMs / 1000).toFixed(1)}s` : null,
-    typeof data.outputLines === "number" ? `共 ${data.outputLines} 行输出` : null,
-    tool.name === "shell" && data.truncated === true ? "输出已截断，仅显示末尾内容" : null,
-    data.partialLine === true ? "首行仅保留部分内容" : null,
-    typeof data.outputId === "string" ? webTool ? "网页正文已缓存，可继续读取" : "日志已保存，可继续读取" : null,
-    data.artifactTruncated === true ? `${webTool ? "网页正文" : "日志"}达到缓存上限，仅保存开头部分` : null,
-    typeof data.nextOffset === "number" ? `尚未读完，可从第 ${data.nextOffset} 行继续读取` : null,
-    typeof data.nextByteOffset === "number" ? `${webTool ? "正文" : "日志"}尚未读完，可从字节位置 ${data.nextByteOffset} 继续读取` : null,
-  ].filter(Boolean);
+    : tool.name === "shell" ? args.command : tool.name === "ls" ? args.path || "项目根目录" : searchTool ? args.pattern : webTool ? args.url ?? "网页缓存" : tool.name;
   // 执行中只预览开头几行，超出部分以省略号结尾；手动展开时显示全文并可滚动。
-  const box = running ? "line-clamp-4 overflow-hidden" : "max-h-40 overflow-auto";
-  return <Collapsible open={open} onOpenChange={setOpen} className="group/tool min-w-0 text-sm">
+  const box = compact ? "line-clamp-4 overflow-hidden" : "max-h-40 overflow-auto";
+  return <Collapsible open={open} onOpenChange={(value) => { setOpen(value); if (value && !running) setCompact(false); }} className="group/tool min-w-0 text-sm">
     <CollapsibleTrigger className="flex max-w-full min-w-0 items-center gap-2 rounded-sm text-left text-muted-foreground outline-none transition-colors hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring">
       {running ? <LoaderCircle className="size-3.5 shrink-0 animate-spin" /> : fileTool ? <FileText className="size-3.5 shrink-0" />
         : tool.name === "ls" ? <Folder className="size-3.5 shrink-0" /> : searchTool ? <Search className="size-3.5 shrink-0" /> : webTool ? <Globe className="size-3.5 shrink-0" /> : <Terminal className="size-3.5 shrink-0" />}
@@ -58,17 +49,15 @@ export function ToolCall({ tool, active }: { tool: ToolView; active: boolean }) 
       <code className="min-w-0 truncate font-mono text-[13px]" title={typeof summary === "string" ? summary : undefined}>{typeof summary === "string" ? summary : "参数无效"}</code>
       {failed ? <span className="flex shrink-0 items-center gap-1 text-xs text-destructive"><CircleAlert className="size-3" />{status}</span>
         : !running && <span className="flex shrink-0 items-center gap-1 text-xs">{status === "已完成" && <Check className="size-3" />}{status}</span>}
+      {result.status !== "not_executed" && <ElapsedTime startedAt={tool.startedAt} durationMs={tool.durationMs} running={running} />}
       <ChevronRight className="disclosure-icon size-3.5 opacity-0 transition-[opacity,rotate] group-hover/tool:opacity-100 group-data-[state=open]/tool:rotate-90 group-data-[state=open]/tool:opacity-100" />
     </CollapsibleTrigger>
     <CollapsibleContent className="mt-2 min-w-0 overflow-hidden rounded-lg border bg-black/20">
-      <pre className={`${box} border-b px-3 py-2 font-mono text-xs leading-relaxed whitespace-pre-wrap wrap-anywhere text-muted-foreground`}>{tool.arguments}</pre>
+      <pre aria-label="工具输入" className={`${box} border-b px-3 py-2 font-mono text-xs leading-relaxed whitespace-pre-wrap wrap-anywhere text-muted-foreground`}>{tool.arguments}</pre>
       {tool.output !== null && <ToolResult name={tool.name} result={result} output={tool.output} />}
-      {tool.output === null && tool.preview && <div>
+      {tool.output === null && tool.preview && <>
         <pre aria-label="命令临时输出" className="max-h-72 overflow-auto px-3 py-2 font-mono text-xs leading-relaxed whitespace-pre-wrap wrap-anywhere">{tool.preview.output || "（无输出）"}</pre>
-        <p className="border-t px-3 py-1.5 text-xs text-muted-foreground">临时输出，执行结果尚未保存。{tool.preview.truncated && "仅显示末尾内容。"}{tool.preview.partialLine && "首行仅保留部分内容。"}</p>
-      </div>}
-      {details.length > 0 && <p className="border-t px-3 py-1.5 text-xs text-muted-foreground">{details.join(" · ")}</p>}
-      {typeof data.logError === "string" && <p className="border-t px-3 py-1.5 text-xs text-destructive">{data.logError}</p>}
+      </>}
     </CollapsibleContent>
   </Collapsible>;
 }

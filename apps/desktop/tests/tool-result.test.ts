@@ -4,19 +4,34 @@ import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { ToolCall } from "../src/workspace/tool-call.tsx";
 import { ToolResult } from "../src/workspace/tool-result.tsx";
+import { ElapsedTime, formatDuration } from "../src/workspace/elapsed-time.tsx";
 
 /** 直接渲染工具结果，与工具卡片展开后使用同一组件。 */
 function render(name: string, result: Record<string, unknown>): string {
   return renderToStaticMarkup(createElement(ToolResult, { name, result, output: JSON.stringify(result) }));
 }
 
-test("edit 展示已保存的差异、替换数和首行，新增删除区分颜色并转义 HTML", () => {
+test("所有工具标题显示实测耗时，未执行不显示，旧历史标为未知且不使用排队或 shell 自带时间", () => {
+  for (const name of ["read", "write", "edit", "shell", "ls", "find", "grep", "web_fetch"]) {
+    const tool = { id: name, name, outputIndex: 0, arguments: "{}", output: '{"status":"ok","data":{"durationMs":90000}}',
+      running: false, startedAt: 1000, durationMs: 250 };
+    const html = renderToStaticMarkup(createElement(ToolCall, { active: false, tool }));
+    assert.match(html, /耗时 0.3s/);
+    assert.doesNotMatch(html, /90s|1m 30s/);
+    assert.doesNotMatch(renderToStaticMarkup(createElement(ToolCall, { active: false, tool: { ...tool, durationMs: null, startedAt: null,
+      output: '{"status":"not_executed"}' } })), /耗时/);
+  }
+  assert.match(renderToStaticMarkup(createElement(ElapsedTime, { running: false })), /耗时未知/);
+  assert.equal(formatDuration(0), "0.0s");
+  assert.equal(formatDuration(586000), "9m 46s");
+});
+
+test("edit 只展示修改差异，新增删除区分颜色并转义 HTML", () => {
   const result = { status: "ok", data: { path: "code.ts", bytesWritten: 20, replacements: 2, firstChangedLine: 4,
     diff: '--- a/code.ts\n+++ b/code.ts\n@@ -1,1 +1,2 @@\n-旧\r\n+<script>alert("x")</script>\r\n+++ 内容\n', diffTruncated: false,
   } };
   const html = render("edit", result);
-  assert.match(html, /完成 2 处替换/);
-  assert.match(html, /首个变更在第 4 行/);
+  assert.doesNotMatch(html, /完成 2 处替换|首个变更在第 4 行/);
   assert.match(html, /文件修改差异/);
   assert.match(html, /text-diff-added/);
   assert.match(html, /text-diff-removed/);
@@ -25,9 +40,10 @@ test("edit 展示已保存的差异、替换数和首行，新增删除区分颜
   assert.doesNotMatch(html, /<script>|bytesWritten|差异已截断|\r/);
 });
 
-test("截断差异标出不完整，完整差异不显示截断提示", () => {
+test("差异不附加元数据说明", () => {
   const data = { diff: "--- a/code.ts\n+++ b/code.ts\n@@ -1 +1 @@\n+部分", diffTruncated: true };
-  assert.match(render("edit", { status: "ok", data }), /差异已截断.*不能作为完整补丁应用/);
+  assert.match(render("edit", { status: "ok", data }), /\+部分/);
+  assert.doesNotMatch(render("edit", { status: "ok", data }), /差异已截断|完整补丁/);
   assert.doesNotMatch(render("edit", { status: "ok", data: { ...data, diffTruncated: false } }), /截断/);
 });
 
@@ -56,8 +72,8 @@ test("命令卡片预览实时输出并转义 HTML，日志读取和日志失败
   const preview = renderToStaticMarkup(createElement(ToolCall, { active: true, tool }));
   assert.match(preview, /命令临时输出/);
   assert.match(preview, /&lt;script&gt;测试&lt;\/script&gt;/);
-  assert.match(preview, /执行结果尚未保存/);
-  assert.match(preview, /仅显示末尾内容.*首行仅保留部分内容/);
+  assert.match(preview, /工具输入/);
+  assert.doesNotMatch(preview, /执行结果尚未保存|仅显示末尾内容|首行仅保留部分内容/);
   assert.doesNotMatch(preview, /<script>/);
   const saved = renderToStaticMarkup(createElement(ToolCall, { active: false, tool: { ...tool, running: false,
     output: JSON.stringify({ status: "ok", data: { status: "completed", exitCode: 0, output: "实际输出", logError: "写入失败" } }),
@@ -71,15 +87,15 @@ test("命令卡片预览实时输出并转义 HTML，日志读取和日志失败
   assert.doesNotMatch(logRead, /参数无效/);
 });
 
-test("目录和文件搜索显示相对路径、类型、空结果与不完整提示", () => {
+test("目录和文件搜索只显示相对路径、类型和空结果", () => {
   const html = render("ls", { status: "ok", data: { entries: [
     { path: "src", type: "directory" }, { path: "外部目录", type: "link" }, { path: "<img>.ts", type: "file" },
   ], truncated: true } });
-  assert.match(html, /显示 3 个目录项/);
+  assert.doesNotMatch(html, /显示 3 个目录项/);
   assert.match(html, /src\/.*外部目录（链接）.*&lt;img&gt;.ts/s);
-  assert.match(html, /结果已截断，请缩小/);
+  assert.doesNotMatch(html, /结果已截断，请缩小/);
   assert.doesNotMatch(html, /末尾内容|<img>|&quot;entries&quot;/);
-  assert.match(render("find", { status: "ok", data: { files: ["src/你好.ts"], truncated: false } }), /显示 1 个文件.*src\/你好.ts/s);
+  assert.match(render("find", { status: "ok", data: { files: ["src/你好.ts"], truncated: false } }), /src\/你好.ts/);
   assert.match(render("ls", { status: "ok", data: { entries: [] } }), /空目录/);
   assert.match(render("find", { status: "ok", data: { files: [] } }), /没有匹配文件/);
   for (const [name, label, args] of [
@@ -98,25 +114,23 @@ test("代码搜索展示匹配和上下文行号并转义文本，无效历史�
     { path: "src/你好.ts", line: 2, text: "<script>内容</script>", textTruncated: true,
       before: [{ line: 1, text: "前文", textTruncated: false }], after: [{ line: 3, text: "后文", textTruncated: false }] },
   ], truncated: true } });
-  assert.match(html, /显示 1 条匹配行/);
+  assert.doesNotMatch(html, /显示 1 条匹配行/);
   assert.match(html, /src\/你好.ts-1- 前文/);
   assert.match(html, /src\/你好.ts:2: &lt;script&gt;内容&lt;\/script&gt;（行已截断）/);
   assert.match(html, /src\/你好.ts-3- 后文/);
-  assert.match(html, /结果已截断/);
+  assert.doesNotMatch(html, /结果已截断/);
   assert.doesNotMatch(html, /<script>|末尾内容/);
   assert.match(render("grep", { status: "ok", data: { matches: [] } }), /没有匹配内容/);
   assert.match(render("grep", { status: "error", error: "无效正则", data: { matches: [] } }), /无效正则/);
   assert.match(render("grep", { status: "ok", data: { matches: [null] } }), /&quot;matches&quot;/);
 });
 
-test("网页结果显示标题、来源和时间，正文仅作为文本，缓存续读沿用网页名称", () => {
+test("网页只显示正文，不附加标题、来源、时间或缓存说明", () => {
   const data = { title: "网页标题", url: "https://example.com", finalUrl: "https://example.com/docs", fetchedAt: 1790900000000,
     content: '<script>alert("x")</script>\n![图片](https://example.com/image)', outputId: "web-id", nextByteOffset: 51200,
   };
   const html = render("web_fetch", { status: "ok", data });
-  assert.match(html, /网页标题/);
-  assert.match(html, /来源：.*href="https:\/\/example.com\/docs"/);
-  assert.match(html, /抓取时间：/);
+  assert.doesNotMatch(html, /网页标题|来源：|抓取时间：|web-id|51200/);
   assert.match(html, /网页正文/);
   assert.match(html, /&lt;script&gt;/);
   assert.doesNotMatch(html, /<script>|<img/);
@@ -125,7 +139,7 @@ test("网页结果显示标题、来源和时间，正文仅作为文本，缓�
   const card = renderToStaticMarkup(createElement(ToolCall, { active: false, tool: {
     id: "web", outputIndex: 0, name: "web_fetch", arguments: '{"outputId":"web-id"}', output: JSON.stringify({ status: "ok", data }), running: false,
   } }));
-  assert.match(card, /读取网页.*https:\/\/example.com\/docs/s);
+  assert.match(card, /读取网页.*网页缓存/s);
   assert.doesNotMatch(card, /执行命令|命令日志/);
   assert.match(render("web_fetch", { status: "error", error: "HTTP 403" }), /HTTP 403/);
 });

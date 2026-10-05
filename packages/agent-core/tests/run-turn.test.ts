@@ -78,6 +78,77 @@ function mockClient(events: () => Record<string, unknown>[] = sampleEvents, gate
   return { client, requests };
 }
 
+test("思考计时随流交付并落库，成功和失败工具均记录实际执行耗时，取消后未执行工具没有耗时", async (context) => {
+  for (const cancel of [false, true]) {
+    const store = openTestStore(context);
+    const project = projectDirectory(context);
+    const thread = store.createThread("过程计时", project);
+    const controller = new AbortController();
+    let request = 0;
+    const { client } = mockClient(() => {
+      if (++request > 1) return sampleEvents();
+      const events = toolEvents([
+        { name: "write", arguments: '{"path":"ok.txt","content":"结果"}' },
+        { name: "read", arguments: '{"path":"missing.txt"}' },
+      ]);
+      const added = events.findIndex((event) => event.type === "response.output_item.added");
+      const item = events[added]!.item as { id: string };
+      events.splice(added + 1, 0,
+        { type: "response.reasoning_text.delta", item_id: item.id, output_index: 0, content_index: 0, delta: "先使用工具检查项目。" },
+        { type: "response.reasoning_text.done", item_id: item.id, output_index: 0, content_index: 0, text: "先使用工具检查项目。" });
+      return events.map((event, sequence_number) => ({ ...event, sequence_number }));
+    });
+    const timings: (number | null)[] = [];
+    const turn = await runTurn(store, client, { threadId: thread.id, input: "计时", instructions: "", signal: controller.signal,
+      onEvent: (event) => {
+        if (event.type === "reasoning.updated") timings.push(event.timing.durationMs);
+        if (event.type === "tool.updated" && event.runningToolId) {
+          const call = store.history.listToolCalls(event.attemptId).find((call) => call.id === event.runningToolId)!;
+          assert.notEqual(call.startedAt, null);
+          assert.equal(call.durationMs, null);
+        }
+        if (cancel && event.type === "tool.updated" && event.runningToolId === null) controller.abort();
+      },
+    });
+    assert.equal(turn.status, cancel ? "cancelled" : "completed");
+    assert.equal(timings.length, 2);
+    assert.equal(timings[0], null);
+    assert.ok(timings[1] !== null && timings[1]! >= 0);
+    const attempt = store.history.listAttempts(turn.id)[0]!;
+    assert.equal(attempt.reasoningTimings[0]!.durationMs, timings[1]);
+    assert.ok(attempt.reasoningTimings[0]!.durationMs! <= attempt.durationMs!);
+    const calls = store.history.listToolCalls(attempt.id);
+    assert.ok(calls[0]!.durationMs !== null && calls[0]!.durationMs >= 0);
+    const second = JSON.parse(String(calls[1]!.result!.output));
+    if (cancel) {
+      assert.equal(second.status, "not_executed");
+      assert.equal(calls[1]!.startedAt, null);
+      assert.equal(calls[1]!.durationMs, null);
+    } else {
+      assert.equal(second.status, "error");
+      assert.ok(calls[1]!.durationMs !== null && calls[1]!.durationMs >= 0);
+    }
+  }
+});
+
+test("思考生成中取消也保存该段耗时，没有收到推理增量时不估算", async (context) => {
+  const store = openTestStore(context);
+  const controller = new AbortController();
+  const { client } = mockClient(() => {
+    const events = toolEvents([]);
+    const item = events[1]!.item as { id: string };
+    events.splice(2, 0, { type: "response.reasoning_text.delta", item_id: item.id, output_index: 0, content_index: 0, delta: "思考片段" });
+    return events.map((event, sequence_number) => ({ ...event, sequence_number }));
+  });
+  const turn = await runTurn(store, client, { threadId: store.createThread("思考取消").id, input: "思考", instructions: "", signal: controller.signal,
+    onEvent: (event) => { if (event.type === "response.event" && event.event.type === "response.reasoning_text.delta") controller.abort(); },
+  });
+  assert.equal(turn.status, "cancelled");
+  const attempt = store.history.listAttempts(turn.id)[0]!;
+  assert.equal(attempt.status, "cancelled");
+  assert.ok(attempt.reasoningTimings[0]!.durationMs !== null && attempt.reasoningTimings[0]!.durationMs >= 0);
+});
+
 test("首请求保持原输入与冻结配置，补充输入在同一轮后续请求中处理并完整回放", async (context) => {
   const store = openTestStore(context);
   const original = store.getConfig();

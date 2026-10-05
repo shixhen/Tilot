@@ -84,7 +84,14 @@ export type TextKind = "text" | "reasoning" | "refusal";
 export interface MessagePart {
   kind: TextKind;
   text: string;
+  timing?: TextTiming;
 }
+
+/** 单段生成的实测时间；运行中 durationMs 为空，startedAt 为 Unix 毫秒。 */
+export interface TextTiming { startedAt: number; durationMs: number | null }
+
+/** 思考时间按输出项和内容位置保存，不修改模型的原始响应。 */
+export interface ReasoningTiming extends TextTiming { itemId: string; contentIndex: number }
 
 /** 已保存的用户输入，首条与补充输入都保留原文，id 用于分页和上下文边界。 */
 export interface TurnInput {
@@ -117,12 +124,13 @@ export interface AttemptView {
   messages: MessageView[];
   tools: ToolView[];
   metrics?: ResponseMetrics;
+  reasoningTimings?: ReasoningTiming[];
 }
 
 /** 单次模型请求的实测时间和服务端用量；null 表示未采集或服务端未返回，缓存命中包含在输入中。 */
 export interface ResponseMetrics {
   firstTokenMs: number | null;
-  tokensPerSecond: number | null;
+  durationMs: number | null;
   inputTokens: number | null;
   cachedTokens: number | null;
   outputTokens: number | null;
@@ -136,6 +144,8 @@ export interface ToolView {
   arguments: string;
   output: string | null;
   running: boolean;
+  startedAt?: number | null;
+  durationMs?: number | null;
   preview?: ToolOutputPreview;
 }
 
@@ -149,6 +159,7 @@ export type TurnNotification =
   | { event: "turn.started" | "turn.finished"; turn: Turn }
   | { event: "turn.input"; threadId: string; turnId: string; input: TurnInput }
   | { event: "message.delta"; threadId: string; turnId: string; itemId: string; contentIndex: number; kind: TextKind; delta: string }
+  | { event: "message.timing"; threadId: string; turnId: string; timing: ReasoningTiming }
   | { event: "message.completed"; threadId: string; turnId: string; itemId: string; outputIndex: number; parts: MessagePart[] };
 
 /** 当前服务连接内的顺序事件；seq 从 1 递增，重启后重新计数，不提供断线重放。 */

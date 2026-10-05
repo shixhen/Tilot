@@ -5,8 +5,19 @@ import { dirname, join, resolve } from "node:path";
 import type { TestContext } from "node:test";
 import type Database from "better-sqlite3";
 
+/** 把测试数据库退回版本 9，删除单项过程计时。 */
+export function downgradeToVersion9(database: Database.Database): void {
+  database.exec(`
+    ALTER TABLE model_attempts DROP COLUMN reasoningTimingsJson;
+    ALTER TABLE tool_calls DROP COLUMN startedAt;
+    ALTER TABLE tool_calls DROP COLUMN durationMs;
+    PRAGMA user_version = 9;
+  `);
+}
+
 /** 把测试数据库退回版本 8，恢复旧的输入与输出 Token 限制。 */
 export function downgradeToVersion8(database: Database.Database): void {
+  downgradeToVersion9(database);
   database.exec(`
     ALTER TABLE app_config ADD COLUMN maxOutputTokens INTEGER NOT NULL DEFAULT 16384 CHECK (maxOutputTokens > 0);
     ALTER TABLE app_config ADD COLUMN reserveTokens INTEGER NOT NULL DEFAULT 4096 CHECK (reserveTokens >= 0);

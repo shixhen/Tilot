@@ -48,6 +48,8 @@ export class TurnManager {
           this.active.set(current.id, execution);
           started.resolve(current);
           await this.emit({ event: "turn.started", turn: current });
+        } else if (event.type === "reasoning.updated") {
+          await this.emit({ event: "message.timing", threadId, turnId: event.turnId, timing: event.timing });
         } else if (event.type === "tool.progress") {
           await this.emit({ event: "tool.progress", threadId, turnId: event.turnId, attemptId: event.attemptId, toolId: event.toolId,
             output: event.snapshot.output, truncated: event.snapshot.truncated, partialLine: event.snapshot.partialLine });
@@ -57,6 +59,11 @@ export class TurnManager {
           for (const tool of attempt.tools) tool.running = tool.id === event.runningToolId;
           await this.emit({ event: "attempt.updated", threadId, turnId: event.turnId, attempt });
         } else {
+          if (["response.created", "response.completed", "response.failed", "response.incomplete"].includes(event.event.type)) {
+            const saved = this.store.history.getAttempt(event.attemptId)!;
+            const attempt = listAttemptViews(this.store, event.turnId, saved.sequence - 1, 1)[0]!;
+            await this.emit({ event: "attempt.updated", threadId, turnId: event.turnId, attempt });
+          }
           for (const notification of projectResponseEvent(threadId, event)) await this.emit(notification);
         }
       },

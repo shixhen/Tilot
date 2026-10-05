@@ -158,7 +158,7 @@ Responses 的 function 字段位于工具对象顶层。以下仅示意读取工
 - 未命中输入：输入总量减缓存命中量。
 - 输出总量：output_tokens；其中 reasoning_tokens 是子项，不重复计费。
 
-当前只展示服务返回的用量，不估算请求成本或设置 Run 费用限制。缺失 usage 显示未知，不按零补齐；失败响应带 usage 时原样保存，失败请求的 Token 统计尚未接入界面。
+当前按整轮累计服务返回的用量，不估算请求成本或设置 Run 费用限制。失败、截断及取消请求带 usage 时原样保存并参与累计；缺失字段影响的合计显示未知，不按零补齐或展示部分和。缓存命中率按累计缓存命中除以累计输入计算；TPS 按累计输出除以各次模型生成时间之和计算，不含工具执行与首 token 等待，不平均单次比例或速度。原始请求用量和计时仍按请求保存，便于历史重算及未来的对话范围汇总；目前仅接入轮次统计。
 
 [A1]: https://api-docs.deepseek.com/zh-cn/guides/responses_api/
 [A2]: https://api-docs.deepseek.com/api/create-response/

@@ -99,6 +99,15 @@
 /* 行内展开箭头相对中文字形下移 1px；用定位偏移，旋转时中心不会漂移。 */
 .disclosure-icon { position: relative; top: 1px; flex-shrink: 0; }
 
+/* 自然高度的网格轨道过渡，让后续内容随折叠过程移动，也适应流式文本和嵌套折叠。 */
+.collapsible-motion {
+  display: grid;
+  grid-template-rows: 0fr;
+  min-width: 0;
+  transition: grid-template-rows 200ms cubic-bezier(0.2, 0, 0, 1);
+}
+.collapsible-motion[data-state="open"] { grid-template-rows: 1fr; }
+
 /* 运行中的状态文字：一道亮光从左向右扫过灰色文字。 */
 .shimmer-text {
   color: transparent;

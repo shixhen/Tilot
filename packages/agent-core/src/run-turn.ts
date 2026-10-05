@@ -5,6 +5,8 @@ import { streamResponse } from "@tilot/responses";
 import { getResponseToolCallsFromResponse } from "@tilot/responses/output";
 import type { AppConfig, AttemptCompletion, Store, Turn } from "@tilot/store";
 import { createToolSet, OutputCache, type OutputSnapshot, type ToolSet, type Workspace } from "@tilot/tool";
+import type { ReasoningTiming } from "@tilot/protocol";
+import { ReasoningClock } from "./reasoning-clock.ts";
 
 const outputCaches = new WeakMap<Store, OutputCache>();
 
@@ -12,6 +14,7 @@ const outputCaches = new WeakMap<Store, OutputCache>();
 export type TurnEvent =
   | { type: "tool.updated"; turnId: string; attemptId: string; runningToolId: string | null }
   | { type: "tool.progress"; turnId: string; attemptId: string; toolId: string; snapshot: OutputSnapshot }
+  | { type: "reasoning.updated"; turnId: string; attemptId: string; timing: ReasoningTiming }
   | { type: "turn.started"; turn: Turn }
   | { type: "response.event"; turnId: string; attemptId: string; event: ResponseStreamEvent };
 
@@ -67,10 +70,14 @@ export async function runTurn(store: Store, client: OpenAI, options: RunTurnOpti
         const records = store.history.listToolCalls(attemptId!);
         for (const [index, call] of calls.entries()) {
           const skipped = options.signal?.aborted ? "轮次已取消，工具未执行。" : null;
-          if (!skipped) await notifyTool(attemptId!, records[index]!.id);
+          if (!skipped) {
+            store.history.startTool(records[index]!.id);
+            await notifyTool(attemptId!, records[index]!.id);
+          }
           const controller = new AbortController();
           let progressError: unknown;
           const signal = options.signal ? AbortSignal.any([options.signal, controller.signal]) : controller.signal;
+          const toolStarted = performance.now();
           const output = skipped ? JSON.stringify({ status: "not_executed", error: skipped })
             : await tools.execute(call.name, call.arguments, signal, { executionId: records[index]!.id,
               ...(options.onEvent ? { onUpdate: async (snapshot: OutputSnapshot) => {
@@ -79,7 +86,8 @@ export async function runTurn(store: Store, client: OpenAI, options: RunTurnOpti
                 catch (error) { progressError = error; controller.abort(); }
               } } : {}),
             });
-          store.history.saveToolResult(records[index]!.id, { type: "function_call_output", call_id: call.call_id, output });
+          const toolDurationMs = skipped ? null : performance.now() - toolStarted;
+          store.history.saveToolResult(records[index]!.id, { type: "function_call_output", call_id: call.call_id, output }, toolDurationMs);
           if (progressError !== undefined) {
             // 先保存停止后的实际结果，再给后续调用补未执行结果；不能重跑有副作用的命令。
             for (let remaining = index + 1; remaining < calls.length; remaining++) store.history.saveToolResult(records[remaining]!.id, {
@@ -141,6 +149,7 @@ async function requestAttempt(
   attemptId = store.history.startAttempt(turn.id, inputThroughId).id;
   let firstTokenMs: number | null = null;
   const requestStarted = performance.now();
+  const reasoning = new ReasoningClock();
   try {
     const previousIds = new Set<string>();
     const previousCallIds = new Set<string>();
@@ -152,6 +161,7 @@ async function requestAttempt(
       ...context, model: config.model, reasoning: { effort: config.reasoningEffort },
       tools: tools.definitions, tool_choice: tools.definitions.length ? "auto" : "none",
     }, options.signal)) {
+      const timingChanges = reasoning.update(event);
       // 创建事件不是 token；推理、正文、拒绝文本和工具参数的首个非空增量均算首 token。
       if (firstTokenMs === null && (
         event.type === "response.output_text.delta" || event.type === "response.reasoning_text.delta" ||
@@ -178,6 +188,7 @@ async function requestAttempt(
         break;
       }
       await options.onEvent?.({ type: "response.event", turnId: turn.id, attemptId, event });
+      for (const timing of timingChanges) await options.onEvent?.({ type: "reasoning.updated", turnId: turn.id, attemptId, timing });
       options.signal?.throwIfAborted();
     }
   } catch (error) {
@@ -187,7 +198,8 @@ async function requestAttempt(
     };
   }
   // streamResponse 无终态会抛错，所以这里必定已有成功或失败结果。
-  store.history.finishAttempt(attemptId, { ...completion!, firstTokenMs, durationMs: performance.now() - requestStarted });
+  reasoning.finish();
+  store.history.finishAttempt(attemptId, { ...completion!, firstTokenMs, durationMs: performance.now() - requestStarted, reasoningTimings: reasoning.snapshot() });
   return { attemptId, completion: completion!, terminal };
 }
 

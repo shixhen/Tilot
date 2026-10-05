@@ -1,5 +1,5 @@
 import type { Response } from "openai/resources/responses/responses";
-import type { AttemptView, MessagePart, MessageView, ToolView } from "@tilot/protocol";
+import type { AttemptView, MessagePart, MessageView, ReasoningTiming, ToolView } from "@tilot/protocol";
 import type { Store } from "@tilot/store";
 import { getResponseToolCallsFromResponse } from "@tilot/responses/output";
 
@@ -10,14 +10,14 @@ export function listAttemptViews(store: Store, turnId: string, afterSequence = 0
     const tools: ToolView[] = [];
     if (attempt.status === "completed") {
       if (!attempt.response) throw new Error("成功请求缺少已保存的响应。");
-      messages = projectMessages(attempt.response);
+      messages = projectMessages(attempt.response, attempt.reasoningTimings);
       for (const record of store.history.listToolCalls(attempt.id)) {
         const call = attempt.response.output[record.outputIndex];
         if (call?.type !== "function_call") throw new Error("工具记录与模型响应不匹配。");
         tools.push({
           id: record.id, outputIndex: record.outputIndex, name: call.name, arguments: call.arguments,
           output: record.result === null ? null : typeof record.result.output === "string" ? record.result.output : JSON.stringify(record.result.output),
-          running: false,
+          running: false, startedAt: record.startedAt, durationMs: record.durationMs,
         });
       }
     }
@@ -25,11 +25,10 @@ export function listAttemptViews(store: Store, turnId: string, afterSequence = 0
       id: attempt.id, turnId: attempt.turnId, sequence: attempt.sequence,
       inputThroughId: attempt.inputThroughId, status: attempt.status, error: attempt.error,
       createdAt: attempt.createdAt, finishedAt: attempt.finishedAt, messages, tools,
+      reasoningTimings: attempt.reasoningTimings,
       metrics: {
         firstTokenMs: attempt.firstTokenMs,
-        tokensPerSecond: attempt.firstTokenMs !== null && attempt.durationMs !== null &&
-          attempt.durationMs > attempt.firstTokenMs && attempt.response?.usage
-          ? attempt.response.usage.output_tokens / ((attempt.durationMs - attempt.firstTokenMs) / 1000) : null,
+        durationMs: attempt.durationMs,
         inputTokens: attempt.response?.usage?.input_tokens ?? null,
         cachedTokens: attempt.response?.usage?.input_tokens_details?.cached_tokens ?? null,
         outputTokens: attempt.response?.usage?.output_tokens ?? null,
@@ -39,7 +38,7 @@ export function listAttemptViews(store: Store, turnId: string, afterSequence = 0
 }
 
 /** 将成功响应投影为正文、推理和拒绝文本，实时完成事件和历史查询共用，不改变保存数据。 */
-export function projectMessages(response: Response): MessageView[] {
+export function projectMessages(response: Response, timings: ReasoningTiming[] = []): MessageView[] {
   if (response.status !== "completed") throw new Error("只有成功响应可以生成正式历史消息。");
   getResponseToolCallsFromResponse(response);
   const messages: MessageView[] = [];
@@ -50,7 +49,10 @@ export function projectMessages(response: Response): MessageView[] {
         parts.push(part.type === "refusal" ? { kind: "refusal", text: part.refusal } : { kind: "text", text: part.text });
       }
     } else if (item.type === "reasoning") {
-      for (const part of item.content!) parts.push({ kind: "reasoning", text: part.text });
+      for (const [contentIndex, part] of item.content!.entries()) {
+        const timing = timings.find((entry) => entry.itemId === item.id && entry.contentIndex === contentIndex);
+        parts.push({ kind: "reasoning", text: part.text, ...(timing ? { timing: { startedAt: timing.startedAt, durationMs: timing.durationMs } } : {}) });
+      }
     } else {
       continue;
     }

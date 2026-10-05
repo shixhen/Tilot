@@ -1,13 +1,14 @@
 import assert from "node:assert/strict";
-import dns from "node:dns/promises";
+import dns from "node:dns";
+import http from "node:http";
+import { once } from "node:events";
 import { randomBytes } from "node:crypto";
 import { readFile, readdir, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { test } from "node:test";
 import { brotliCompressSync, deflateSync, gzipSync } from "node:zlib";
-import ipaddr from "ipaddr.js";
 import { createToolSet, OutputCache, readOutputLog, webFetch } from "../src/index.ts";
-import { fetchPublicText, isPublicAddress, parseFetchUrl, resolvePublicAddress } from "../src/web-http.ts";
+import { fetchHttpText, parseFetchUrl } from "../src/web-http.ts";
 import { htmlToMarkdown } from "../src/web-markdown.ts";
 import { temporaryDirectory } from "./helpers.ts";
 import { httpFixture } from "./http-fixture.ts";
@@ -32,7 +33,6 @@ test("匿名抓取重定向后的 HTML，保留来源、标题与 Markdown，分
   assert.ok(first.fetchedAt > 0);
   assert.ok("nextOffset" in first && first.nextOffset !== null);
   assert.equal(fixture.calls.length, 2);
-  assert.deepEqual(fixture.calls.map((call) => call.pinned), ["8.8.8.8", "8.8.8.8"]);
   version = "变化后的正文";
   const next = await webFetch({ ...host, outputs: new OutputCache(data) }, { outputId: first.outputId, offset: first.nextOffset! });
   assert.equal(first.fetchedAt, next.fetchedAt);
@@ -43,41 +43,37 @@ test("匿名抓取重定向后的 HTML，保留来源、标题与 Markdown，分
   assert.equal(fixture.calls.length, 2);
 });
 
-test("URL、全部 DNS 答案和 IPv4/IPv6 地址在发请求前检查，连接使用固定公开地址", async (context) => {
+test("URL 保留 HTTP(S) 与凭据校验，允许本机、私网、Fake-IP 和本地域名", async (context) => {
   const fixture = await httpFixture(context, (_request, response) => { response.writeHead(200, { "content-type": "text/plain" }); response.end("ok"); });
-  const signal = new AbortController().signal;
   for (const url of ["file:///etc/passwd", "ftp://example.com", "https://user:pass@example.com", "https://example.com/a b", "http://example.com/\n", "bad", "https://example.com/" + "x".repeat(4096), "https://example.com/" + "中".repeat(500)]) assert.throws(() => parseFetchUrl(url));
-  for (const address of ["127.0.0.1", "10.0.0.1", "172.16.0.1", "192.168.1.1", "169.254.169.254", "100.64.0.1", "0.0.0.0", "192.0.2.1", "224.0.0.1", "::1", "fe80::1", "fc00::1", "::ffff:127.0.0.1", "64:ff9b::a00:1", "2002:a00:1::", "2001:db8::1"]) assert.equal(isPublicAddress(address), false, address);
-  for (const address of ["8.8.8.8", "1.1.1.1", "2606:4700:4700::1111", "::ffff:8.8.8.8"]) assert.equal(isPublicAddress(address), true, address);
-  for (const url of ["http://127.1", "http://2130706433", "http://0x7f000001", "http://[::1]", "http://[::ffff:127.0.0.1]"]) await assert.rejects(fetchPublicText(url, signal), /公开地址/);
-  context.mock.method(dns, "lookup", async () => [{ address: "8.8.8.8", family: 4 }, { address: "10.0.0.1", family: 4 }]);
-  await assert.rejects(fetchPublicText("https://mixed.example", signal), /公开地址/);
-  assert.equal(fixture.calls.length, 0);
-  context.mock.method(dns, "lookup", async () => [{ address: "8.8.8.8", family: 4 }]);
-  assert.equal((await fetchPublicText("https://public.example", signal)).content, "ok");
-  assert.equal(fixture.calls[0]!.pinned, "8.8.8.8");
-  assert.equal((await fetchPublicText("http://[2606:4700:4700::1111]/ipv6", signal)).content, "ok");
-  assert.equal(fixture.calls[1]!.pinned, "2606:4700:4700::1111");
+  const urls = ["http://127.1", "http://2130706433", "http://0x7f000001", "http://[::1]", "http://[::ffff:127.0.0.1]", "http://192.168.1.1", "http://10.0.0.1", "http://198.18.0.54", "http://localhost", "http://printer.local", "http://metadata.google.internal", "http://printer"];
+  for (const url of urls) assert.equal((await fetchHttpText(url, new AbortController().signal)).content, "ok");
+  assert.equal(fixture.calls.length, urls.length);
 });
 
-test("当前网络的 DNS64 前缀不能将公开 IPv6 名称映射到私网 IPv4", async (context) => {
-  const signal = new AbortController().signal;
-  for (const length of [32, 40, 48, 56, 64, 96]) {
-    const encode = (ipv4: number[]) => {
-      const bytes = ipaddr.parse("2606:4700:1234:5678::").toByteArray();
-      for (let index = length / 8; index < 16; index++) bytes[index] = 0;
-      const positions = length === 96 ? [12, 13, 14, 15] : Array.from({ length: 4 }, (_, index) => length / 8 + index < 8 ? length / 8 + index : length / 8 + index + 1);
-      for (const [index, position] of positions.entries()) bytes[position] = ipv4[index]!;
-      return ipaddr.fromByteArray(bytes).toString();
-    };
-    context.mock.method(dns, "lookup", async (host: string) => [{ address: encode(host === "ipv4only.arpa" ? [192, 0, 0, 170] : [10, 0, 0, 1]), family: 6 }]);
-    await assert.rejects(resolvePublicAddress("translated.example", signal), /DNS64/);
-  }
+test("真实本机网页和重定向可读取，域名解析交给 Node 网络层", async (context) => {
+  context.mock.property(process, "env", { ...process.env, HTTP_PROXY: "", HTTPS_PROXY: "", ALL_PROXY: "", http_proxy: "", https_proxy: "", all_proxy: "", NO_PROXY: "*", no_proxy: "*" });
+  const server = http.createServer((request, response) => {
+    if (request.url === "/start") response.writeHead(302, { location: `http://local.example:${port}/page` });
+    else { assert.equal(request.headers.host, `local.example:${port}`); response.writeHead(200, { "content-type": "text/plain" }); response.write("本机正文"); }
+    response.end();
+  });
+  server.listen(0, "127.0.0.1"); await once(server, "listening");
+  context.after(async () => { server.closeAllConnections(); await new Promise<void>((resolve) => server.close(() => resolve())); });
+  const port = (server.address() as { port: number }).port;
+  const lookup = context.mock.method(dns, "lookup", (host: string, options: dns.LookupOptions, callback: (error: null, address: dns.LookupAddress[] | string, family?: number) => void) => {
+    assert.equal(host, "local.example");
+    callback(null, options.all ? [{ address: "127.0.0.1", family: 4 }] : "127.0.0.1", 4);
+  });
+  const result = await fetchHttpText(`http://127.0.0.1:${port}/start`, new AbortController().signal);
+  assert.equal(result.content, "本机正文");
+  assert.equal(result.finalUrl, `http://local.example:${port}/page`);
+  assert.equal(lookup.mock.callCount(), 1);
 });
 
-test("每跳重定向重新检查地址，缺少 Location、循环、HTTP 错误和不支持内容明确失败", async (context) => {
+test("每跳重定向检查协议与凭据，缺少 Location、循环、HTTP 错误和不支持内容明确失败", async (context) => {
   const fixture = await httpFixture(context, (request, response) => {
-    if (request.url === "/private") response.writeHead(302, { location: "http://127.0.0.1/secret" });
+    if (request.url === "/file") response.writeHead(302, { location: "file:///secret" });
     else if (request.url === "/credential") response.writeHead(302, { location: "https://user:pass@example.com" });
     else if (request.url === "/missing") response.writeHead(302);
     else if (request.url === "/loop") response.writeHead(302, { location: "/loop" });
@@ -86,9 +82,9 @@ test("每跳重定向重新检查地址，缺少 Location、循环、HTTP 错误
     response.end();
   });
   const host = { outputs: new OutputCache(await temporaryDirectory(context)), threadId: "web" };
-  for (const [path, error] of [["private", /公开地址/], ["credential", /用户名或密码/], ["missing", /Location/], ["loop", /5 次/], ["pdf", /内容类型/]] as const) await assert.rejects(webFetch(host, { url: `https://public.example/${path}` }), error);
+  for (const [path, error] of [["file", /HTTP\(S\)/], ["credential", /用户名或密码/], ["missing", /Location/], ["loop", /5 次/], ["pdf", /内容类型/]] as const) await assert.rejects(webFetch(host, { url: `https://public.example/${path}` }), error);
   for (const status of [401, 403, 404, 429, 503]) await assert.rejects(webFetch(host, { url: `https://public.example/status/${status}` }), new RegExp(`HTTP ${status}`));
-  assert.ok(!fixture.calls.some((call) => call.url.includes("127.0.0.1") || call.url.includes("user:pass")));
+  assert.ok(!fixture.calls.some((call) => call.url.includes("file:") || call.url.includes("user:pass")));
   assert.equal(fixture.calls.filter((call) => call.url.endsWith("/loop")).length, 6);
 });
 
@@ -171,7 +167,7 @@ test("网页声明与参数在两种任务共用，非法参数和预先取消�
   assert.equal(result.data.content, '{"text":"<script>"}');
 });
 
-test("取消与总超时中止 HTTP 流并关闭连接，不保存部分网页；DNS 等待也可取消", async (context) => {
+test("取消中止 HTTP 流并关闭连接，不保存部分网页", async (context) => {
   const controller = new AbortController();
   let closed!: Promise<void>;
   await httpFixture(context, (request, response) => {
@@ -184,16 +180,26 @@ test("取消与总超时中止 HTTP 流并关闭连接，不保存部分网页�
   await assert.rejects(webFetch(host, { url: "http://public.example" }, controller.signal), { name: "AbortError" });
   await closed;
   assert.deepEqual(await readdir(data), []);
+});
+
+test("总超时在系统 DNS 等待时也可取消，不保存部分网页", async (context) => {
+  context.mock.property(process, "env", { ...process.env, HTTP_PROXY: "", HTTPS_PROXY: "", ALL_PROXY: "", http_proxy: "", https_proxy: "", all_proxy: "", NO_PROXY: "*", no_proxy: "*" });
   let started!: () => void;
   const gate = new Promise<void>((resolve) => { started = resolve; });
-  let finishDns!: (value: { address: string; family: number }[]) => void;
-  context.mock.method(dns, "lookup", () => { started(); return new Promise((resolve) => { finishDns = resolve; }); });
+  let finishDns!: () => void;
+  context.mock.method(dns, "lookup", (_host: string, options: dns.LookupOptions, callback: (error: null, address: dns.LookupAddress[] | string, family?: number) => void) => {
+    finishDns = () => callback(null, options.all ? [{ address: "127.0.0.1", family: 4 }] : "127.0.0.1", 4);
+    started();
+  });
   const deadline = new AbortController();
   context.mock.method(AbortSignal, "timeout", (ms: number) => { assert.equal(ms, 30000); return deadline.signal; });
+  const data = await temporaryDirectory(context);
+  const host = { outputs: new OutputCache(data), threadId: "web" };
   const waiting = webFetch(host, { url: "https://waiting.example" });
   await gate; deadline.abort(new DOMException("deadline", "TimeoutError"));
   await assert.rejects(waiting, /30 秒/);
-  finishDns([{ address: "8.8.8.8", family: 4 }]);
+  finishDns();
+  assert.deepEqual(await readdir(data), []);
 });
 
 test("HTML 保留列表、代码和表格，隐藏内容、脚本与不安全链接不进入 Markdown", () => {

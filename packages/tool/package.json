@@ -9,7 +9,6 @@
   },
   "dependencies": {
     "diff": "9.0.0",
-    "ipaddr.js": "2.5.0",
     "openai": "7.18.0",
     "proxy-from-env": "2.1.0",
     "turndown": "7.2.4"

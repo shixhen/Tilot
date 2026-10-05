@@ -1,26 +1,22 @@
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { ChevronRight, CircleAlert, Square } from "lucide-react";
 import { Button } from "../components/ui/button";
-import type { MessagePart, ResponseMetrics, ToolView, TurnInput } from "@tilot/protocol";
+import type { MessagePart, TextTiming, ToolView, TurnInput } from "@tilot/protocol";
 import type { TurnRecord } from "../conversation";
+import { getTurnMetrics, type TurnMetrics } from "../request-metrics";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "../components/ui/collapsible";
 import { MessageMarkdown } from "./markdown";
 import { ToolCall } from "./tool-call";
-import { MessageActions } from "./message-actions";
+import { MessageActions, MetricsButton } from "./message-actions";
+import { ElapsedTime, formatDuration } from "./elapsed-time";
+
+export { formatDuration } from "./elapsed-time";
 
 /** 一轮对话按显示顺序展开后的条目：用户输入、模型消息或工具调用。 */
 type Entry =
   | { kind: "input"; input: TurnInput }
-  | { kind: "message"; key: string; parts: MessagePart[]; time: number | null; metrics?: ResponseMetrics | undefined }
+  | { kind: "message"; key: string; parts: MessagePart[]; time: number | null }
   | { kind: "tool"; tool: ToolView };
-
-/** 将耗时格式化为 Codex 式短文本，例如 9m 46s。 */
-export function formatDuration(ms: number): string {
-  const seconds = Math.max(1, Math.round(ms / 1000));
-  const h = Math.floor(seconds / 3600), m = Math.floor(seconds / 60) % 60, s = seconds % 60;
-  if (h > 0) return `${h}h ${m}m`;
-  return m > 0 ? `${m}m ${s}s` : `${s}s`;
-}
 
 /** 当天只显示时间，一周内显示星期，更早显示日期。 */
 export function formatTime(time: number, now = Date.now()): string {
@@ -32,21 +28,23 @@ export function formatTime(time: number, now = Date.now()): string {
 }
 
 /** 思考过程：正在生成时展开并限制高度，新内容把旧内容向上推；生成结束自动收起，之后可手动展开全文。 */
-function Reasoning({ text, live }: { text: string; live: boolean }) {
+function Reasoning({ text, live, timing }: { text: string; live: boolean; timing?: TextTiming | undefined }) {
   const [open, setOpen] = useState(live);
+  const [compact, setCompact] = useState(live);
   const box = useRef<HTMLDivElement>(null);
   useEffect(() => setOpen(live), [live]);
   useLayoutEffect(() => {
     if (live && box.current) box.current.scrollTop = box.current.scrollHeight;
   }, [live, text]);
-  return <Collapsible open={open} onOpenChange={setOpen} className="text-sm text-muted-foreground">
+  return <Collapsible open={open} onOpenChange={(value) => { setOpen(value); if (value && !live) setCompact(false); }} className="text-sm text-muted-foreground">
     <CollapsibleTrigger className="group flex items-center gap-1 rounded-sm outline-none transition-colors hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring">
       <span className={live ? "shimmer-text" : undefined}>{live ? "正在思考" : "思考"}</span>
+      <ElapsedTime startedAt={timing?.startedAt} durationMs={timing?.durationMs} running={live} />
       <ChevronRight className="disclosure-icon size-3.5 transition-transform group-data-[state=open]:rotate-90" />
     </CollapsibleTrigger>
     <CollapsibleContent>
       {/* 生成中顶部渐隐，提示上方还有被推走的内容。 */}
-      <div ref={box} className={`mt-2 border-l-2 pl-4 ${live ? "max-h-36 overflow-hidden mask-t-from-75%" : ""}`}><MessageMarkdown text={text} streaming={live} /></div>
+      <div ref={box} className={`mt-2 border-l-2 pl-4 ${compact ? "max-h-36 overflow-hidden mask-t-from-75%" : ""}`}><MessageMarkdown text={text} streaming={live} /></div>
     </CollapsibleContent>
   </Collapsible>;
 }
@@ -54,7 +52,7 @@ function Reasoning({ text, live }: { text: string; live: boolean }) {
 /** 渲染同一条回答的推理、正文和拒绝信息；live 表示这条消息正在生成，只有最后一段处于生成中。 */
 function MessageParts({ parts, live }: { parts: MessagePart[]; live: boolean }) {
   return <div className="grid min-w-0 grid-cols-1 gap-4">{parts.map((part, index) => part.kind === "reasoning"
-    ? <Reasoning key={index} text={part.text} live={live && index === parts.length - 1} />
+    ? <Reasoning key={index} text={part.text} timing={part.timing} live={live && index === parts.length - 1 && part.timing?.durationMs == null} />
     : <div key={index} className={part.kind === "refusal" ? "text-muted-foreground" : undefined}><MessageMarkdown text={part.text} streaming={live && index === parts.length - 1} /></div>)}</div>;
 }
 
@@ -67,12 +65,12 @@ function UserMessage({ input, onEdit, disabled }: { input: TurnInput; onEdit?: (
 }
 
 /** 渲染单个条目；live 表示它是运行中轮次的最新条目。 */
-function EntryView({ entry, active, live, onEdit, editDisabled }: { entry: Entry; active: boolean; live: boolean; onEdit?: ((text: string) => void) | undefined; editDisabled: boolean }) {
+function EntryView({ entry, active, live, metrics, onEdit, editDisabled }: { entry: Entry; active: boolean; live: boolean; metrics: TurnMetrics; onEdit?: ((text: string) => void) | undefined; editDisabled: boolean }) {
   if (entry.kind === "input") return <UserMessage input={entry.input} onEdit={onEdit} disabled={editDisabled} />;
   if (entry.kind === "tool") return <ToolCall tool={entry.tool} active={active} />;
   const text = entry.parts.filter((part) => part.kind !== "reasoning").map((part) => part.text).join("\n\n");
   return <article className="group/message min-w-0 max-w-full"><MessageParts parts={entry.parts} live={live} />
-    {text && <MessageActions text={text} time={entry.time} metrics={entry.metrics} />}
+    {text && <MessageActions text={text} time={entry.time} metrics={metrics} running={active} />}
   </article>;
 }
 
@@ -86,7 +84,7 @@ function listEntries(record: TurnRecord): Entry[] {
     }
     throughId = attempt.inputThroughId;
     for (const item of [...attempt.messages, ...attempt.tools].sort((a, b) => a.outputIndex - b.outputIndex)) {
-      entries.push("parts" in item ? { kind: "message", key: item.itemId, parts: item.parts, time: attempt.finishedAt, metrics: attempt.metrics } : { kind: "tool", tool: item });
+      entries.push("parts" in item ? { kind: "message", key: item.itemId, parts: item.parts, time: attempt.finishedAt } : { kind: "tool", tool: item });
     }
   }
   for (const input of record.inputs) if (input.id > throughId) entries.push({ kind: "input", input });
@@ -104,11 +102,13 @@ export function TurnMessages({ record, time, onResume, resumeDisabled, onEdit, e
   const { turn } = record;
   const active = turn.status === "running";
   const entries = listEntries(record);
+  const metrics = getTurnMetrics(record);
+  const hasText = entries.some((entry) => entry.kind === "message" && entry.parts.some((part) => part.kind !== "reasoning" && part.text));
   const lastInput = entries.findLastIndex((entry) => entry.kind === "input");
   const answer = entries.findLastIndex((entry) => entry.kind === "message" && entry.parts.some((part) => part.kind === "text"));
   const collapse = turn.status === "completed" && answer > lastInput + 1;
   const last = entries.at(-1);
-  const render = (list: Entry[]) => list.map((entry) => <EntryView key={entryKey(entry)} entry={entry} active={active} live={active && entry === last} onEdit={onEdit} editDisabled={editDisabled} />);
+  const render = (list: Entry[]) => list.map((entry) => <EntryView key={entryKey(entry)} entry={entry} active={active} live={active && entry === last} metrics={metrics} onEdit={onEdit} editDisabled={editDisabled} />);
   // 最新条目是用户输入或已结束的工具时，模型尚未开始输出，在末尾提示正在思考。
   const waiting = active && (!last || last.kind === "input" || (last.kind === "tool" && last.tool.output !== null));
   const labels = { cancelled: "已停止", interrupted: "运行已中断", failed: "生成失败" };
@@ -133,6 +133,7 @@ export function TurnMessages({ record, time, onResume, resumeDisabled, onEdit, e
       {turn.status === "cancelled" ? <Square className="size-3" /> : <CircleAlert className="size-3.5" />}
       {labels[turn.status]}{turn.error && ` · ${turn.error}`}
     </p>}
+    {!active && !hasText && metrics.requestCount > 0 && <div className="text-muted-foreground"><MetricsButton metrics={metrics} /></div>}
     {turn.status === "interrupted" && onResume && <div className="flex items-center gap-3 text-sm">
       <Button variant="outline" size="sm" disabled={resumeDisabled} onClick={onResume}>继续任务</Button>
       <span className="text-muted-foreground">将先核实已有结果，再继续任务。</span>

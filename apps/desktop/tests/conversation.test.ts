@@ -13,6 +13,28 @@ function turn(id = "turn"): Turn {
   return { id, threadId: "thread", sequence: 1, status: "running", createdAt: 1, finishedAt: null, error: null };
 }
 
+test("思考计时不被后续增量抹掉，取消历史可补齐终止耗时，迟到起点不恢复计时", () => {
+  const running = turn();
+  let records = applyEvent([], { event: "turn.started", turn: running, seq: 1 });
+  const delta = { event: "message.delta" as const, threadId: "thread", turnId: running.id, itemId: "r1", contentIndex: 0,
+    kind: "reasoning" as const, delta: "思考", seq: 2 };
+  records = applyEvent(records, delta);
+  const timing = { itemId: "r1", contentIndex: 0, startedAt: 1000, durationMs: null };
+  records = applyEvent(records, { event: "message.timing", threadId: "thread", turnId: running.id, timing, seq: 3 });
+  records = applyEvent(records, { ...delta, seq: 4 });
+  assert.deepEqual(records[0]!.previews[0]!.parts[0]!.timing, { startedAt: 1000, durationMs: null });
+  records = applyEvent(records, { event: "turn.finished", turn: { ...running, status: "cancelled" }, seq: 5 });
+  const attempt: AttemptView = { id: "attempt", turnId: running.id, sequence: 1, inputThroughId: 1, status: "cancelled",
+    createdAt: 1, finishedAt: 2250, error: null, messages: [], tools: [], reasoningTimings: [{ ...timing, durationMs: 1250 }] };
+  records = mergeHistory(records, [{ turn: { ...running, status: "cancelled" }, inputs: [], attempts: [attempt], previews: [] }]);
+  records = applyEvent(records, { event: "message.timing", threadId: "thread", turnId: running.id, timing, seq: 3 });
+  assert.deepEqual(records[0]!.previews[0]!.parts[0]!.timing, { startedAt: 1000, durationMs: 1250 });
+  assert.equal(records[0]!.previews[0]!.parts[0]!.text, "思考思考");
+  const html = renderToStaticMarkup(createElement(TooltipProvider, null, createElement(TurnMessages, { record: records[0]! })));
+  assert.match(html, /耗时 1.3s/);
+  assert.doesNotMatch(html, /正在思考/);
+});
+
 test("实时引导立即显示，重复事件不重添，旧历史不能移除新输入或覆盖流式内容", () => {
   const running = turn();
   const input = { id: 2, turnId: running.id, content: "补充中文🙂", createdAt: 2 };

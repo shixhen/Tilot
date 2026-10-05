@@ -1,5 +1,5 @@
 import type { Response, ResponseInputItem } from "openai/resources/responses/responses";
-import type { AttemptStatus } from "@tilot/protocol";
+import type { AttemptStatus, ReasoningTiming } from "@tilot/protocol";
 
 export type { AttemptStatus } from "@tilot/protocol";
 
@@ -18,6 +18,7 @@ export interface ModelAttempt {
   firstTokenMs: number | null;
   /** 请求开始至流结束的毫秒数，不包含工具执行。 */
   durationMs: number | null;
+  reasoningTimings: ReasoningTiming[];
 }
 
 /** 结束请求时提交的数据；成功响应须先经 Responses 校验，其余响应仅供诊断。 */
@@ -27,6 +28,7 @@ export interface AttemptCompletion {
   error?: string;
   firstTokenMs?: number | null;
   durationMs?: number;
+  reasoningTimings?: ReasoningTiming[];
 }
 
 /** 直接复用 SDK 的函数工具结果，保留原始 call_id 和 output。 */
@@ -41,4 +43,8 @@ export interface StoredToolCall {
   result: ToolResult | null;
   createdAt: number;
   finishedAt: number | null;
+  /** 实际开始执行的时间，未执行或旧记录为空。 */
+  startedAt: number | null;
+  /** 实际执行耗时，不包含排队或模型生成工具参数的时间。 */
+  durationMs: number | null;
 }
