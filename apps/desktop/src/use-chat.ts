@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import type { AppConfig, ReasoningEffort, ServerEvent, Thread } from "@tilot/protocol";
+import type { AppConfig, PermissionMode, ReasoningEffort, ServerEvent, Thread, ToolApproval } from "@tilot/protocol";
 import { BackendConnection } from "./backend";
 import { createClient, type Request } from "./client";
 import { applyEvent, loadConversation, mergeHistory, type TurnRecord } from "./conversation";
@@ -15,6 +15,11 @@ export function useChat() {
   const [threads, setThreads] = useState<Thread[]>([]);
   const [selected, setSelected] = useState<string | null>(null);
   const [newProjectPath, setNewProjectPath] = useState<string | null>(null);
+  const [newPermissionMode, setNewPermissionMode] = useState<PermissionMode | null>(null);
+  const [permissionBusy, setPermissionBusy] = useState(false);
+  const [approvals, setApprovals] = useState<ToolApproval[]>([]);
+  const approvalRevisions = useRef(new Map<string, number>());
+  const [approvalBusy, setApprovalBusy] = useState(false);
   const [conversations, setConversations] = useState<Record<string, TurnRecord[]>>({});
   const [config, setConfig] = useState<AppConfig | null>(null);
   // 已配置密钥的服务 id。
@@ -78,11 +83,32 @@ export function useChat() {
     }
   }
 
+  /** 刷新界面后接回服务中的审批；期间收到的新事件优先于旧查询。 */
+  async function refreshApprovals(threadId: string): Promise<void> {
+    const revision = approvalRevisions.current.get(threadId) ?? 0;
+    const pending = await request("approval.list", { threadId });
+    if (mounted.current && (approvalRevisions.current.get(threadId) ?? 0) === revision) {
+      setApprovals((current) => [...current.filter((item) => item.threadId !== threadId), ...pending]);
+    }
+  }
+
   /** 更新指定任务；轮次结束后从数据库重新取得正式消息。 */
   function receive(event: ServerEvent): void {
+    if (event.event === "approval.requested") {
+      const threadId = event.approval.threadId;
+      approvalRevisions.current.set(threadId, (approvalRevisions.current.get(threadId) ?? 0) + 1);
+      setApprovals((current) => [...current.filter((item) => item.id !== event.approval.id), event.approval]);
+      return;
+    }
+    if (event.event === "approval.resolved") {
+      approvalRevisions.current.set(event.threadId, (approvalRevisions.current.get(event.threadId) ?? 0) + 1);
+      setApprovals((current) => current.filter((item) => item.id !== event.approvalId));
+      return;
+    }
     const threadId = "turn" in event ? event.turn.threadId : event.threadId;
     setConversations((state) => ({ ...state, [threadId]: applyEvent(state[threadId] ?? [], event) }));
     if ("turn" in event) queue.current!.observe(event.turn);
+    if (event.event === "turn.started") void refreshThreads().catch(report);
     if (event.event === "turn.finished") {
       void Promise.all([refreshHistory(threadId), refreshThreads()]).catch(report);
     }
@@ -95,6 +121,7 @@ export function useChat() {
       client.current = null;
       queue.current!.setConnected(false);
       setConnected(false);
+      setApprovals([]);
       report(error);
     }).then(async (backend) => {
       connection = backend;
@@ -111,9 +138,9 @@ export function useChat() {
   /** 切换或新建空白会话；已存在任务按需读取最新历史。 */
   function select(threadId: string | null, projectPath: string | null = null): void {
     setSelected(threadId);
-    if (threadId === null) setNewProjectPath(projectPath);
+    if (threadId === null) { setNewProjectPath(projectPath); setNewPermissionMode(null); }
     setError("");
-    if (threadId) void refreshHistory(threadId).catch(report);
+    if (threadId) void Promise.all([refreshHistory(threadId), refreshApprovals(threadId)]).catch(report);
   }
 
   /** 首次发送时创建任务，输入经服务确认后清空；已结束状态不会被启动应答覆盖。 */
@@ -129,7 +156,8 @@ export function useChat() {
     setError("");
     try {
       if (!threadId) {
-        const thread = await request("thread.create", { title: input.trim().slice(0, 36), projectPath: newProjectPath });
+        const thread = await request("thread.create", { title: input.trim().slice(0, 36), projectPath: newProjectPath,
+          ...(newPermissionMode === null ? {} : { permissionMode: newPermissionMode }) });
         threadId = thread.id;
         setThreads((threads) => [thread, ...threads]);
         setSelected(threadId);
@@ -139,7 +167,11 @@ export function useChat() {
       setConversations((state) => ({ ...state, [turn.threadId]: applyEvent(state[turn.threadId] ?? [], { event: "turn.started", turn, seq: 0 }) }));
       void refreshHistory(threadId).catch(report);
       return { accepted: true, threadId };
-    } catch (error) { report(error); return { accepted: false, threadId }; }
+    } catch (error) {
+      report(error);
+      if (threadId) void refreshThreads().catch(report);
+      return { accepted: false, threadId };
+    }
     finally { submitting.current = false; if (mounted.current) setBusy(false); }
   }
 
@@ -179,6 +211,24 @@ export function useChat() {
     catch (error) { report(error); }
   }
 
+  /** 新对话仅调整首次发送的选择，已有对话由服务检查锁定规则。 */
+  async function choosePermission(permissionMode: PermissionMode): Promise<void> {
+    if (!selected) { setNewPermissionMode(permissionMode); return; }
+    setPermissionBusy(true);
+    try {
+      const thread = await request("thread.permission", { threadId: selected, permissionMode });
+      setThreads((current) => current.map((item) => item.id === thread.id ? thread : item));
+    } catch (error) { report(error); }
+    finally { setPermissionBusy(false); }
+  }
+
+  async function respondApproval(approvalId: string, allowed: boolean): Promise<void> {
+    setApprovalBusy(true);
+    try { await request("approval.respond", { approvalId, allowed }); }
+    catch (error) { report(error); }
+    finally { setApprovalBusy(false); }
+  }
+
   /** 设置保存或删除凭据后重新读取状态，确保页面反映服务实际数据。 */
   async function refreshConfig(): Promise<void> {
     const [config, status] = await Promise.all([request("config.get", {}), request("credentials.status", {})]);
@@ -187,6 +237,7 @@ export function useChat() {
   }
 
   return { connected, threads, selected, newProjectPath, records: selected ? conversations[selected] ?? [] : [], config, configured,
+    newPermissionMode, permissionBusy, approvals: approvals.filter((item) => item.threadId === selected), approvalBusy, choosePermission, respondApproval,
     queue: selected ? queues[selected] ?? { messages: [], paused: false, busy: false } : { messages: [], paused: false, busy: false },
     steer: (id: string) => selected ? queue.current!.steer(selected, id) : Promise.resolve(),
     removeQueued: (id: string) => { if (selected) queue.current!.remove(selected, id); },

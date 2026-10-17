@@ -204,7 +204,7 @@ test("首请求保持原输入与冻结配置，补充输入在同一轮后续�
   assert.equal("max_output_tokens" in body, false);
   assert.deepEqual(body.reasoning, { effort: config.reasoningEffort });
   assert.deepEqual(body.input, [{ role: "user", content: "你好" }]);
-  assert.deepEqual(body.tools.map((tool: { name: string }) => tool.name), ["web_fetch"]);
+  assert.deepEqual(body.tools.map((tool: { name: string }) => tool.name), ["read", "ls", "find", "grep", "web_fetch"]);
   assert.equal(body.tool_choice, "auto");
   const steered = JSON.parse(String(requests[1]!.body));
   assert.equal(steered.model, config.model);
@@ -357,7 +357,7 @@ test("事件处理错误会停止请求，终态通知错误不会改写已保�
 test("项目工具按顺序执行并配对落库，下一次请求保留推理、调用和实际结果", { skip: process.platform !== "win32" }, async (context) => {
   const store = openTestStore(context);
   const directory = projectDirectory(context);
-  const thread = store.createThread("工具循环", directory);
+  const thread = store.createThread("工具循环", directory, "full-access");
   let count = 0;
   const { client, requests } = mockClient(() => ++count === 1 ? toolEvents([
     { name: "shell", arguments: JSON.stringify({ command: "Set-Content -LiteralPath 'note.txt' -Value '你好' -Encoding UTF8" }) },
@@ -432,7 +432,7 @@ test("目录和代码搜索进入真实工具循环，返回的路径和行号�
   assert.deepEqual(JSON.parse(String(requests[2]!.body)).tools, JSON.parse(String(requests[0]!.body)).tools);
 });
 
-test("普通对话可抓取并续读网页，来源与结果配对回放，不开放项目工具", async (context) => {
+test("普通只读对话可抓取并续读网页，声明本地读取工具并在独立工作目录中执行", async (context) => {
   const fixture = await httpFixture(context, (_request, response) => {
     response.writeHead(200, { "content-type": "text/html; charset=utf-8" });
     response.end("<title>示例网页</title><p>第一段</p><p>第二段</p>");
@@ -457,7 +457,7 @@ test("普通对话可抓取并续读网页，来源与结果配对回放，不�
   assert.equal(turn.status, "completed");
   assert.equal(requests.length, 3);
   assert.equal(fixture.calls.length, 1);
-  for (const request of requests) assert.deepEqual(JSON.parse(String(request.body)).tools.map((tool: { name: string }) => tool.name), ["web_fetch"]);
+  for (const request of requests) assert.deepEqual(JSON.parse(String(request.body)).tools.map((tool: { name: string }) => tool.name), ["read", "ls", "find", "grep", "web_fetch"]);
   const final = JSON.parse(String(requests[2]!.body));
   const outputs = final.input.filter((item: { type: string }) => item.type === "function_call_output");
   const first = JSON.parse(outputs[0].output).data;
@@ -467,7 +467,8 @@ test("普通对话可抓取并续读网页，来源与结果配对回放，不�
   assert.equal(second.fetchedAt, first.fetchedAt);
   assert.equal(second.outputId, first.outputId);
   assert.equal(first.content + second.content, "第一段\n\n第二段");
-  assert.match(JSON.parse(outputs[2].output).error, /未声明的工具/);
+  assert.match(JSON.parse(outputs[2].output).error, /ENOENT/);
+  assert.ok(existsSync(join(store.dataDirectory, "workspaces", thread.id)));
   const calls = store.history.listAttempts(turn.id).flatMap((attempt) => store.history.listToolCalls(attempt.id));
   assert.deepEqual(outputs.map((item: { call_id: string }) => item.call_id), calls.map((call) => call.callId));
   assert.deepEqual(outputs.map((item: { output: string }) => item.output), calls.map((call) => String(call.result!.output)));
@@ -639,9 +640,31 @@ test("重复历史调用标识不会再次执行工具；工具后取消不会�
   assert.equal(existsSync(join(directory, "skipped.txt")), false);
 });
 
+test("普通完全访问对话使用各自保留的工作目录，相对路径不会串到其他对话", async (context) => {
+  const store = openTestStore(context);
+  const first = store.createThread("可写普通对话", null, "full-access");
+  const second = store.createThread("另一个普通对话", null, "full-access");
+  let count = 0;
+  const writing = mockClient(() => ++count === 1 ? toolEvents([{ name: "write", arguments: '{"path":"saved.txt","content":"保留内容"}' }]) : sampleEvents());
+  assert.equal((await runTurn(store, writing.client, { threadId: first.id, input: "保存", instructions: "" })).status, "completed");
+  const file = join(store.dataDirectory, "workspaces", first.id, "saved.txt");
+  assert.equal(readFileSync(file, "utf8"), "保留内容");
+  for (const thread of [first, second]) {
+    let request = 0;
+    const reading = mockClient(() => ++request === 1 ? toolEvents([{ name: "read", arguments: '{"path":"saved.txt"}' }]) : sampleEvents());
+    await runTurn(store, reading.client, { threadId: thread.id, input: "读取", instructions: "" });
+    const body = JSON.parse(String(reading.requests[1]!.body));
+    const output = JSON.parse(body.input.filter((item: { type: string }) => item.type === "function_call_output").at(-1).output);
+    if (thread.id === first.id) assert.equal(output.data.content, "保留内容");
+    else { assert.equal(output.status, "error"); assert.match(output.error, /ENOENT/); }
+  }
+  assert.equal(readFileSync(file, "utf8"), "保留内容");
+  assert.equal(existsSync(join(store.dataDirectory, "workspaces", second.id, "saved.txt")), false);
+});
+
 test("命令进度不提前落库或进入上下文，正式日志结果可驱动下一次 read 调用", { skip: process.platform !== "win32" }, async (context) => {
   const store = openTestStore(context);
-  const thread = store.createThread("读取执行日志", projectDirectory(context));
+  const thread = store.createThread("读取执行日志", projectDirectory(context), "full-access");
   let count = 0;
   let outputId = "";
   const { client, requests } = mockClient(() => {
@@ -683,7 +706,7 @@ test("命令进度不提前落库或进入上下文，正式日志结果可驱�
 test("命令进度交付失败先停止进程并保存实际结果，后续工具不执行且模型不重试", { skip: process.platform !== "win32", timeout: 15000 }, async (context) => {
   const store = openTestStore(context);
   const directory = projectDirectory(context);
-  const thread = store.createThread("进度交付失败", directory);
+  const thread = store.createThread("进度交付失败", directory, "full-access");
   const pidFile = join(directory, "child.pid");
   const script = join(directory, "child.cjs");
   writeFileSync(script, `require('node:fs').writeFileSync(${JSON.stringify(pidFile)}, String(process.pid)); process.stdout.write('实际输出'); setInterval(() => {}, 1000);`, "utf8");

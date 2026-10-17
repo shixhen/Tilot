@@ -198,7 +198,7 @@ test("版本 3 升级保留轮次和输入，并增加模型历史表", (context
   }
   const migrated = new Store(directory);
   try {
-    assert.deepEqual(migrated.getThread(thread.id), savedThread);
+    assert.deepEqual(migrated.getThread(thread.id), { ...savedThread, permissionLockedAt: turn.createdAt });
     assert.deepEqual(migrated.getTurn(turn.id), turn);
     assert.deepEqual(migrated.listTurnInputs(turn.id), [input]);
     assert.equal(migrated.history.startAttempt(turn.id, input.id).sequence, 1);

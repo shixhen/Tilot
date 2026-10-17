@@ -31,6 +31,7 @@ async function stopProcessTree(pid: number, systemDirectory: string): Promise<vo
 /** PowerShell 方言、输出与日志限制都与执行声明一起维护。 */
 export function createShellTool(workspace: Workspace, host?: ToolHost): Tool {
   return {
+    access: "shell",
     definition: {
       type: "function", name: "shell", strict: false,
       description: `在项目根目录执行独立 Windows PowerShell 5.1 命令，不是 Bash。输入输出用 UTF-8，不支持交互或后台服务。默认 ${DEFAULT_TIMEOUT_SECONDS} 秒，最多 ${MAX_TIMEOUT_SECONDS} 秒。输出只返回末尾 ${MAX_OUTPUT_LINES} 行或 ${MAX_OUTPUT_BYTES / 1024} KiB，partialLine 表示末尾预览的首行不完整。outputId 可用 read 续读当前任务日志；日志最多保存 10 MiB，保留 7 天，总缓存 256 MiB，artifactTruncated 表示缓存不完整，logError 表示保存失败。取消和超时返回已取得的输出与退出信息。修改文件前先读取；非零退出、日志失败或取消不表示没有副作用，不要自动重跑命令。`,

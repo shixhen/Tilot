@@ -1,7 +1,7 @@
 # Tilot
 
 基于 Tauri、React、TypeScript 和 Node.js 的本地桌面 Agent。
-当前已建立 Responses 客户端、SQLite 历史存储、Context 上下文构建、Core 工具调用循环，以及桌面宿主与 Node 服务连接。项目任务已开放 read、write、edit、shell、ls、find、grep、web_fetch 八个工具，普通对话也可使用 web_fetch。桌面支持多服务与模型配置、普通对话、流式正文与推理、命令输出预览、编辑差异、目录和搜索结果、网页来源与正文、取消、历史切换和中断后继续。Context 已接入项目指令和技能元数据；不设置应用输入或输出 Token 限制，也不启用自动摘要。正式 Server 链路已通过 deepseek-flash 真实联调，原生桌面交互仍待验收，详见 [联调记录](docs/deepseek-live-testing.md)。
+当前已建立 Responses 客户端、SQLite 历史存储、Context 上下文构建、Core 工具调用循环，以及桌面宿主与 Node 服务连接。工具支持 read、write、edit、shell、ls、find、grep、web_fetch；按对话选择只读、项目内修改或完全访问，工具声明在首次发送后固定，需审批的调用在输入框上方单次允许或拒绝。普通对话默认只读，也可在首次发送前选择完全访问。桌面支持多服务与模型配置、普通对话、流式正文与推理、命令输出预览、编辑差异、目录和搜索结果、网页来源与正文、取消、历史切换和中断后继续。Context 已接入项目指令和技能元数据；不设置应用输入或输出 Token 限制，也不启用自动摘要。正式 Server 链路已通过 deepseek-flash 真实联调，原生桌面交互仍待验收，详见 [联调记录](docs/deepseek-live-testing.md)。
 
 分批开发顺序与验收方式见 [开发计划](docs/development-plan.md)。
 
@@ -20,8 +20,7 @@ npm test
 `npm run test:deepseek` 是 Windows 上手动运行的真实付费联调：读取已保存的官方默认服务配置，在独立临时项目和数据库中验证工具、重启、取消、恢复和 none 模式；不修改用户原有项目与对话，也不包含在 `npm test` 中。准备方式和验证边界见 [联调记录](docs/deepseek-live-testing.md)。
 `npm run test:deepseek:steering` 单独验证真实模型的同轮引导与等待消息自动续发，同样使用隔离数据和已保存配置，会产生模型费用；行为和验证结果见 [等待消息与引导](docs/queued-input-and-steering.md)。
 测试与实现放在同一个包中，分别位于 `tests/` 和 `src/`。根目录 `npm test` 汇总运行各包测试，也可用 `npm test --workspace @tilot/responses` 单独运行一个包。
-`packages/tool/src/workspace.ts` 定义项目目录、打开逻辑及文件访问路径检查，由 Server 复用。
-文件工具路径统一使用 `/` 分隔的项目相对路径，空字符串在路径检查中表示根目录。路径检查拒绝目录穿越、Windows 特殊路径及内部链接。这是应用级路径检查，不是操作系统沙箱，也不能约束 PowerShell 命令访问。
+`packages/tool/src/workspace.ts` 定义项目目录、打开逻辑及原子写入所用的受约束路径检查，由 Server 复用。`local-path.ts` 解析模型使用的相对及绝对路径，允许项目外读取；写入按真实目标判断权限。普通对话各自使用应用数据目录下的 `workspaces/<threadId>`，保留文件。权限和单次审批规则见 [工具权限与审批](docs/tool-permissions.md)；这是应用级权限策略，没有操作系统沙箱。
 
 Tool 已提供 `readProjectFile(workspace, {path, offset?, limit?}, signal?)`：读取 UTF-8 文本（含 BOM），保留 LF/CRLF，默认返回 200 行，可明确请求最多 2,000 行，正文仍最多 50 KiB。结果包含 `content`、`offset`、`lineCount`、`nextOffset` 和 `truncatedBy`（lines、bytes 或 null）；不切断长行，超过单行限制时明确报错。分块读取并检查所读部分的编码与二进制控制字符，支持取消。
 
@@ -55,7 +54,7 @@ Core 提供 `host = {outputs: OutputCache, threadId}` 和 `execution = {executio
 
 网页正文与命令日志共用宿主输出缓存和 7 天/256 MiB 总限额，通过类型及任务归属隔离；web_fetch 只能续读网页，read 的 outputId 只能读命令日志。网络层按宿主 HTTP_PROXY/HTTPS_PROXY（含小写）、ALL_PROXY 和 NO_PROXY 自动选择代理或直连，支持 HTTP/HTTPS 代理，没有额外界面开关。未配置代理或匹配 NO_PROXY 时使用系统 DNS 与路由，兼容系统 TUN/Fake-IP；显式代理模式由代理解析及连接目标。代理凭据仅发给代理，错误结果不回显凭据，代理出错不自动改为直连。代理选择使用 [proxy-from-env](https://github.com/Rob--W/proxy-from-env)，传输使用 [Node 内置代理支持](https://nodejs.org/docs/latest-v24.x/api/http.html#built-in-proxy-support)。
 
-八个模型工具在 `packages/tool/src/` 的对应模块中各自维护描述、参数和执行校验，不单独维护提示词文件。`createToolSet(workspace?, host?)` 创建一轮工具集合，由 `execute.ts` 统一查找和包装结果；Core 的请求声明与执行共享这个集合。七个本地工具只对绑定项目的任务开放；宿主提供缓存后，web_fetch 在两种对话中都开放。Git、测试与构建继续由 shell 承担；目前没有专用网络搜索或 MCP 接入。[工具重写计划](docs/tool-rewrite-plan.md)的 A1–A3、B1、B3a 已实现，按开发者要求暂缓搜索；背景调研见 [工具对比](docs/tool-comparison.md)。
+八个模型工具在 `packages/tool/src/` 的对应模块中各自维护描述、参数、access 类别和执行校验，不单独维护提示词文件。`createToolSet(workspace?, host?, permissions?)` 创建本轮工具集合，由 `execute.ts` 统一检查权限、等待审批、执行和包装结果；Core 的请求声明与执行共享这个集合。项目及普通对话均可使用本地工具，实际声明及执行规则见 [工具权限与审批](docs/tool-permissions.md)。Git、测试与构建继续由 shell 承担；目前没有专用网络搜索或 MCP 接入。[工具重写计划](docs/tool-rewrite-plan.md)的 A1–A3、B1、B3a 已实现，按开发者要求暂缓搜索；背景调研见 [工具对比](docs/tool-comparison.md)。
 
 启动 Windows 桌面开发版还需要 Rust、Visual Studio C++ Build Tools 和 WebView2：
 
@@ -81,7 +80,7 @@ Enter 发送，Shift + Enter 换行；中文输入法确认候选不会触发发
 
 正文和推理使用 Markdown 排版，支持标题、列表、引用、表格与任务列表。数学公式支持行内 `$...$`、`\(...\)` 和独立 `$$...$$`、`\[...\]`，由 KaTeX 渲染，字体随应用打包，长独立公式可横向滚动。公式转换只用于显示，历史原文与复制消息不变；普通代码块和行内代码保留原文，无效公式回退显示源码，流式输出中的未完成公式不会中断消息。代码块保留缩进，支持横向滚动和复制，流式未闭合代码块也能显示。网页链接经 Tauri Opener 交给系统默认浏览器，仅支持完整 HTTP(S) 地址；模型输出的 HTML 不执行，图片仅显示说明，不自动下载。代码语法着色暂未接入。
 
-完成消息替换临时预览，失败或取消片段标为临时预览；重新打开应用只恢复数据库中已保存的消息。历史读取覆盖全部分页，任务切换隔离消息与本次打开期间的草稿；向上阅读时不强制滚回底部。项目对话可通过七个本地工具列目录、读取、搜索、修改文件及执行命令，两种对话都可读取公开网页。每段思考与每次工具调用显示独立耗时，运行中更新，结束后保留实测时间。思考只计该段首个非空增量到结束；工具只计实际执行，取消后未执行的调用不计时。整个轮次的过程、单段思考、工具卡片和侧栏分组共用 200ms 的高度过渡，后续内容连续移动，支持嵌套与快速切换，并遵循系统减少动态效果设置。工具详情只显示输入和实际输出，标题保留名称、状态和耗时；网页不附加标题、来源、抓取时间，其他工具也不额外展示数量、日志/缓存及续读说明。ls/find/grep 保留路径、类型、匹配和上下文行号；edit 保留新增和删除着色，旧历史没有 diff 时仍显示原始结果，新调用只接受 edits 数组。shell 临时输出仅作界面预览，正式结果会替换预览；完整工具元数据仍保存并返回模型，缓存续读和上下文不受界面简化影响。数据库版本 10 保存单项计时，旧记录缺失时显示“耗时未知”。用户消息发送后立即提供复制等操作，悬停时显示发送时间；AI 消息的复制和用量图标只在所属轮次结束后显示，运行中不能悬停查看统计。AI 操作栏保留高度，失败、取消或中断结束后也可查看统计。回复统计以“本轮模型请求”为标题，累计本轮全部模型请求的用量，展示请求次数、首 token 耗时、输出速度、取整的缓存命中率、缓存命中/未命中与输出 token。缓存命中率按累计缓存命中除以累计输入计算；TPS 按累计输出除以各次模型生成时间之和计算，扣除首 token 等待与工具执行时间。失败请求已返回的用量也计入，缺失字段对应的合计显示“暂无数据”并注明缺失请求数；没有正文的轮次也有统计入口。历史重开后重新汇总全部请求，汇总逻辑独立以供未来对话总统计复用，当前只展示本轮数据。
+完成消息替换临时预览，失败或取消片段标为临时预览；重新打开应用只恢复数据库中已保存的消息。历史读取覆盖全部分页，任务切换隔离消息与本次打开期间的草稿；向上阅读时不强制滚回底部。项目及普通对话按权限使用本地工具和网页读取；审批在输入框上方逐条处理，运行中切换权限仅在下一轮生效。每段思考与每次工具调用显示独立耗时，运行中更新，结束后保留实测时间。思考只计该段首个非空增量到结束；工具只计实际执行，取消后未执行的调用不计时。整个轮次的过程、单段思考、工具卡片和侧栏分组共用 200ms 的高度过渡，后续内容连续移动，支持嵌套与快速切换，并遵循系统减少动态效果设置。工具详情只显示输入和实际输出，标题保留名称、状态和耗时；网页不附加标题、来源、抓取时间，其他工具也不额外展示数量、日志/缓存及续读说明。ls/find/grep 保留路径、类型、匹配和上下文行号；edit 保留新增和删除着色，旧历史没有 diff 时仍显示原始结果，新调用只接受 edits 数组。shell 临时输出仅作界面预览，正式结果会替换预览；完整工具元数据仍保存并返回模型，缓存续读和上下文不受界面简化影响。数据库版本 10 保存单项计时，旧记录缺失时显示“耗时未知”。用户消息发送后立即提供复制等操作，悬停时显示发送时间；AI 消息的复制和用量图标只在所属轮次结束后显示，运行中不能悬停查看统计。AI 操作栏保留高度，失败、取消或中断结束后也可查看统计。回复统计以“本轮模型请求”为标题，累计本轮全部模型请求的用量，展示请求次数、首 token 耗时、输出速度、取整的缓存命中率、缓存命中/未命中与输出 token。缓存命中率按累计缓存命中除以累计输入计算；TPS 按累计输出除以各次模型生成时间之和计算，扣除首 token 等待与工具执行时间。失败请求已返回的用量也计入，缺失字段对应的合计显示“暂无数据”并注明缺失请求数；没有正文的轮次也有统计入口。历史重开后重新汇总全部请求，汇总逻辑独立以供未来对话总统计复用，当前只展示本轮数据。
 
 目录选择使用 Tauri Dialog 系统对话框，当前浏览器验收模拟了选择和取消的返回值；原生 Windows 目录选择器仍需人工交互验收。Server 测试覆盖无效目录、目录链接解析和项目绑定持久化。
 
@@ -104,7 +103,7 @@ Markdown 使用 [react-markdown](https://github.com/remarkjs/react-markdown)、r
 | `packages/responses` | 通过 OpenAI SDK 调用 Responses API |
 | `packages/protocol` | 桌面端与 Server 共用的 RPC 请求、响应和事件类型 |
 
-桌面应用及各包已有实现；Tool 已接入八个项目工具，普通对话开放网页读取，Context 已加载项目指令和技能元数据，不设置应用 Token 限制。上表中的 MCP 和历史压缩是模块规划职责，尚未实现。
+桌面应用及各包已有实现；Tool 已接入八个工具，项目和普通对话按各自权限开放，Context 已加载项目指令和技能元数据，不设置应用 Token 限制。上表中的 MCP 和历史压缩是模块规划职责，尚未实现。
 根目录的类型检查覆盖各包和桌面的 `src/` 与 `tests/`；桌面使用独立 React 配置。
 
 ## 数据存储
@@ -115,9 +114,9 @@ Markdown 使用 [react-markdown](https://github.com/remarkjs/react-markdown)、r
 
 按开发者选择，API Key 以明文 JSON 保存在同目录的 `credentials.json`，按服务 id 保存各自的 baseURL 和 apiKey，不写入 SQLite。`Store.credentials` 提供 getApiKey、saveApiKey 和 retain；保存时通过临时文件替换，删除服务时清理对应凭据。读取时核对规范化后的完整服务地址，地址不同返回未配置；旧版单服务凭据按 default 服务读取。Server 只提供凭据设置和已配置服务列表，不提供密钥原文读取接口；测试仅使用临时目录中的模拟密钥。
 
-SQLite 的 providers 和 provider_models 表保存服务及模型，app_config 保存新任务的默认服务、模型、推理强度和执行限制。已有任务各自保存服务、模型和推理强度，可通过 thread.update 修改，不随新任务默认值变化。
+SQLite 的 providers 和 provider_models 表保存服务及模型，app_config 保存新任务的默认服务、模型、推理强度、项目权限模式和执行设置。已有任务各自保存服务、模型和推理强度，可通过 thread.update 修改，不随新任务默认值变化。
 
-任务支持创建、读取、分页列表和重命名。创建时可不绑定项目；已绑定项目不能通过重命名改变。Store 只保存项目路径，Server 负责验证目录，无项目任务后续不得调用项目文件工具。任务列表默认每页 50 条，最多 100 条。
+任务支持创建、读取、分页列表和重命名。创建时可不绑定项目；已绑定项目不能通过重命名改变。Store 保存项目路径、权限及首次发送锁定时间，每轮另存权限快照；Server 验证项目目录并管理审批。任务列表默认每页 50 条，最多 100 条。
 
 每个任务最多有一个运行中的轮次。`startTurn` 同时保存轮次和首条输入，`appendTurnInput` 保存运行中的引导输入，`finishTurn` 记录完成、失败或取消。输入原文不会被裁剪；轮次列表按 sequence、输入列表按 id 顺序分页，`getLatestTurnInput` 单独查询最新输入，避免分页上限遗漏引导。等待区尚未提交的消息由桌面保存在内存中。
 
@@ -225,6 +224,6 @@ Protocol 只包含通信类型、展示数据及共享任务、轮次与配置�
 - Responses 使用 OpenAI SDK 接入 Responses API，优先复用 SDK 类型。
 - 支持多个 Responses 模型服务的配置，不设计通用模型协议适配层，不自行实现模型 HTTP 或 SSE 协议解析。
 - 模块划分见 `docs/technical-design.md`，模型接入细节见 `docs/deepseek-integration.md`。
-- 当前项目工具为 read、write、edit、shell、ls、find、grep、web_fetch；普通对话开放 web_fetch。shell 使用 PowerShell，网络搜索按开发者要求暂缓；规格与进度见 [工具重写计划](docs/tool-rewrite-plan.md)，其余功能范围见 `docs/product-requirements.md`。
+- 当前工具为 read、write、edit、shell、ls、find、grep、web_fetch；项目及普通对话按各自权限开放。shell 使用 PowerShell，网络搜索按开发者要求暂缓；规格与进度见 [工具重写计划](docs/tool-rewrite-plan.md)，权限规则见 [工具权限与审批](docs/tool-permissions.md)。
 - 执行体验按开发者 Codex 截图中的“完全访问”模式：直接执行，不逐次弹窗；四个基础工具、文件差异、命令进度与日志续读已接入。
 - 分小批次开发，函数和类型添加中文用途注释；每批解释并经确认后继续。

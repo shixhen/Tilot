@@ -72,6 +72,8 @@ Responses
 
 # Server
 
+工具权限及单次审批的当前设计见 [工具权限与审批](tool-permissions.md)。Server 管理审批等待、响应与取消，Core 固定轮次权限快照，Tool 在产生副作用前检查权限，Store 保存默认模式、对话锁定与轮次快照；界面不显示逻辑工具组。
+
 Server 是 UI 与 Agent Core 之间的边界。
 
 它负责 RPC 通信，并在服务入口组装模块、管理启动和关闭；Agent 业务逻辑由 Agent Core 调度。

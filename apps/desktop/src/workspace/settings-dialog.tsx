@@ -4,6 +4,8 @@ import { useModelLoader, useSettings, type ProviderDraft, type SettingsOptions }
 import { Button } from "../components/ui/button";
 import { Input } from "../components/ui/input";
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "../components/ui/dialog";
+import { NativeSelect, NativeSelectOption } from "../components/ui/native-select";
+import { isPermissionMode } from "@tilot/protocol";
 
 interface ProviderCardProps {
   draft: ProviderDraft;
@@ -65,6 +67,12 @@ export function SettingsDialog(props: SettingsOptions) {
         <DialogDescription>添加模型服务，填写地址和 API Key 后自动加载可用模型。密钥明文保存在本机 credentials.json。</DialogDescription></DialogHeader>
       <Button type="button" variant="ghost" size="icon-sm" className="absolute top-4 right-4" aria-label="关闭设置" disabled={form.busy} onClick={props.onClose}><X /></Button>
       <form className="grid gap-5" onSubmit={(event) => void form.save(event)}>
+        <div className="grid gap-1.5"><label htmlFor="default-permission" className="text-sm">新项目对话的默认权限</label>
+          <NativeSelect id="default-permission" value={form.defaultPermissionMode} disabled={form.busy}
+            onChange={(event) => { if (isPermissionMode(event.target.value)) form.setDefaultPermissionMode(event.target.value); }}>
+            <NativeSelectOption value="read-only">只读</NativeSelectOption><NativeSelectOption value="workspace-write">项目内修改</NativeSelectOption>
+            <NativeSelectOption value="full-access">完全访问</NativeSelectOption>
+          </NativeSelect><p className="text-xs text-muted-foreground">普通新对话始终默认只读；已有对话保留各自的权限。</p></div>
         <fieldset disabled={form.busy} className="grid gap-3">
           {form.drafts.map((draft) => {
             const original = props.config.providers.find((provider) => provider.id === draft.id);

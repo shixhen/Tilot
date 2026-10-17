@@ -9,7 +9,7 @@ test("write 创建父目录、覆盖和清空文件，结果可交回模型", as
   const root = await temporaryDirectory(context);
   const workspace = await openWorkspace(root);
   const content = "中文🙂\r\n第二行\n";
-  const result = JSON.parse(await createToolSet(workspace).execute("write", JSON.stringify({ path: "src/代码.txt", content })));
+  const result = JSON.parse(await createToolSet(workspace, undefined, { mode: "workspace-write" }).execute("write", JSON.stringify({ path: "src/代码.txt", content })));
   assert.equal(result.status, "ok");
   assert.equal(result.data.bytesWritten, Buffer.byteLength(content));
   assert.equal(await readFile(join(root, "src/代码.txt"), "utf8"), content);
@@ -24,7 +24,7 @@ test("edit 唯一精确替换，保留 BOM、混合换行，拒绝模糊和重�
   const file = join(root, "code.txt");
   const original = "\ufeff第一行\r\n目标\n尾行";
   await writeFile(file, original, "utf8");
-  const result = JSON.parse(await createToolSet(workspace).execute("edit", JSON.stringify({ path: "code.txt", edits: [{ oldText: "目标", newText: "新内容🙂" }] })));
+  const result = JSON.parse(await createToolSet(workspace, undefined, { mode: "workspace-write" }).execute("edit", JSON.stringify({ path: "code.txt", edits: [{ oldText: "目标", newText: "新内容🙂" }] })));
   assert.equal(result.status, "ok");
   assert.equal(await readFile(file, "utf8"), original.replace("目标", "新内容🙂"));
   await writeFile(file, "aaa", "utf8");
@@ -39,17 +39,20 @@ test("edit 唯一精确替换，保留 BOM、混合换行，拒绝模糊和重�
   }
 });
 
-test("修改工具拒绝越界、目录和内部链接，不改变链接目标", async (context) => {
+test("未批准的项目外写入及链接目标不修改，目录不能被替换", async (context) => {
   const root = await temporaryDirectory(context);
   const outside = await temporaryDirectory(context);
   const workspace = await openWorkspace(root);
   await mkdir(join(root, "folder"));
   await writeFile(join(outside, "keep.txt"), "保留", "utf8");
   await symlink(outside, join(root, "link"), "junction");
+  const tools = createToolSet(workspace, undefined, { mode: "workspace-write", approve: async () => false });
   for (const path of ["", "../outside", "folder", "link/keep.txt", "link/new/file.txt"]) {
-    await assert.rejects(writeProjectFile(workspace, { path, content: "修改" }));
+    const result = JSON.parse(await tools.execute("write", JSON.stringify({ path, content: "修改" }), undefined, { executionId: path }));
+    assert.equal(result.status, "error");
   }
-  await assert.rejects(editProjectFile(workspace, { path: "link/keep.txt", edits: [{ oldText: "保留", newText: "修改" }] }));
+  const edit = JSON.parse(await tools.execute("edit", JSON.stringify({ path: "link/keep.txt", edits: [{ oldText: "保留", newText: "修改" }] }), undefined, { executionId: "edit" }));
+  assert.equal(edit.status, "error");
   assert.equal(await readFile(join(outside, "keep.txt"), "utf8"), "保留");
   assert.deepEqual(await readdir(outside), ["keep.txt"]);
 });

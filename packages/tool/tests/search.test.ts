@@ -54,7 +54,9 @@ test("ls 包含隐藏项、稳定排序和项目路径，目录链接只列出�
   assert.equal((await readProjectFile(workspace, { path: directory.entries[0]!.path })).content, "needle unicode");
   const limited = await listProjectDirectory(workspace, { limit: 1 });
   assert.equal(limited.truncatedBy, "items");
-  await assert.rejects(listProjectDirectory(workspace, { path: "linked" }), /链接|联接/);
+  const external = await listProjectDirectory(workspace, { path: "linked" });
+  assert.equal(external.entries[0]!.path, join(outside, "secret.txt").replaceAll("\\", "/"));
+  assert.equal((await readProjectFile(workspace, { path: external.entries[0]!.path })).content, "external fixture");
   await assert.rejects(listProjectDirectory(workspace, { path: "notes.txt" }), /必须是项目目录/);
 });
 
@@ -76,7 +78,11 @@ test("find 的 glob 不覆盖嵌套忽略规则，包含隐藏文件和 Unicode�
   assert.deepEqual(new Set(narrow.files), new Set(["src/a.ts", "src/.hidden.ts"]));
   assert.deepEqual((await findProjectFiles(workspace, { pattern: "ignored.ts" })).files, []);
   assert.equal((await findProjectFiles(workspace, { pattern: "*.ts", limit: 2 })).truncatedBy, "items");
-  await assert.rejects(findProjectFiles(workspace, { pattern: "*", path: "external" }), /链接|联接/);
+  const external = await findProjectFiles(workspace, { pattern: "*", path: "external" });
+  assert.deepEqual(external.files, [join(outside, "outside.ts").replaceAll("\\", "/")]);
+  const externalGrep = await grepProject(workspace, { pattern: "needle", path: outside });
+  assert.equal(externalGrep.matches[0]!.path, external.files[0]);
+  assert.equal((await grepProject(workspace, { pattern: "needle", path: external.files[0]! })).matches[0]!.text, "needle outside");
   await assert.rejects(findProjectFiles(workspace, { pattern: "*", path: ".git" }), /不访问/);
   await assert.rejects(findProjectFiles(workspace, { pattern: "*", path: ".GIT" }), /不访问/);
   await assert.rejects(grepProject(workspace, { pattern: "needle", path: ".GIT/secret.ts" }), /不访问/);

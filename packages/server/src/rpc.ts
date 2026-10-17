@@ -1,4 +1,4 @@
-import type { AppConfig, ModelInfo, Provider, ReasoningEffort, RpcRequest, RpcResponse, RpcResult } from "@tilot/protocol";
+import { isPermissionMode, type AppConfig, type ModelInfo, type Provider, type ReasoningEffort, type RpcRequest, type RpcResponse, type RpcResult } from "@tilot/protocol";
 import type { Store } from "@tilot/store";
 import { openWorkspace } from "@tilot/tool";
 import { listModels } from "@tilot/responses";
@@ -33,6 +33,19 @@ function parseRequest(value: unknown): RpcRequest {
   }
   const params = value.params;
   switch (value.method) {
+    case "approval.list":
+      if (typeof params.threadId === "string") return { id: value.id, method: value.method, params: { threadId: params.threadId } };
+      break;
+    case "approval.respond":
+      if (typeof params.approvalId === "string" && typeof params.allowed === "boolean") {
+        return { id: value.id, method: value.method, params: { approvalId: params.approvalId, allowed: params.allowed } };
+      }
+      break;
+    case "thread.permission":
+      if (typeof params.threadId === "string" && isPermissionMode(params.permissionMode)) {
+        return { id: value.id, method: value.method, params: { threadId: params.threadId, permissionMode: params.permissionMode } };
+      }
+      break;
     case "turn.list":
       if (typeof params.threadId === "string" &&
           (params.afterSequence === undefined || typeof params.afterSequence === "number") &&
@@ -100,9 +113,11 @@ function parseRequest(value: unknown): RpcRequest {
       break;
     case "thread.create":
       if (typeof params.title === "string" &&
+          (params.permissionMode === undefined || isPermissionMode(params.permissionMode)) &&
           (params.projectPath === undefined || params.projectPath === null || typeof params.projectPath === "string")) {
         return { id: value.id, method: value.method, params: {
           title: params.title, ...(params.projectPath === undefined ? {} : { projectPath: params.projectPath }),
+          ...(params.permissionMode === undefined ? {} : { permissionMode: params.permissionMode }),
         } };
       }
       break;
@@ -142,7 +157,7 @@ function parseRequest(value: unknown): RpcRequest {
 function parseConfig(value: unknown): AppConfig {
   if (!isObject(value) || typeof value.providerId !== "string" || typeof value.model !== "string" ||
       !isEffort(value.reasoningEffort) || !Array.isArray(value.providers) || !value.providers.every(isProvider) ||
-      typeof value.maxAutomaticRetries !== "number") {
+      typeof value.maxAutomaticRetries !== "number" || !isPermissionMode(value.defaultPermissionMode)) {
     throw new Error("配置字段缺失或类型不正确。");
   }
   return {
@@ -150,6 +165,7 @@ function parseConfig(value: unknown): AppConfig {
     providers: value.providers.map((provider) => ({ id: provider.id, name: provider.name, baseURL: provider.baseURL,
       models: provider.models.map((model) => ({ id: model.id })) })),
     maxAutomaticRetries: value.maxAutomaticRetries,
+    defaultPermissionMode: value.defaultPermissionMode,
   };
 }
 
@@ -169,6 +185,16 @@ export async function handleRpcLine(store: Store, line: string, turns: TurnManag
   try {
     let result: RpcResult;
     switch (request.method) {
+      case "approval.list":
+        result = turns.approvals.list(request.params.threadId);
+        break;
+      case "approval.respond":
+        turns.approvals.respond(request.params.approvalId, request.params.allowed);
+        result = null;
+        break;
+      case "thread.permission":
+        result = store.updateThreadPermission(request.params.threadId, request.params.permissionMode);
+        break;
       case "turn.list":
         result = store.listTurns(request.params.threadId, request.params.afterSequence, request.params.limit);
         break;
@@ -225,7 +251,7 @@ export async function handleRpcLine(store: Store, line: string, turns: TurnManag
       case "thread.create": {
         const path = request.params.projectPath;
         const projectPath = path == null ? null : (await openWorkspace(path)).rootPath;
-        result = store.createThread(request.params.title, projectPath);
+        result = store.createThread(request.params.title, projectPath, request.params.permissionMode);
         break;
       }
       case "thread.read":

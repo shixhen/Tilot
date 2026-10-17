@@ -1,5 +1,4 @@
 import { MAX_OUTPUT_BYTES } from "./text.ts";
-import { pathSegments } from "./workspace.ts";
 
 /** 搜索结果的上限；逐条加入，整个 JSON 正文不超过文本工具的字节预算。 */
 export class SearchBuffer<T> {
@@ -26,11 +25,10 @@ export class SearchBuffer<T> {
   get state() { return { truncated: this.truncatedBy !== null, truncatedBy: this.truncatedBy }; }
 }
 
-/** 搜索起点使用项目相对路径；省略或空字符串表示根目录。 */
+/** 搜索起点允许相对或绝对路径；实际路径在执行时解析。 */
 export function searchPath(value: unknown): string {
   if (value === undefined) return "";
-  if (typeof value !== "string") throw new Error("path 必须是项目相对路径字符串。");
-  pathSegments(value);
+  if (typeof value !== "string") throw new Error("path 必须是路径字符串。");
   return value;
 }
 

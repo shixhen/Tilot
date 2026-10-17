@@ -3,7 +3,8 @@ import { stat } from "node:fs/promises";
 import { delimiter, isAbsolute, join } from "node:path";
 import { TextDecoder } from "node:util";
 import { decodeText } from "./text.ts";
-import { resolveWorkspacePath, type Workspace } from "./workspace.ts";
+import type { Workspace } from "./workspace.ts";
+import { displayLocalPath, resolveLocalPath } from "./local-path.ts";
 
 const MAX_RECORD_BYTES = 1024 * 1024;
 
@@ -78,12 +79,13 @@ export function ripgrepPath(path: string): string {
 
 /** 目录枚举遵守忽略规则；glob 查询与正常枚举取交集，不让 --glob 覆盖 .gitignore。 */
 export async function* projectFiles(workspace: Workspace, path: string, executable: string, signal: AbortSignal, glob?: string): AsyncGenerator<string> {
-  if (path.split("/").some((part) => part.toLowerCase() === ".git")) throw new Error("搜索工具不访问 .git 目录。");
-  const target = await resolveWorkspacePath(workspace, path);
+  if (path.split(/[\\/]/).some((part) => part.toLowerCase() === ".git")) throw new Error("搜索工具不访问 .git 目录。");
+  const target = await resolveLocalPath(workspace, path);
+  const display = displayLocalPath(workspace, target);
   if (!(await stat(target)).isDirectory()) throw new Error("find 的起点必须是项目目录。");
   const enumerate = (pattern?: string) => ripgrepRecords(executable, workspace.rootPath, [
     "--files", "--null", "--hidden", "--no-follow", "--no-require-git", "--sort", "path", "--path-separator", "/",
-    ...(pattern === undefined ? [] : [`--glob=${pattern}`]), "--iglob=!.git", "--", path ? `./${path}` : ".",
+    ...(pattern === undefined ? [] : [`--glob=${pattern}`]), "--iglob=!.git", "--", isAbsolute(display) ? display : display ? `./${display}` : ".",
   ], "\0", signal);
   const eligible = enumerate();
   if (glob === undefined) {

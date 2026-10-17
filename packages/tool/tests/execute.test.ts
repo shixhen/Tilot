@@ -7,7 +7,7 @@ import { temporaryDirectory } from "./helpers.ts";
 
 test("工具集合只执行本轮声明的工具，无项目时不能访问文件", async (context) => {
   const root = await temporaryDirectory(context);
-  const tools = createToolSet(await openWorkspace(root));
+  const tools = createToolSet(await openWorkspace(root), undefined, { mode: "workspace-write" });
   const result = JSON.parse(await tools.execute("write", '{"path":"test.txt","content":"原文"}'));
   assert.equal(result.status, "ok");
   assert.equal(await readFile(join(root, "test.txt"), "utf8"), "原文");
@@ -20,7 +20,7 @@ test("工具集合只执行本轮声明的工具，无项目时不能访问文�
 
 test("非法参数和已取消调用不会产生文件或命令副作用", async (context) => {
   const root = await temporaryDirectory(context);
-  const tools = createToolSet(await openWorkspace(root));
+  const tools = createToolSet(await openWorkspace(root), undefined, { mode: "workspace-write" });
   await writeFile(join(root, "keep.txt"), "原文", "utf8");
   for (const argumentsJson of ["bad json", "null", "[]", '"text"']) {
     assert.equal(JSON.parse(await tools.execute("write", argumentsJson)).status, "error");

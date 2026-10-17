@@ -37,7 +37,7 @@ export function loadConnection() {
     provider.models = db.prepare("SELECT id FROM provider_models WHERE providerId = ? ORDER BY rowid").all(provider.id);
     apiKey = new CredentialStore(directory).getApiKey(provider.id, provider.baseURL) ?? "";
     assert.ok(apiKey, "请先在 Tilot 中为当前服务保存 API Key。");
-    return { ...config, providers: [provider] };
+    return { ...config, providers: [provider], defaultPermissionMode: "workspace-write" };
   } finally {
     db.close();
   }
@@ -187,7 +187,7 @@ async function main() {
     assert.equal(fetched[1].result.data.fetchedAt, fetched[0].result.data.fetchedAt);
     assert.match(answer(web.attempts), /Example Domain/i);
 
-    const coding = await session.request("thread.create", { title: "代码真实联调", projectPath: project });
+    const coding = await session.request("thread.create", { title: "代码真实联调", projectPath: project, permissionMode: "full-access" });
     const codingTurn = await session.request("turn.start", { threadId: coding.id, input: "使用 math-checks 技能修复项目中的 add 加法函数。为联调覆盖，请分别调用 ls 查看根目录、find 寻找 *.mjs、grep 搜索 add、read 读取技能与相关源码和测试。然后用 edit 修复 src/math.mjs，用 shell 执行 node verify.mjs 并确认成功；最后用 write 创建 CHANGELOG.md，以中文记录修复和验证。只能在当前临时项目内操作，不能改测试或其他文件，不要调用网络。" });
     const codingResult = await session.finish(codingTurn);
     results.push(summarize("project-seven-tools-and-skill", codingResult, session));
@@ -236,7 +236,7 @@ async function main() {
     assert.equal(cancelled.turn.status, "cancelled");
     assert.ok(cancelled.attempts.every((attempt) => attempt.messages.length === 0));
 
-    const recoveryThread = await session.request("thread.create", { title: "进程中断恢复联调", projectPath: project });
+    const recoveryThread = await session.request("thread.create", { title: "进程中断恢复联调", projectPath: project, permissionMode: "full-access" });
     let killed = false;
     session.onMessage = (message) => {
       if (!killed && message.event === "attempt.updated" && message.threadId === recoveryThread.id && message.attempt.tools.some((tool) => tool.name === "write" && tool.output !== null)) {

@@ -20,13 +20,14 @@ export function ToolCall({ tool, active }: { tool: ToolView; active: boolean }) 
   const result = readObject(tool.output);
   const data = result.data && typeof result.data === "object" ? result.data as Record<string, unknown> : {};
   const running = active && tool.running && tool.output === null;
+  const unstarted = tool.startedAt === null && tool.durationMs === null;
   const [open, setOpen] = useState(running);
   const [compact, setCompact] = useState(running);
   useEffect(() => setOpen(running), [running]);
   let status = running ? "执行中" : active ? "等待结果" : "执行结果未知";
   let failed = false;
   if (tool.output !== null) {
-    if (result.status === "not_executed") status = "未执行";
+    if (result.status === "not_executed" || (result.status === "error" && unstarted)) status = "未执行";
     else if (result.status === "cancelled" || data.status === "cancelled") status = "已取消";
     else if (data.status === "timed_out") { status = "已超时"; failed = true; }
     else if (result.status === "error" || (typeof data.exitCode === "number" && data.exitCode !== 0)) { status = "执行失败"; failed = true; }
@@ -49,7 +50,7 @@ export function ToolCall({ tool, active }: { tool: ToolView; active: boolean }) 
       <code className="min-w-0 truncate font-mono text-[13px]" title={typeof summary === "string" ? summary : undefined}>{typeof summary === "string" ? summary : "参数无效"}</code>
       {failed ? <span className="flex shrink-0 items-center gap-1 text-xs text-destructive"><CircleAlert className="size-3" />{status}</span>
         : !running && <span className="flex shrink-0 items-center gap-1 text-xs">{status === "已完成" && <Check className="size-3" />}{status}</span>}
-      {result.status !== "not_executed" && <ElapsedTime startedAt={tool.startedAt} durationMs={tool.durationMs} running={running} />}
+      {result.status !== "not_executed" && !unstarted && <ElapsedTime startedAt={tool.startedAt} durationMs={tool.durationMs} running={running} />}
       <ChevronRight className="disclosure-icon size-3.5 opacity-0 transition-[opacity,rotate] group-hover/tool:opacity-100 group-data-[state=open]/tool:rotate-90 group-data-[state=open]/tool:opacity-100" />
     </CollapsibleTrigger>
     <CollapsibleContent className="mt-2 min-w-0 overflow-hidden rounded-lg border bg-black/20">

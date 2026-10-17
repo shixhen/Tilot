@@ -1,10 +1,12 @@
 import { stat } from "node:fs/promises";
+import { isAbsolute } from "node:path";
 import { TextDecoder } from "node:util";
 import { projectFiles, resolveRipgrep, ripgrepPath, ripgrepRecords } from "./ripgrep.ts";
 import { SearchBuffer, searchLimit, searchPath, searchPattern, withSearchTimeout } from "./search.ts";
 import { decodeText } from "./text.ts";
 import { validateKeys, type Tool } from "./tool.ts";
-import { resolveWorkspacePath, type Workspace } from "./workspace.ts";
+import type { Workspace } from "./workspace.ts";
+import { displayLocalPath, resolveLocalPath } from "./local-path.ts";
 
 const DEFAULT_MATCHES = 100;
 const MAX_MATCHES = 1000;
@@ -19,11 +21,11 @@ interface RgEvent { type: string; data: { path?: RgText; lines?: RgText; line_nu
 
 /** 文件名筛选和内容搜索共用 rg，避免 PowerShell 引号及额外搜索后端。 */
 export function createGrepTool(workspace: Workspace): Tool {
-  return { definition: { type: "function", name: "grep", strict: false,
-    description: `搜索项目 UTF-8 文本，默认使用 rg 单行正则，literal=true 改为字面匹配，ignoreCase 默认 false。path 可为目录或文件，省略或空字符串表示根目录。目录搜索包含隐藏文件，遵守 .gitignore/.ignore/.rgignore，排除 .git，不跟随内部链接。显式指定文件时搜索该文件，即使被忽略。glob 只用于目录，含 / 时相对项目根目录，否则匹配各层文件名。默认 ${DEFAULT_MATCHES} 条匹配行，最多 ${MAX_MATCHES} 条，JSON 正文最多 50 KiB。context 默认 0、最多 10；每行最多 ${MAX_LINE_BYTES} UTF-8 字节，textTruncated 表示行不完整。结果包含项目相对路径及从 1 开始的行号，可交给 read。truncated 时缩小范围；单条 rg 记录超过 1 MiB 会报错。搜索最多 30 秒，宿主必须提供 rg。`,
+  return { access: "read", definition: { type: "function", name: "grep", strict: false,
+    description: `搜索 UTF-8 文本，path 支持工作目录外的绝对目录或文件，默认使用 rg 单行正则，literal=true 改为字面匹配，ignoreCase 默认 false。path 可为目录或文件，省略或空字符串表示根目录。目录搜索包含隐藏文件，遵守 .gitignore/.ignore/.rgignore，排除 .git，不跟随内部链接。显式指定文件时搜索该文件，即使被忽略。glob 只用于目录，含 / 时相对项目根目录，否则匹配各层文件名。默认 ${DEFAULT_MATCHES} 条匹配行，最多 ${MAX_MATCHES} 条，JSON 正文最多 50 KiB。context 默认 0、最多 10；每行最多 ${MAX_LINE_BYTES} UTF-8 字节，textTruncated 表示行不完整。结果包含项目内相对路径或项目外绝对路径及从 1 开始的行号，可交给 read。truncated 时缩小范围；单条 rg 记录超过 1 MiB 会报错。搜索最多 30 秒，宿主必须提供 rg。`,
     parameters: { type: "object", additionalProperties: false, required: ["pattern"], properties: {
       pattern: { type: "string", description: "单行正则或字面文本，最多 2 KiB；不支持跨行正则。" },
-      path: { type: "string", description: "项目相对文件或目录，使用 /；省略或空字符串表示根目录。" },
+      path: { type: "string", description: "文件或目录的相对路径或绝对路径；省略或空字符串表示工作目录。" },
       glob: { type: "string", description: "目录搜索的 rg glob，例如 *.ts 或 src/**/*.ts，最多 2 KiB；不覆盖忽略规则。" },
       ignoreCase: { type: "boolean", description: "忽略内容大小写，默认 false。" },
       literal: { type: "boolean", description: "将 pattern 当作字面文本，默认 false 使用 rg 正则。" },
@@ -44,16 +46,16 @@ export async function grepProject(workspace: Workspace, input: GrepInput, signal
   const context = input.context === undefined ? 0 : input.context;
   if (!Number.isInteger(context) || context < 0 || context > 10) throw new Error("context 必须是 0 到 10 的整数。");
   for (const key of ["ignoreCase", "literal"] as const) if (input[key] !== undefined && typeof input[key] !== "boolean") throw new Error(`${key} 必须是布尔值。`);
-  if (path.split("/").some((part) => part.toLowerCase() === ".git")) throw new Error("搜索工具不访问 .git 目录。");
+  if (path.split(/[\\/]/).some((part) => part.toLowerCase() === ".git")) throw new Error("搜索工具不访问 .git 目录。");
   const result = new SearchBuffer<GrepMatch>(searchLimit(input.limit, DEFAULT_MATCHES, MAX_MATCHES), path);
   return withSearchTimeout(signal, async (signal) => {
-    const target = await resolveWorkspacePath(workspace, path);
+    const target = await resolveLocalPath(workspace, path);
     const isFile = (await stat(target)).isFile();
     if (isFile && glob !== undefined) throw new Error("path 指向文件时不使用 glob，请省略 glob。");
     const executable = await resolveRipgrep();
     /** 仅使用已经枚举及验证的文件；上下文直接来自 rg，不重新读整份文件。 */
     async function searchBatch(files: string[]): Promise<boolean> {
-      for (const file of files) await resolveWorkspacePath(workspace, file);
+      for (const file of files) await resolveLocalPath(workspace, file);
       const allowed = new Set(files);
       let pending: GrepMatch | undefined;
       let history: GrepLine[] = [];
@@ -61,7 +63,7 @@ export async function grepProject(workspace: Workspace, input: GrepInput, signal
       const args = ["--json", "--line-number", "--color=never", "--no-follow", "--encoding", "none", "--context", String(context),
         ...(input.ignoreCase ? ["--ignore-case"] : []), ...(input.literal ? ["--fixed-strings"] : []), "--", pattern,
         // ./ 保证名为 - 的文件不被 rg 当成标准输入。
-        ...(files.length ? files.map((file) => `./${file}`) : ["-"]),
+        ...(files.length ? files.map((file) => isAbsolute(file) ? file : `./${file}`) : ["-"]),
       ];
       for await (const record of ripgrepRecords(executable, workspace.rootPath, args, "\n", signal)) {
         const event = JSON.parse(record) as RgEvent;
@@ -86,7 +88,7 @@ export async function grepProject(workspace: Workspace, input: GrepInput, signal
     }
     // 显式搜索空 stdin 验证正则；没有候选文件时也不能把无效正则当成无匹配。
     await searchBatch([]);
-    if (isFile) await searchBatch([path]);
+    if (isFile) await searchBatch([displayLocalPath(workspace, target)]);
     else {
       let batch: string[] = [];
       let characters = 0;

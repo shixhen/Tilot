@@ -76,6 +76,7 @@ function mergeAttempts(current: AttemptView[], incoming: AttemptView[]): Attempt
 
 /** 应用单个服务事件；完成消息替换增量，终态不被迟到的启动应答覆盖。 */
 export function applyEvent(records: TurnRecord[], event: ServerEvent): TurnRecord[] {
+  if (event.event === "approval.requested" || event.event === "approval.resolved") return records;
   if ("turn" in event) {
     const existing = records.find((record) => record.turn.id === event.turn.id);
     if (!existing) return [...records, { turn: event.turn, inputs: [], attempts: [], previews: [] }];

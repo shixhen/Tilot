@@ -10,4 +10,5 @@ export const DEFAULT_CONFIG: Readonly<AppConfig> = {
   providers: [{ id: "default", name: "api.deepseek.com", baseURL: "https://api.deepseek.com",
     models: [{ id: "deepseek-flash" }] }],
   maxAutomaticRetries: 2,
+  defaultPermissionMode: "workspace-write",
 };

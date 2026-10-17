@@ -22,7 +22,7 @@ function attempt(sequence: number, metrics: Partial<ResponseMetrics> = {}): Atte
 
 function record(attempts: AttemptView[]): TurnRecord {
   return {
-    turn: { id: "turn", threadId: "thread", sequence: 1, status: "completed", createdAt: 1000, finishedAt: 90000, error: null },
+    turn: { id: "turn", threadId: "thread", sequence: 1, permissionMode: "read-only", status: "completed", createdAt: 1000, finishedAt: 90000, error: null },
     inputs: [{ id: 1, turnId: "turn", content: "任务", createdAt: 1000 }], attempts, previews: [],
   };
 }

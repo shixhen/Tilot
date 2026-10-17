@@ -2,7 +2,8 @@ import { lstat, readdir, stat } from "node:fs/promises";
 import { join } from "node:path";
 import { SearchBuffer, searchLimit, searchPath } from "./search.ts";
 import { validateKeys, type Tool } from "./tool.ts";
-import { resolveWorkspacePath, type Workspace } from "./workspace.ts";
+import type { Workspace } from "./workspace.ts";
+import { displayLocalPath, resolveLocalPath } from "./local-path.ts";
 
 const MAX_ENTRIES = 500;
 /** 非递归目录参数和结果；链接只显示名称与类型，不读取目标。 */
@@ -11,10 +12,10 @@ export interface DirectoryEntry { path: string; type: "file" | "directory" | "li
 
 /** 声明与执行同模块，保持和 Pi 一样简单的目录工具。 */
 export function createLsTool(workspace: Workspace): Tool {
-  return { definition: { type: "function", name: "ls", strict: false,
-    description: `非递归列出项目目录，包含隐藏项并稳定排序。省略 path 或空字符串表示项目根目录。默认及最多 ${MAX_ENTRIES} 项，JSON 正文最多 50 KiB；truncated 表示结果不完整，应缩小目录范围。条目路径可直接交给 read；link 只显示名称，不跟随或读取。`,
+  return { access: "read", definition: { type: "function", name: "ls", strict: false,
+    description: `非递归列出目录，可使用工作目录外的绝对路径，包含隐藏项并稳定排序。省略 path 或空字符串表示项目根目录。默认及最多 ${MAX_ENTRIES} 项，JSON 正文最多 50 KiB；truncated 表示结果不完整，应缩小目录范围。条目路径可直接交给 read；link 只显示名称，不跟随或读取。`,
     parameters: { type: "object", additionalProperties: false, properties: {
-      path: { type: "string", description: "项目目录相对路径，使用 /；省略或空字符串表示根目录。" },
+      path: { type: "string", description: "目录相对路径或绝对路径；省略或空字符串表示对话工作目录。" },
       limit: { type: "integer", minimum: 1, maximum: MAX_ENTRIES, description: `最多返回条目数，默认 ${MAX_ENTRIES}。` },
     } },
   }, async execute(args, signal) {
@@ -28,14 +29,14 @@ export async function listProjectDirectory(workspace: Workspace, input: LsInput 
   const path = searchPath(input.path);
   const result = new SearchBuffer<DirectoryEntry>(searchLimit(input.limit, MAX_ENTRIES, MAX_ENTRIES), path);
   signal?.throwIfAborted();
-  const directory = await resolveWorkspacePath(workspace, path);
+  const directory = await resolveLocalPath(workspace, path);
   if (!(await stat(directory)).isDirectory()) throw new Error("ls 的起点必须是项目目录。");
   const names = (await readdir(directory)).sort();
   for (const name of names) {
     signal?.throwIfAborted();
     const entry = await lstat(join(directory, name));
     const type = entry.isSymbolicLink() ? "link" : entry.isDirectory() ? "directory" : entry.isFile() ? "file" : "other";
-    if (!result.add({ path: path ? `${path}/${name}` : name, type })) break;
+    if (!result.add({ path: displayLocalPath(workspace, join(directory, name)), type })) break;
   }
   return { path, entries: result.items, ...result.state };
 }

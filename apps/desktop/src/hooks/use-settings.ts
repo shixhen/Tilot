@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState, type FormEvent } from "react";
-import type { AppConfig, ModelInfo } from "@tilot/protocol";
+import type { AppConfig, ModelInfo, PermissionMode } from "@tilot/protocol";
 import type { Request } from "../client";
 
 /** 设置操作所需的服务入口与保存回调。 */
@@ -26,6 +26,7 @@ export interface ProviderDraft {
 
 /** 管理服务列表的编辑与保存，独立于弹窗布局；模型加载由每个服务卡片的 useModelLoader 负责。 */
 export function useSettings({ config, request, onSaved, onClose }: SettingsOptions) {
+  const [defaultPermissionMode, setDefaultPermissionMode] = useState<PermissionMode>(config.defaultPermissionMode);
   const [drafts, setDrafts] = useState<ProviderDraft[]>(() => config.providers.map((provider) => ({ ...provider, apiKey: "", loadedURL: provider.baseURL })));
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
@@ -57,7 +58,7 @@ export function useSettings({ config, request, onSaved, onClose }: SettingsOptio
     const defaults = kept ? { providerId: config.providerId, model: config.model } : { providerId: providers[0]!.id, model: providers[0]!.models[0]!.id };
     let configSaved = false;
     try {
-      await request("config.set", { config: { ...config, ...defaults, providers } });
+      await request("config.set", { config: { ...config, ...defaults, providers, defaultPermissionMode } });
       configSaved = true;
       for (const draft of drafts) {
         if (draft.apiKey.trim()) await request("credentials.set", { providerId: draft.id, apiKey: draft.apiKey.trim() });
@@ -73,7 +74,7 @@ export function useSettings({ config, request, onSaved, onClose }: SettingsOptio
     } finally { setBusy(false); }
   }
 
-  return { drafts, update, add, remove, ready, busy, error, save };
+  return { drafts, update, add, remove, ready, busy, error, save, defaultPermissionMode, setDefaultPermissionMode };
 }
 
 /**

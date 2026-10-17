@@ -1,15 +1,28 @@
 import type { FunctionTool } from "openai/resources/responses/responses";
 import type { OutputCache } from "./output-cache.ts";
 import type { OutputSnapshot } from "./output-accumulator.ts";
+import type { PermissionMode } from "@tilot/protocol";
 
 /** 宿主提供输出缓存和任务归属，模型不能修改这些值。 */
 export interface ToolHost { outputs: OutputCache; threadId: string }
 
-/** 本地调用身份与临时进度回调；进度不作为正式模型结果。 */
-export interface ToolExecution { executionId: string; onUpdate?: (snapshot: OutputSnapshot) => void | Promise<void> }
+/** 本地执行上下文；审批时必须提供调用身份，进度不作为正式模型结果。 */
+export interface ToolExecution {
+  executionId?: string;
+  writeTarget?: string;
+  onStart?: () => void | Promise<void>;
+  onUpdate?: (snapshot: OutputSnapshot) => void | Promise<void>;
+}
+
+export interface ApprovalInput { toolId: string; name: string; arguments: string; resolvedPath?: string }
+export interface ToolPermissions {
+  mode: PermissionMode;
+  approve?: (input: ApprovalInput, signal?: AbortSignal) => Promise<boolean>;
+}
 
 /** 一个工具的模型声明和本地执行函数；参数由工具自己校验。 */
 export interface Tool {
+  access: "read" | "write" | "shell";
   definition: FunctionTool;
   execute: (args: Record<string, unknown>, signal?: AbortSignal, execution?: ToolExecution) => Promise<unknown>;
 }

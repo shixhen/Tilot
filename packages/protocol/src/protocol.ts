@@ -6,12 +6,32 @@ export interface Thread {
   providerId: string;
   model: string;
   reasoningEffort: ReasoningEffort;
+  permissionMode: PermissionMode;
+  permissionLockedAt: number | null;
   createdAt: number;
   updatedAt: number;
 }
 
 /** 思考强度；none 表示不启用推理。 */
 export type ReasoningEffort = "none" | "low" | "high" | "max";
+
+/** 首次发送后只允许项目内修改与完全访问互换，保持工具声明稳定。 */
+export type PermissionMode = "read-only" | "workspace-write" | "full-access";
+
+export function isPermissionMode(value: unknown): value is PermissionMode {
+  return value === "read-only" || value === "workspace-write" || value === "full-access";
+}
+
+/** 单次待审批调用；id 仅在当前服务连接中有效，不保存长期许可。 */
+export interface ToolApproval {
+  id: string;
+  threadId: string;
+  turnId: string;
+  toolId: string;
+  name: string;
+  arguments: string;
+  resolvedPath?: string;
+}
 
 /** 服务提供的一个模型；输入和输出限制由模型服务决定。 */
 export interface ModelInfo {
@@ -36,12 +56,15 @@ export type RpcRequest =
   | { id: string; method: "turn.steer"; params: { turnId: string; input: string } }
   | { id: string; method: "turn.resume"; params: { turnId: string } }
   | { id: string; method: "turn.interrupt"; params: { turnId: string } }
+  | { id: string; method: "approval.list"; params: { threadId: string } }
+  | { id: string; method: "approval.respond"; params: { approvalId: string; allowed: boolean } }
   | { id: string; method: "config.get"; params: Record<string, never> }
   | { id: string; method: "config.set"; params: { config: AppConfig } }
   | { id: string; method: "credentials.status"; params: Record<string, never> }
   | { id: string; method: "credentials.set"; params: { providerId: string; apiKey: string } }
   | { id: string; method: "models.fetch"; params: { providerId: string; baseURL: string; apiKey: string } }
-  | { id: string; method: "thread.create"; params: { title: string; projectPath?: string | null } }
+  | { id: string; method: "thread.create"; params: { title: string; projectPath?: string | null; permissionMode?: PermissionMode } }
+  | { id: string; method: "thread.permission"; params: { threadId: string; permissionMode: PermissionMode } }
   | { id: string; method: "thread.read"; params: { threadId: string } }
   | { id: string; method: "thread.list"; params: { limit?: number; offset?: number } }
   | { id: string; method: "thread.rename"; params: { threadId: string; title: string } }
@@ -60,7 +83,7 @@ export type RpcResponse =
 
 /** 已实现方法的返回数据；凭据只返回哪些服务已配置密钥，不返回原文。 */
 export type RpcResult =
-  | Thread | Thread[] | Turn | Turn[] | TurnInput | TurnInput[] | AttemptView[] | AppConfig | string[]
+  | Thread | Thread[] | Turn | Turn[] | TurnInput | TurnInput[] | AttemptView[] | AppConfig | string[] | ToolApproval[]
   | { configured: string[] } | { interrupted: boolean } | null;
 
 /** 轮次的结束状态；interrupted 表示旧执行进程退出，区别于用户主动取消。 */
@@ -71,6 +94,7 @@ export interface Turn {
   id: string;
   threadId: string;
   sequence: number;
+  permissionMode: PermissionMode;
   status: "running" | TurnFinalStatus;
   createdAt: number;
   finishedAt: number | null;
@@ -154,6 +178,8 @@ export interface ToolOutputPreview { output: string; truncated: boolean; partial
 
 /** 服务推送数据；不向界面传递 SDK 响应对象或模型请求参数。 */
 export type TurnNotification =
+  | { event: "approval.requested"; approval: ToolApproval }
+  | { event: "approval.resolved"; threadId: string; turnId: string; approvalId: string }
   | { event: "attempt.updated"; threadId: string; turnId: string; attempt: AttemptView }
   | ({ event: "tool.progress"; threadId: string; turnId: string; attemptId: string; toolId: string } & ToolOutputPreview)
   | { event: "turn.started" | "turn.finished"; turn: Turn }
@@ -175,4 +201,5 @@ export interface AppConfig {
   reasoningEffort: ReasoningEffort;
   providers: Provider[];
   maxAutomaticRetries: number;
+  defaultPermissionMode: PermissionMode;
 }

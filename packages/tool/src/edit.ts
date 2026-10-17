@@ -5,6 +5,7 @@ import { replaceFile, withFileMutation, type WriteResult } from "./file-write.ts
 import { decodeText } from "./text.ts";
 import { validateKeys, type Tool } from "./tool.ts";
 import { resolveWorkspacePath, type Workspace } from "./workspace.ts";
+import { localWriteLocation } from "./local-path.ts";
 
 /** 所有替换针对同一份原文件；一项失败则整个调用不写入。 */
 export interface EditInput { path: string; edits: TextEdit[] }
@@ -42,11 +43,12 @@ function parseInput(args: Record<string, unknown>): EditInput {
 /** 创建 edit 声明与执行函数，匹配和换行规则直接提供给模型。 */
 export function createEditTool(workspace: Workspace): Tool {
   return {
+    access: "write",
     definition: {
       type: "function", name: "edit", strict: false,
-      description: "精确替换 UTF-8 项目文件中的 1–20 处文本。先读取文件；各项 oldText 必须在同一份原文件中非空、唯一匹配且互不重叠。只兼容 LF/CRLF，空格、引号和 Unicode 仍严格匹配。任一项失败则全部不写入。保留 BOM 和未修改内容；插入文本沿用目标片段首次出现的换行，无换行时沿用文件换行，否则用 LF。写入前检查外部修改；无变化时报错。返回实际差异，diffTruncated 为 true 时差异不完整，不能作为补丁应用。",
+      description: "精确替换 UTF-8 文件中的 1–20 处文本。先读取文件；各项 oldText 必须在同一份原文件中非空、唯一匹配且互不重叠。只兼容 LF/CRLF，空格、引号和 Unicode 仍严格匹配。任一项失败则全部不写入。保留 BOM 和未修改内容；插入文本沿用目标片段首次出现的换行，无换行时沿用文件换行，否则用 LF。写入前检查外部修改；无变化时报错。返回实际差异，diffTruncated 为 true 时差异不完整，不能作为补丁应用。",
       parameters: { type: "object", additionalProperties: false, required: ["path", "edits"], properties: {
-        path: { type: "string", description: "项目相对文件路径，使用 / 分隔。" },
+        path: { type: "string", description: "相对文件路径或绝对路径；修改权限及审批由宿主决定。" },
         edits: { type: "array", minItems: 1, maxItems: MAX_EDITS, description: "针对原文件的替换列表；不能引用其他项新插入的内容。", items: {
           type: "object", additionalProperties: false, required: ["oldText", "newText"], properties: {
             oldText: { type: "string", minLength: 1, description: "原文中唯一匹配的非空片段，提供足够上下文；仅 LF/CRLF 可不同。" },
@@ -55,25 +57,26 @@ export function createEditTool(workspace: Workspace): Tool {
         } },
       } },
     },
-    async execute(args, signal) {
-      return editProjectFile(workspace, parseInput(args), signal);
+    async execute(args, signal, execution) {
+      return editProjectFile(workspace, parseInput(args), signal, execution?.writeTarget);
     },
   };
 }
 
 /** 队列内读取、验证和提交，并在替换前检查目标字节是否仍与读取时相同。 */
-export async function editProjectFile(workspace: Workspace, input: EditInput, signal?: AbortSignal): Promise<EditResult> {
+export async function editProjectFile(workspace: Workspace, input: EditInput, signal?: AbortSignal, expectedTarget?: string): Promise<EditResult> {
   signal?.throwIfAborted();
   const { path, edits } = parseInput({ ...input });
-  return withFileMutation(workspace, path, signal, async () => {
-    const target = await resolveWorkspacePath(workspace, path);
+  const location = await localWriteLocation(workspace, path, expectedTarget);
+  return withFileMutation(location.workspace, location.path, signal, async () => {
+    const target = await resolveWorkspacePath(location.workspace, location.path);
     if (!(await lstat(target)).isFile()) throw new Error("目标必须是普通文件。");
     const bytes = await readFile(target);
     signal?.throwIfAborted();
     const content = decodeText(new TextDecoder("utf-8", { fatal: true, ignoreBOM: true }), bytes);
     const updated = applyEdits(content, edits);
     const difference = createEditDiff(path, content, updated);
-    const written = await replaceFile(workspace, path, target, updated, signal, bytes);
-    return { ...written, replacements: edits.length, ...difference };
+    const written = await replaceFile(location.workspace, location.path, target, updated, signal, bytes);
+    return { ...written, path, replacements: edits.length, ...difference };
   });
 }

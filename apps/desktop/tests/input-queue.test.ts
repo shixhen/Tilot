@@ -8,7 +8,7 @@ import { PendingInputs } from "../src/workspace/pending-inputs.tsx";
 
 /** 构造明确的轮次顺序，测试迟到应答与结束事件交错。 */
 function turn(sequence = 1, status: Turn["status"] = "running", threadId = "thread"): Turn {
-  return { id: `${threadId}-${sequence}`, threadId, sequence, status, createdAt: sequence, finishedAt: status === "running" ? null : sequence + 1, error: null };
+  return { id: `${threadId}-${sequence}`, threadId, sequence, permissionMode: "read-only", status, createdAt: sequence, finishedAt: status === "running" ? null : sequence + 1, error: null };
 }
 
 /** 保留在途应答，由测试控制事件与应答顺序。 */

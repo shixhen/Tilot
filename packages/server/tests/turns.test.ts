@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { EventEmitter, once } from "node:events";
-import { mkdirSync, mkdtempSync, rmSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { createServer, type ServerResponse } from "node:http";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
@@ -258,6 +258,7 @@ test("流中取消及时处理，输入关闭取消剩余请求并保存终态",
   assert.deepEqual(await session.request({ id: "cancel-again", method: "turn.interrupt", params: { turnId } }),
     { id: "cancel-again", success: true, result: { interrupted: false } });
   const second = await session.start(thread.id, "next");
+  await session.waitFor((message) => "event" in message && message.event === "message.delta" && message.turnId === second);
   session.input.end();
   await session.serving;
   assert.equal(session.store.getTurn(second)?.status, "cancelled");
@@ -291,7 +292,7 @@ test("真实命令进度通过行协议交付，历史查询只包含最终结�
   const session = openSession(context, model.baseURL);
   const directory = join(session.store.dataDirectory, "project");
   mkdirSync(directory);
-  const thread = session.store.createThread("命令进度", directory);
+  const thread = session.store.createThread("命令进度", directory, "full-access");
   const turnId = await session.start(thread.id, "shell");
   await session.waitFor((message) => "event" in message && message.event === "message.delta");
   model.finish(0, false, [{ name: "shell", arguments: JSON.stringify({
@@ -318,4 +319,76 @@ test("真实命令进度通过行协议交付，历史查询只包含最终结�
   model.finish(1);
   await session.waitFor((message) => "event" in message && message.event === "turn.finished" && message.turn.id === turnId);
   assert.equal(session.store.getTurn(turnId)?.status, "completed");
+});
+
+test("真实审批协议逐条放行或拒绝，等待不计工具耗时，轮内切换权限不改变审批策略或工具声明", { timeout: 10000 }, async (context) => {
+  const model = await mockModel(context);
+  const session = openSession(context, model.baseURL);
+  const project = join(session.store.dataDirectory, "project");
+  mkdirSync(project);
+  const thread = session.store.createThread("审批", project);
+  const turnId = await session.start(thread.id, "审批开始");
+  await session.waitFor((message) => "event" in message && message.event === "message.delta" && message.turnId === turnId);
+  const firstPath = join(session.store.dataDirectory, "outside", "allowed.txt");
+  const secondPath = join(session.store.dataDirectory, "denied", "file.txt");
+  model.finish(0, false, [firstPath, secondPath].map((path) => ({ name: "write", arguments: JSON.stringify({ path, content: "单次允许" }) })));
+  const first = await session.waitFor((message) => "event" in message && message.event === "approval.requested");
+  assert.ok("event" in first && first.event === "approval.requested");
+  assert.equal(first.approval.resolvedPath, firstPath);
+  assert.equal(existsSync(join(session.store.dataDirectory, "outside")), false);
+  const list = await session.request({ id: "pending", method: "approval.list", params: { threadId: thread.id } });
+  assert.ok(list.success); assert.deepEqual(list.result, [first.approval]);
+  const attempt = session.store.history.listAttempts(turnId)[0]!;
+  assert.equal(session.store.history.listToolCalls(attempt.id)[0]!.startedAt, null);
+  assert.equal((await session.request({ id: "mode", method: "thread.permission", params: { threadId: thread.id, permissionMode: "full-access" } })).success, true);
+  assert.equal((await session.request({ id: "locked", method: "thread.permission", params: { threadId: thread.id, permissionMode: "read-only" } })).success, false);
+  const approvedAt = Date.now();
+  assert.equal((await session.request({ id: "allow", method: "approval.respond", params: { approvalId: first.approval.id, allowed: true } })).success, true);
+  const second = await session.waitFor((message) => "event" in message && message.event === "approval.requested" && message.approval.id !== first.approval.id);
+  assert.ok("event" in second && second.event === "approval.requested");
+  assert.equal(readFileSync(firstPath, "utf8"), "单次允许");
+  await session.request({ id: "deny", method: "approval.respond", params: { approvalId: second.approval.id, allowed: false } });
+  await session.waitFor((message) => "event" in message && message.event === "message.delta" && message.itemId === "response_1_message");
+  const calls = session.store.history.listToolCalls(attempt.id);
+  assert.ok(calls[0]!.startedAt! >= approvedAt);
+  assert.ok(calls[0]!.durationMs !== null);
+  assert.equal(calls[1]!.startedAt, null); assert.equal(calls[1]!.durationMs, null);
+  assert.match(String(calls[1]!.result!.output), /用户拒绝/);
+  assert.equal(existsSync(join(session.store.dataDirectory, "denied")), false);
+  assert.deepEqual(model.requests[0]!.tools, model.requests[1]!.tools);
+  model.finish(1);
+  await session.waitFor((message) => "event" in message && message.event === "turn.finished" && message.turn.id === turnId);
+  const next = await session.start(thread.id, "下一轮");
+  await session.waitFor((message) => "event" in message && message.event === "message.delta" && message.turnId === next);
+  assert.equal(session.store.getTurn(next)?.permissionMode, "full-access");
+  assert.deepEqual(model.requests[0]!.tools, model.requests[2]!.tools);
+  model.finish(2, false, [{ name: "write", arguments: JSON.stringify({ path: secondPath, content: "自动允许" }) }]);
+  await session.waitFor((message) => "event" in message && message.event === "message.delta" && message.itemId === "response_3_message");
+  assert.equal(readFileSync(secondPath, "utf8"), "自动允许");
+  model.finish(3);
+  await session.waitFor((message) => "event" in message && message.event === "turn.finished" && message.turn.id === next);
+  assert.equal(session.received.filter((message) => "event" in message && message.event === "approval.requested").length, 2);
+});
+
+test("停止与关闭连接都会取消待审批命令，不执行副作用、不记录执行耗时", { timeout: 10000 }, async (context) => {
+  const model = await mockModel(context);
+  const session = openSession(context, model.baseURL);
+  const project = join(session.store.dataDirectory, "project"); mkdirSync(project);
+  const thread = session.store.createThread("取消审批", project);
+  for (const [index, close] of [false, true].entries()) {
+    const turnId = await session.start(thread.id, `wait-${index}`);
+    await session.waitFor((message) => "event" in message && message.event === "message.delta" && message.turnId === turnId);
+    model.finish(index, false, [{ name: "shell", arguments: '{"command":"Set-Content unexpected.txt forbidden"}' }]);
+    await session.waitFor((message) => "event" in message && message.event === "approval.requested" && message.approval.turnId === turnId);
+    if (close) { session.input.end(); await session.serving; }
+    else {
+      await session.request({ id: "cancel-approval", method: "turn.interrupt", params: { turnId } });
+      await session.waitFor((message) => "event" in message && message.event === "turn.finished" && message.turn.id === turnId);
+    }
+    const call = session.store.history.listToolCalls(session.store.history.listAttempts(turnId)[0]!.id)[0]!;
+    assert.equal(session.store.getTurn(turnId)?.status, "cancelled");
+    assert.equal(call.startedAt, null); assert.equal(call.durationMs, null);
+    assert.match(String(call.result!.output), /cancelled/);
+    assert.equal(existsSync(join(project, "unexpected.txt")), false);
+  }
 });

@@ -4,7 +4,7 @@ import type { AppConfig, AttemptView, RpcRequest, Thread, Turn, TurnInput, TurnN
 
 // 仅供浏览器手动验收，不进入应用入口或生产构建，不读取本地真实配置或密钥。
 let config: AppConfig = { providerId: "default", model: "deepseek-flash", reasoningEffort: "high",
-  providers: [{ id: "default", name: "example.invalid", baseURL: "https://example.invalid", models: [{ id: "deepseek-flash" }] }], maxAutomaticRetries: 2 };
+  providers: [{ id: "default", name: "example.invalid", baseURL: "https://example.invalid", models: [{ id: "deepseek-flash" }] }], maxAutomaticRetries: 2, defaultPermissionMode: "workspace-write" };
 // 已配置密钥的服务 id。
 let configured: string[] = [];
 let seq = 0;
@@ -31,9 +31,17 @@ async function respond(request: RpcRequest): Promise<unknown> {
     case "credentials.set": configured = [...new Set([...configured, request.params.providerId])]; return null;
     case "thread.list": return threads;
     case "thread.create": {
-      const thread = { id: crypto.randomUUID(), title: request.params.title, projectPath: request.params.projectPath ?? null,
-        providerId: config.providerId, model: config.model, reasoningEffort: config.reasoningEffort, createdAt: Date.now(), updatedAt: Date.now() };
+      const thread: Thread = { id: crypto.randomUUID(), title: request.params.title, projectPath: request.params.projectPath ?? null,
+        providerId: config.providerId, model: config.model, reasoningEffort: config.reasoningEffort, createdAt: Date.now(), updatedAt: Date.now(),
+        permissionMode: request.params.permissionMode ?? (request.params.projectPath ? config.defaultPermissionMode : "read-only"), permissionLockedAt: null };
       threads.unshift(thread); return thread;
+    }
+    case "approval.list": return [];
+    case "thread.permission": {
+      const thread = threads.find((item) => item.id === request.params.threadId)!;
+      if (thread.permissionLockedAt !== null && (thread.permissionMode === "read-only") !== (request.params.permissionMode === "read-only")) throw new Error("首次发送后不能跨工具组切换。");
+      thread.permissionMode = request.params.permissionMode;
+      return thread;
     }
     case "thread.update": {
       const thread = threads.find((item) => item.id === request.params.threadId)!;
@@ -49,7 +57,9 @@ async function respond(request: RpcRequest): Promise<unknown> {
     case "turn.inputs": return inputs.get(request.params.turnId) ?? [];
     case "turn.attempts": return attempts.get(request.params.turnId) ?? [];
     case "turn.start": {
-      const turn: Turn = { id: crypto.randomUUID(), threadId: request.params.threadId, sequence: turns.length + 1, status: "running", createdAt: Date.now(), finishedAt: null, error: null };
+      const thread = threads.find((item) => item.id === request.params.threadId)!;
+      thread.permissionLockedAt ??= Date.now();
+      const turn: Turn = { id: crypto.randomUUID(), threadId: request.params.threadId, sequence: turns.length + 1, permissionMode: thread.permissionMode, status: "running", createdAt: Date.now(), finishedAt: null, error: null };
       turns.push(turn); inputs.set(turn.id, [{ id: 1, turnId: turn.id, content: request.params.input, createdAt: Date.now() }]);
       await notify({ event: "turn.started", turn });
       // 模拟完整循环；普通对话只有网页读取，项目对话另演示本地工具。

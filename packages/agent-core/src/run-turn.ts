@@ -1,10 +1,12 @@
 import type OpenAI from "openai";
+import { mkdir } from "node:fs/promises";
+import { join } from "node:path";
 import type { Response, ResponseStreamEvent } from "openai/resources/responses/responses";
 import { appendProjectInstructions, buildContext, loadProjectContext, readPrompt } from "@tilot/context";
 import { streamResponse } from "@tilot/responses";
 import { getResponseToolCallsFromResponse } from "@tilot/responses/output";
 import type { AppConfig, AttemptCompletion, Store, Turn } from "@tilot/store";
-import { createToolSet, OutputCache, type OutputSnapshot, type ToolSet, type Workspace } from "@tilot/tool";
+import { createToolSet, openWorkspace, OutputCache, type ApprovalInput, type OutputSnapshot, type ToolSet, type Workspace } from "@tilot/tool";
 import type { ReasoningTiming } from "@tilot/protocol";
 import { ReasoningClock } from "./reasoning-clock.ts";
 
@@ -27,6 +29,7 @@ export interface RunTurnOptions {
   signal?: AbortSignal;
   /** 普通事件处理失败会停止请求；终态事件在响应及对应状态落库后交付。 */
   onEvent?: (event: TurnEvent) => void | Promise<void>;
+  onApproval?: (input: ApprovalInput & { turnId: string }, signal?: AbortSignal) => Promise<boolean>;
 }
 
 /** 一次模型请求的持久化结果；terminal 仅用于保存完成后通知界面。 */
@@ -46,15 +49,22 @@ export async function runTurn(store: Store, client: OpenAI, options: RunTurnOpti
   const thread = store.getThread(options.threadId)!;
   // 使用任务自己选择的服务、模型和思考强度，其余配置取全局值。
   const config = { ...store.getConfig(), providerId: thread.providerId, model: thread.model, reasoningEffort: thread.reasoningEffort };
-  const workspace = thread.projectPath === null ? undefined : { rootPath: thread.projectPath };
+  let workspace: Workspace;
   let outputs = outputCaches.get(store);
   if (!outputs) { outputs = new OutputCache(store.dataDirectory); outputCaches.set(store, outputs); }
-  const tools = createToolSet(workspace, { outputs, threadId: thread.id });
   try {
     await options.onEvent?.({ type: "turn.started", turn });
+    const directory = thread.projectPath ?? join(store.dataDirectory, "workspaces", thread.id);
+    if (thread.projectPath === null) await mkdir(directory, { recursive: true });
+    workspace = await openWorkspace(directory);
   } catch (error) {
-    return store.finishTurn(turn.id, options.signal?.aborted ? "cancelled" : "failed", errorMessage(error));
+    const cancelled = options.signal?.aborted;
+    return store.finishTurn(turn.id, cancelled ? "cancelled" : "failed", cancelled ? null : errorMessage(error));
   }
+  const tools = createToolSet(workspace, { outputs, threadId: thread.id }, {
+    mode: turn.permissionMode,
+    ...(requestOptions.onApproval ? { approve: (input: ApprovalInput, signal?: AbortSignal) => requestOptions.onApproval!({ ...input, turnId: turn.id }, signal) } : {}),
+  });
 
   let inputThroughId = input.id;
   // 不限制请求次数；模型完成任务或执行被取消、失败时结束。
@@ -73,23 +83,24 @@ export async function runTurn(store: Store, client: OpenAI, options: RunTurnOpti
         const records = store.history.listToolCalls(attemptId!);
         for (const [index, call] of calls.entries()) {
           const skipped = options.signal?.aborted ? "轮次已取消，工具未执行。" : null;
-          if (!skipped) {
-            store.history.startTool(records[index]!.id);
-            await notifyTool(attemptId!, records[index]!.id);
-          }
           const controller = new AbortController();
           let progressError: unknown;
           const signal = options.signal ? AbortSignal.any([options.signal, controller.signal]) : controller.signal;
-          const toolStarted = performance.now();
+          let toolStarted: number | undefined;
           const output = skipped ? JSON.stringify({ status: "not_executed", error: skipped })
             : await tools.execute(call.name, call.arguments, signal, { executionId: records[index]!.id,
+              onStart: async () => {
+                store.history.startTool(records[index]!.id);
+                toolStarted = performance.now();
+                await notifyTool(attemptId!, records[index]!.id);
+              },
               ...(options.onEvent ? { onUpdate: async (snapshot: OutputSnapshot) => {
                 if (progressError !== undefined) return;
                 try { await options.onEvent!({ type: "tool.progress", turnId: turn.id, attemptId: attemptId!, toolId: records[index]!.id, snapshot }); }
                 catch (error) { progressError = error; controller.abort(); }
               } } : {}),
             });
-          const toolDurationMs = skipped ? null : performance.now() - toolStarted;
+          const toolDurationMs = toolStarted === undefined ? null : performance.now() - toolStarted;
           store.history.saveToolResult(records[index]!.id, { type: "function_call_output", call_id: call.call_id, output }, toolDurationMs);
           if (progressError !== undefined) {
             // 先保存停止后的实际结果，再给后续调用补未执行结果；不能重跑有副作用的命令。

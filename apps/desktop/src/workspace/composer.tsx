@@ -7,6 +7,8 @@ import { Card, CardContent, CardFooter } from "../components/ui/card";
 import { Textarea } from "../components/ui/textarea";
 import { ModelPicker } from "./model-picker";
 import { PendingInputs } from "./pending-inputs";
+import { PermissionPicker } from "./permission-picker";
+import { ApprovalPanel } from "./approval-panel";
 
 /** Codex 风格输入框：圆角卡片内上方输入、下方工具栏，保留中文输入法和多行编辑行为。 */
 export function Composer({ state }: { state: WorkspaceState }) {
@@ -37,6 +39,8 @@ export function Composer({ state }: { state: WorkspaceState }) {
   return <form className="min-w-0 w-full" onSubmit={(event) => void state.submit(event)}>
     <PendingInputs queue={state.chat.queue} running={!!state.running} connected={state.chat.connected}
       onSteer={(id) => void state.chat.steer(id)} onRemove={state.chat.removeQueued} onResume={state.chat.resumeQueue} />
+    <ApprovalPanel approval={state.chat.approvals[0]} disabled={!state.chat.connected || state.chat.approvalBusy}
+      onRespond={(allowed) => void state.chat.respondApproval(state.chat.approvals[0]!.id, allowed)} />
     <Card className="min-w-0 gap-0 rounded-[20px] border-0 py-0 shadow-lg shadow-black/20">
       <CardContent className="min-w-0 px-4 pt-3.5 pb-1">
         <Textarea ref={editor} rows={1} value={state.draft} disabled={state.busy} aria-label="消息" placeholder="描述任务，或提出一个问题…"
@@ -49,16 +53,19 @@ export function Composer({ state }: { state: WorkspaceState }) {
             }
           }} />
       </CardContent>
-      <CardFooter className="flex items-center justify-between gap-2 px-2.5 pt-0 pb-2.5">
+      <CardFooter className="flex flex-wrap items-center justify-between gap-2 px-2.5 pt-0 pb-2.5">
         <div className="flex min-w-0 items-center gap-1">
           <Button type="button" variant="ghost" size="icon-sm" className="rounded-full hover:bg-white/10!" aria-label={state.chat.selected ? "新建对话" : "选择项目"} title={state.chat.selected ? "新建对话" : "选择项目"}
             disabled={state.busy || !state.chat.connected} onClick={() => state.chat.selected ? state.select(null, state.projectPath) : void state.chooseProject()}><Plus className="size-5" /></Button>
+          <PermissionPicker mode={state.permissionMode} project={state.projectPath !== null}
+            locked={state.thread?.permissionLockedAt != null} disabled={state.busy || !state.chat.connected} running={!!state.running}
+            onChange={(mode) => void state.chat.choosePermission(mode)} />
           {state.projectPath && <span className="flex h-7 min-w-0 items-center gap-1.5 rounded-full px-2 text-sm text-muted-foreground" title={state.projectPath}>
             <Folder className="size-4 shrink-0" /><span className="max-w-40 truncate">{projectName(state.projectPath)}</span>
             {!state.chat.selected && <Button type="button" variant="ghost" size="icon-xs" className="size-5 rounded-full" aria-label="取消选择项目" disabled={state.busy} onClick={() => state.select(null)}><X /></Button>}
           </span>}
         </div>
-        <div className="flex shrink-0 items-center gap-1.5">
+        <div className="ml-auto flex shrink-0 items-center gap-1.5">
           {/* 已有任务显示它自己的模型，新对话显示默认值。 */}
           {state.choice && state.chat.config
             ? <ModelPicker providerId={state.choice.providerId} model={state.choice.model} reasoningEffort={state.choice.reasoningEffort}

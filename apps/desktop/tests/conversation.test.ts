@@ -10,7 +10,7 @@ import type { Request } from "../src/client.ts";
 
 /** 创建独立轮次，供历史与实时事件交错测试使用。 */
 function turn(id = "turn"): Turn {
-  return { id, threadId: "thread", sequence: 1, status: "running", createdAt: 1, finishedAt: null, error: null };
+  return { id, threadId: "thread", sequence: 1, permissionMode: "read-only", status: "running", createdAt: 1, finishedAt: null, error: null };
 }
 
 test("思考计时不被后续增量抹掉，取消历史可补齐终止耗时，迟到起点不恢复计时", () => {

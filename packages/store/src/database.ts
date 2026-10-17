@@ -5,7 +5,7 @@ import { DEFAULT_CONFIG } from "./config.ts";
 export function migrateDatabase(database: Database.Database): void {
   database.transaction(() => {
     const version = database.pragma("user_version", { simple: true });
-    if (typeof version !== "number" || !Number.isInteger(version) || version < 0 || version > 10) {
+    if (typeof version !== "number" || !Number.isInteger(version) || version < 0 || version > 11) {
       throw new Error("不支持此数据库版本，请使用匹配的 Tilot 版本。");
     }
     if (version === 0) {
@@ -185,6 +185,21 @@ export function migrateDatabase(database: Database.Database): void {
         ALTER TABLE tool_calls ADD COLUMN durationMs REAL CHECK (durationMs >= 0);
       `);
       database.pragma("user_version = 10");
+    }
+    if (version < 11) {
+      database.exec(`
+        ALTER TABLE app_config ADD COLUMN defaultPermissionMode TEXT NOT NULL DEFAULT 'workspace-write'
+          CHECK (defaultPermissionMode IN ('read-only', 'workspace-write', 'full-access'));
+        ALTER TABLE threads ADD COLUMN permissionMode TEXT NOT NULL DEFAULT 'read-only'
+          CHECK (permissionMode IN ('read-only', 'workspace-write', 'full-access'));
+        ALTER TABLE threads ADD COLUMN permissionLockedAt INTEGER;
+        UPDATE threads SET permissionMode = 'workspace-write' WHERE projectPath IS NOT NULL;
+        UPDATE threads SET permissionLockedAt = (SELECT MIN(createdAt) FROM turns WHERE threadId = threads.id);
+        ALTER TABLE turns ADD COLUMN permissionMode TEXT NOT NULL DEFAULT 'read-only'
+          CHECK (permissionMode IN ('read-only', 'workspace-write', 'full-access'));
+        UPDATE turns SET permissionMode = (SELECT permissionMode FROM threads WHERE id = turns.threadId);
+      `);
+      database.pragma("user_version = 11");
     }
   }).immediate();
 }

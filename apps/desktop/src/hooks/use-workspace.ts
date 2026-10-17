@@ -15,7 +15,8 @@ export function useWorkspace() {
   const draftKey = chat.selected ?? `new:${projectPath ?? ""}`;
   const draft = drafts[draftKey] ?? "";
   const running = chat.records.find((record) => record.turn.status === "running");
-  const busy = chat.busy || picking;
+  const busy = chat.busy || picking || chat.permissionBusy;
+  const permissionMode = thread?.permissionMode ?? chat.newPermissionMode ?? (projectPath ? chat.config?.defaultPermissionMode ?? "workspace-write" : "read-only");
   // 已有任务用它自己的服务，新对话用默认服务；该服务配置了密钥才能发送。
   const choice = thread ?? chat.config;
   const configured = !!choice && chat.configured.includes(choice.providerId);
@@ -57,7 +58,7 @@ export function useWorkspace() {
     setDrafts((current) => ({ ...current, [draftKey]: "", [result.threadId ?? draftKey]: result.accepted ? "" : draft }));
   }
 
-  return { chat, thread, choice, configured, projectPath, draft, running, busy, canSend, projectError, settingsOpen,
+  return { chat, thread, choice, configured, projectPath, permissionMode, draft, running, busy, canSend, projectError, settingsOpen,
     setSettingsOpen, editDraft, select, chooseModel, chooseProject, submit };
 }
 

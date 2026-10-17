@@ -4,6 +4,7 @@ import type { Store, Turn, TurnInput } from "@tilot/store";
 import type { ServerEvent, TurnNotification } from "@tilot/protocol";
 import { listAttemptViews, projectMessages } from "./history.ts";
 import { readPrompt } from "@tilot/context";
+import { ApprovalManager } from "./approvals.ts";
 
 /** 当前进程持有的执行句柄，关闭连接时取消并等待 Core 完成落库。 */
 interface ActiveTurn {
@@ -13,6 +14,7 @@ interface ActiveTurn {
 
 /** 管理服务连接中的运行轮次、取消信号与展示事件，不承担 Agent 业务循环。 */
 export class TurnManager {
+  readonly approvals: ApprovalManager;
   private readonly store: Store;
   private readonly send: (event: ServerEvent) => Promise<void>;
   private readonly onFatal: (error: Error) => void;
@@ -25,13 +27,14 @@ export class TurnManager {
     this.store = store;
     this.send = send;
     this.onFatal = onFatal;
+    this.approvals = new ApprovalManager((event) => this.emit(event));
   }
 
   /** 使用任务所选服务的地址和密钥启动轮次，取得轮次标识即返回，不等待模型完成。 */
   start(threadId: string, input: string): Promise<Turn> {
     if (this.closed) throw new Error("服务正在关闭，不能开始新轮次。");
-    const thread = this.store.getThread(threadId);
-    if (!thread) throw new Error("任务不存在。");
+    if (!input.trim()) throw new Error("用户输入不能为空。");
+    const thread = this.store.lockThreadPermissions(threadId);
     const provider = this.store.getConfig().providers.find((item) => item.id === thread.providerId);
     if (!provider) throw new Error("对话使用的服务已不存在，请重新选择模型。");
     const apiKey = this.store.credentials.getApiKey(provider.id, provider.baseURL);
@@ -42,6 +45,7 @@ export class TurnManager {
     let current: Turn | undefined;
     execution.done = runTurn(this.store, client, {
       threadId, input, signal: execution.controller.signal,
+      onApproval: (request, signal) => this.approvals.request({ ...request, threadId }, signal),
       onEvent: async (event) => {
         if (event.type === "turn.started") {
           current = event.turn;

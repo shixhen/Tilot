@@ -4,7 +4,7 @@ import { isAbsolute, join } from "node:path";
 import Database from "better-sqlite3";
 import type { AppConfig } from "./config.ts";
 import { migrateDatabase } from "./database.ts";
-import type { ModelInfo, Provider, ReasoningEffort, Thread } from "@tilot/protocol";
+import { isPermissionMode, type ModelInfo, type PermissionMode, type Provider, type ReasoningEffort, type Thread } from "@tilot/protocol";
 import type { Turn, TurnFinalStatus, TurnInput } from "@tilot/protocol";
 import { ModelHistoryStore } from "./history.ts";
 import { validatePagination } from "./pagination.ts";
@@ -15,7 +15,7 @@ export type { AppConfig } from "./config.ts";
 export type { Thread } from "@tilot/protocol";
 export type { Turn, TurnFinalStatus, TurnInput } from "@tilot/protocol";
 /** 任务查询统一返回的列。 */
-const THREAD_COLUMNS = "id, title, projectPath, providerId, model, reasoningEffort, createdAt, updatedAt";
+const THREAD_COLUMNS = "id, title, projectPath, providerId, model, reasoningEffort, permissionMode, permissionLockedAt, createdAt, updatedAt";
 
 export type { AttemptStatus, ModelAttempt, AttemptCompletion, ToolResult, StoredToolCall } from "./history-types.ts";
 
@@ -52,7 +52,7 @@ export class Store {
   /** 读取已保存配置及全部服务和模型（按保存顺序）；数据库缺少配置记录时报告错误，不用默认值掩盖损坏。 */
   getConfig(): AppConfig {
     const config = this.database.prepare<[], Omit<AppConfig, "providers">>(`
-      SELECT providerId, model, reasoningEffort, maxAutomaticRetries
+      SELECT providerId, model, reasoningEffort, maxAutomaticRetries, defaultPermissionMode
       FROM app_config WHERE id = 1
     `).get();
     if (!config) {
@@ -66,6 +66,7 @@ export class Store {
 
   /** 校验后整份保存配置并替换服务和模型列表；仍被任务使用的服务不能删除。在同一事务中执行，失败时不会留下部分修改。 */
   saveConfig(config: AppConfig): void {
+    if (!isPermissionMode(config.defaultPermissionMode)) throw new Error("默认权限模式无效。");
     if (config.providers.length === 0 || new Set(config.providers.map((provider) => provider.id)).size !== config.providers.length) {
       throw new Error("服务列表不能为空，也不能有重复的服务。");
     }
@@ -90,7 +91,7 @@ export class Store {
       const result = this.database.prepare(`
         UPDATE app_config SET
           providerId = @providerId, model = @model, reasoningEffort = @reasoningEffort,
-          maxAutomaticRetries = @maxAutomaticRetries
+          maxAutomaticRetries = @maxAutomaticRetries, defaultPermissionMode = @defaultPermissionMode
         WHERE id = 1
       `).run(config);
       if (result.changes !== 1) {
@@ -108,16 +109,41 @@ export class Store {
   }
 
   /** 创建任务，服务、模型和思考强度取当前默认值；项目路径应由 Server 验证并解析为真实绝对路径，无项目时传 null。 */
-  createThread(title: string, projectPath: string | null = null): Thread {
+  createThread(title: string, projectPath: string | null = null, permissionMode?: PermissionMode): Thread {
     if (projectPath !== null && !isAbsolute(projectPath)) {
       throw new Error("任务的项目路径必须是绝对路径。");
     }
     const now = Date.now();
-    return this.database.prepare<{ id: string; title: string; projectPath: string | null; now: number }, Thread>(`
-      INSERT INTO threads (id, title, projectPath, providerId, model, reasoningEffort, createdAt, updatedAt)
-      SELECT @id, @title, @projectPath, providerId, model, reasoningEffort, @now, @now FROM app_config WHERE id = 1
+    const mode = permissionMode ?? (projectPath === null ? "read-only" : this.getConfig().defaultPermissionMode);
+    if (!isPermissionMode(mode) || (projectPath === null && mode === "workspace-write")) throw new Error("此对话不能使用该权限模式。");
+    return this.database.prepare<{ id: string; title: string; projectPath: string | null; mode: PermissionMode; now: number }, Thread>(`
+      INSERT INTO threads (id, title, projectPath, providerId, model, reasoningEffort, permissionMode, createdAt, updatedAt)
+      SELECT @id, @title, @projectPath, providerId, model, reasoningEffort, @mode, @now, @now FROM app_config WHERE id = 1
       RETURNING ${THREAD_COLUMNS}
-    `).get({ id: randomUUID(), title: title.trim(), projectPath, now })!;
+    `).get({ id: randomUUID(), title: title.trim(), projectPath, mode, now })!;
+  }
+
+  /** 首次有效发送即锁定工具声明；预检查失败或取消也不会解锁。 */
+  lockThreadPermissions(id: string): Thread {
+    const thread = this.database.prepare<[number, string], Thread>(`
+      UPDATE threads SET permissionLockedAt = COALESCE(permissionLockedAt, ?) WHERE id = ? RETURNING ${THREAD_COLUMNS}
+    `).get(Date.now(), id);
+    if (!thread) throw new Error("任务不存在。");
+    return thread;
+  }
+
+  /** 只读与其他模式在首次发送后不能互转；运行中的轮次使用已保存的快照。 */
+  updateThreadPermission(id: string, mode: PermissionMode): Thread {
+    return this.database.transaction(() => {
+      const thread = this.getThread(id);
+      if (!thread) throw new Error("任务不存在。");
+      if (!isPermissionMode(mode) || (thread.projectPath === null && mode === "workspace-write")) throw new Error("此对话不能使用该权限模式。");
+      if (thread.permissionLockedAt !== null && (thread.permissionMode === "read-only") !== (mode === "read-only")) {
+        throw new Error("首次发送后，只读模式与其他权限模式不能互相切换，请新建对话。");
+      }
+      this.database.prepare("UPDATE threads SET permissionMode = ? WHERE id = ?").run(mode, id);
+      return this.getThread(id)!;
+    }).immediate();
   }
 
   /** 按 id 读取任务；不存在时返回 undefined，由调用方决定如何向用户展示。 */
@@ -166,13 +192,14 @@ export class Store {
   /** 原子创建运行中的轮次及首条输入；同一任务的运行中轮次由数据库唯一索引限制。 */
   startTurn(threadId: string, input: string): Turn {
     return this.database.transaction(() => {
-      const turn = this.database.prepare<{ id: string; threadId: string; createdAt: number }, Turn>(`
-        INSERT INTO turns (id, threadId, sequence, status, createdAt)
+      const thread = this.lockThreadPermissions(threadId);
+      const turn = this.database.prepare<{ id: string; threadId: string; permissionMode: PermissionMode; createdAt: number }, Turn>(`
+        INSERT INTO turns (id, threadId, sequence, permissionMode, status, createdAt)
         VALUES (@id, @threadId,
           (SELECT COALESCE(MAX(sequence), 0) + 1 FROM turns WHERE threadId = @threadId),
-          'running', @createdAt)
-        RETURNING id, threadId, sequence, status, createdAt, finishedAt, error
-      `).get({ id: randomUUID(), threadId, createdAt: Date.now() })!;
+          @permissionMode, 'running', @createdAt)
+        RETURNING id, threadId, sequence, permissionMode, status, createdAt, finishedAt, error
+      `).get({ id: randomUUID(), threadId, permissionMode: thread.permissionMode, createdAt: Date.now() })!;
       this.appendTurnInput(turn.id, input);
       return turn;
     }).immediate();
@@ -181,7 +208,7 @@ export class Store {
   /** 按 id 读取轮次；不存在时返回 undefined，不创建隐含轮次。 */
   getTurn(id: string): Turn | undefined {
     return this.database.prepare<[string], Turn>(`
-      SELECT id, threadId, sequence, status, createdAt, finishedAt, error FROM turns WHERE id = ?
+      SELECT id, threadId, sequence, permissionMode, status, createdAt, finishedAt, error FROM turns WHERE id = ?
     `).get(id);
   }
 
@@ -189,7 +216,7 @@ export class Store {
   listTurns(threadId: string, afterSequence = 0, limit = 50): Turn[] {
     validatePagination(limit, afterSequence);
     return this.database.prepare<[string, number, number], Turn>(`
-      SELECT id, threadId, sequence, status, createdAt, finishedAt, error FROM turns
+      SELECT id, threadId, sequence, permissionMode, status, createdAt, finishedAt, error FROM turns
       WHERE threadId = ? AND sequence > ? ORDER BY sequence LIMIT ?
     `).all(threadId, afterSequence, limit);
   }
@@ -249,7 +276,7 @@ export class Store {
       }
       const turn = this.database.prepare<[TurnFinalStatus, number, string | null, string], Turn>(`
         UPDATE turns SET status = ?, finishedAt = ?, error = ? WHERE id = ? AND status = 'running'
-        RETURNING id, threadId, sequence, status, createdAt, finishedAt, error
+        RETURNING id, threadId, sequence, permissionMode, status, createdAt, finishedAt, error
       `).get(status, Date.now(), error, id);
       if (!turn) {
         throw new Error("轮次不存在或已结束。");
