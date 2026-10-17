@@ -151,7 +151,7 @@ test("运行轮次仅显示用户消息操作和时间，AI 正文和用量等�
     createElement(TurnMessages, { record: saved, onEdit: () => {} })));
   const running = render(current);
   assert.match(running, /先检查文件|还在继续生成/);
-  assert.match(running, /读取文件/);
+  assert.match(running, /1 次工具调用/);
   assert.doesNotMatch(running, /aria-label="本轮模型请求统计"/);
   assert.equal((running.match(/aria-label="复制消息"/g) ?? []).length, 1);
   assert.match(running, /aria-label="编辑消息"/);
@@ -172,21 +172,21 @@ test("运行轮次仅显示用户消息操作和时间，AI 正文和用量等�
   assert.match(render(previous), /aria-label="本轮模型请求统计"/);
 });
 
-test("没有正文的运行轮次不显示用量入口，结束后的思考或失败轮次仍能查看", () => {
+test("没有正文的轮次不附加用量入口，结束后也不将统计挂在过程块下方", () => {
   const current = record([attempt(1)]);
   current.turn.status = "running";
   const render = () => renderToStaticMarkup(createElement(TooltipProvider, null, createElement(TurnMessages, { record: current })));
   assert.doesNotMatch(render(), /aria-label="本轮模型请求统计"/);
   for (const status of ["completed", "failed", "cancelled", "interrupted"] as const) {
     current.turn.status = status;
-    assert.match(render(), /aria-label="本轮模型请求统计"/);
+    assert.doesNotMatch(render(), /aria-label="本轮模型请求统计"/);
   }
 });
 
-test("没有正文的失败轮次仍有统计入口，不依赖失败预览或成功消息", () => {
+test("没有正文的失败轮次保留错误提示，不附加统计图标", () => {
   const failed = record([{ ...attempt(1), status: "failed", error: "失败" }]);
   failed.turn.status = "failed";
   const html = renderToStaticMarkup(createElement(TooltipProvider, null, createElement(TurnMessages, { record: failed })));
   assert.match(html, /生成失败/);
-  assert.match(html, /aria-label="本轮模型请求统计"/);
+  assert.doesNotMatch(html, /aria-label="本轮模型请求统计"/);
 });

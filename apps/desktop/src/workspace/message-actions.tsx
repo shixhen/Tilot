@@ -37,7 +37,7 @@ export function MetricsDetails({ metrics }: { metrics?: TurnMetrics | undefined 
   </div>;
 }
 
-/** 正常回答和没有正文的轮次共用同一个统计入口。 */
+/** 正文操作栏使用的整轮统计入口。 */
 export function MetricsButton({ metrics }: { metrics?: TurnMetrics | undefined }) {
   return <Tooltip><TooltipTrigger asChild><Button type="button" variant="ghost" size="icon-xs" className="size-7" aria-label="本轮模型请求统计"><ChartNoAxesColumnIncreasing className="size-[15px]" /></Button></TooltipTrigger>
     <TooltipContent side="top" align="start" sideOffset={8} showArrow={false} className="rounded-xl border bg-popover p-3 text-popover-foreground shadow-lg">

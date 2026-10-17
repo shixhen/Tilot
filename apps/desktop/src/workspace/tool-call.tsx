@@ -1,9 +1,10 @@
-import { useEffect, useState } from "react";
+import { useState } from "react";
 import { Check, ChevronRight, CircleAlert, FileText, Folder, Globe, LoaderCircle, Search, Terminal } from "lucide-react";
 import type { ToolView } from "@tilot/protocol";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "../components/ui/collapsible";
 import { ToolResult } from "./tool-result";
 import { ElapsedTime } from "./elapsed-time";
+import { useAutoDisclosure } from "../hooks/use-auto-disclosure";
 
 /** 解析展示用 JSON；无效模型参数保留原文供用户查看。 */
 function readObject(text: string | null): Record<string, unknown> {
@@ -21,9 +22,8 @@ export function ToolCall({ tool, active }: { tool: ToolView; active: boolean }) 
   const data = result.data && typeof result.data === "object" ? result.data as Record<string, unknown> : {};
   const running = active && tool.running && tool.output === null;
   const unstarted = tool.startedAt === null && tool.durationMs === null;
-  const [open, setOpen] = useState(running);
+  const { open, onOpenChange, content } = useAutoDisclosure(running);
   const [compact, setCompact] = useState(running);
-  useEffect(() => setOpen(running), [running]);
   let status = running ? "执行中" : active ? "等待结果" : "执行结果未知";
   let failed = false;
   if (tool.output !== null) {
@@ -42,7 +42,7 @@ export function ToolCall({ tool, active }: { tool: ToolView; active: boolean }) 
     : tool.name === "shell" ? args.command : tool.name === "ls" ? args.path || "项目根目录" : searchTool ? args.pattern : webTool ? args.url ?? "网页缓存" : tool.name;
   // 执行中只预览开头几行，超出部分以省略号结尾；手动展开时显示全文并可滚动。
   const box = compact ? "line-clamp-4 overflow-hidden" : "max-h-40 overflow-auto";
-  return <Collapsible open={open} onOpenChange={(value) => { setOpen(value); if (value && !running) setCompact(false); }} className="group/tool min-w-0 text-sm">
+  return <Collapsible open={open} onOpenChange={(value) => { onOpenChange(value); if (value) setCompact(false); }} className="group/tool min-w-0 text-sm">
     <CollapsibleTrigger className="flex max-w-full min-w-0 items-center gap-2 rounded-sm text-left text-muted-foreground outline-none transition-colors hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring">
       {running ? <LoaderCircle className="size-3.5 shrink-0 animate-spin" /> : fileTool ? <FileText className="size-3.5 shrink-0" />
         : tool.name === "ls" ? <Folder className="size-3.5 shrink-0" /> : searchTool ? <Search className="size-3.5 shrink-0" /> : webTool ? <Globe className="size-3.5 shrink-0" /> : <Terminal className="size-3.5 shrink-0" />}
@@ -53,7 +53,7 @@ export function ToolCall({ tool, active }: { tool: ToolView; active: boolean }) 
       {result.status !== "not_executed" && !unstarted && <ElapsedTime startedAt={tool.startedAt} durationMs={tool.durationMs} running={running} />}
       <ChevronRight className="disclosure-icon size-3.5 opacity-0 transition-[opacity,rotate] group-hover/tool:opacity-100 group-data-[state=open]/tool:rotate-90 group-data-[state=open]/tool:opacity-100" />
     </CollapsibleTrigger>
-    <CollapsibleContent className="mt-2 min-w-0 overflow-hidden rounded-lg border bg-black/20">
+    <CollapsibleContent ref={content} className="mt-2 min-w-0 overflow-hidden rounded-lg border bg-black/20">
       <pre aria-label="工具输入" className={`${box} border-b px-3 py-2 font-mono text-xs leading-relaxed whitespace-pre-wrap wrap-anywhere text-muted-foreground`}>{tool.arguments}</pre>
       {tool.output !== null && <ToolResult name={tool.name} result={result} output={tool.output} />}
       {tool.output === null && tool.preview && <>
