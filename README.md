@@ -75,7 +75,7 @@ npm run desktop
 
 新对话在首次发送时建立任务；默认普通对话，也可以先通过“选择项目”选取本地目录。选择后不立即创建任务，取消系统选择器不会改变当前任务与草稿。首次发送时 Server 验证目录并保存解析后的真实路径，之后绑定固定；已有任务可在同项目中新建对话，不能更换绑定。侧栏按项目路径分组，可折叠，悬停项目名称查看完整路径。项目名称和访问状态收在输入框工具栏，输入框随内容增高。不同项目的新对话草稿分别保留在本次打开的界面中。
 
-Enter 发送，Shift + Enter 换行；中文输入法确认候选不会触发发送。正式系统提示词统一放在 `packages/prompts/src/system.ts`，由 Server 提供，涵盖协作、工具使用、技能和中断恢复约束；桌面不传入或拼接系统提示词。
+Enter 发送，Shift + Enter 换行；中文输入法确认候选不会触发发送。内置提示词正文放在 `packages/context/prompts/*.md`，由 Context 按需读取 UTF-8 文件，方便直接修改；系统策略位于 `system.md`，涵盖协作、工具使用、技能和中断恢复约束。桌面不传入或拼接系统提示词，工具描述继续放在工具声明中。文件用途见 [Context 说明](packages/context/README.md)。
 
 运行中发送的新消息进入输入框上方的等待区；当前轮次成功结束后，第一条自动开启下一轮，按顺序继续直到队列为空。每条等待消息可以移除，也可以点击“引导”加入当前轮次。引导不会取消当前生成或工具，等本次模型响应及全部工具结果保存后，在同一轮的下一次模型请求中生效，原任务和已产生的输出保留。失败、停止或断连会暂停自动发送并保留等待消息，点击“继续发送”恢复。等待区按任务隔离，切换任务不改变发送归属；未发送消息仅保留在本次应用会话，被接受的引导保存到数据库。详见 [交互与实现](docs/queued-input-and-steering.md)。
 
@@ -98,9 +98,8 @@ Markdown 使用 [react-markdown](https://github.com/remarkjs/react-markdown)、r
 | `apps/desktop` | `src` 放 React 界面，`src-tauri` 放 Tauri 桌面宿主 |
 | `packages/server` | Node.js 服务入口，组装模块、管理生命周期、处理 RPC 和推送事件 |
 | `packages/agent-core` | 调度 Agent 执行流程 |
-| `packages/context` | 构建上下文、加载 Skills、压缩历史 |
+| `packages/context` | 构建上下文、加载项目技能与 Markdown 提示词、校验历史 |
 | `packages/tool` | 内置工具、MCP、注册与执行 |
-| `packages/prompts` | 统一维护系统、项目和恢复提示词 |
 | `packages/store` | 保存对话、配置、凭据和其他持久数据 |
 | `packages/responses` | 通过 OpenAI SDK 调用 Responses API |
 | `packages/protocol` | 桌面端与 Server 共用的 RPC 请求、响应和事件类型 |
@@ -132,19 +131,19 @@ Store 使用 [better-sqlite3](https://github.com/WiseLibs/better-sqlite3)，数�
 
 ## 上下文构建
 
-`@tilot/context` 的 `buildContext(store, { turnId, inputThroughId, instructions })` 返回下一次请求所需的 `instructions` 和 `input`。调用方先选定正在运行的轮次及输入边界，在 `startAttempt` 之前构建上下文；同一任务的执行互斥由 Core 管理。
+`@tilot/context` 的 `buildContext(store, { turnId, inputThroughId, instructions? })` 返回下一次请求所需的 `instructions` 和 `input`。未传入 instructions 时，从内置 `system.md` 读取系统策略；显式传入字符串或空字符串时保持原文。调用方先选定正在运行的轮次及输入边界，在 `startAttempt` 之前构建上下文；同一任务的执行互斥由 Core 管理。
 
 Context 读完该任务截至目标轮次的历史，按成功请求记录的输入边界插入用户消息，再放入完整响应及其全部工具结果。失败诊断不参与回放，reasoning 正文和原始工具参数保留，转换使用 SDK 的 `toResponseInputItems`。缺失结果、标识冲突或输入边界倒退直接报错，不返回残缺上下文。
 
-当前默认保留旧轮次中取消或中断前尚未发送的输入，将其放在该轮次最后一个完整消息组之后；当前轮次只纳入指定边界以内的输入。Context 不写数据库，不发起模型请求；系统策略由调用方传入。
+当前默认保留旧轮次中取消或中断前尚未发送的输入，将其放在该轮次最后一个完整消息组之后；当前轮次只纳入指定边界以内的输入。Context 不写数据库，不发起模型请求。提示词按模块位置读取，不依赖进程工作目录；文件缺失、UTF-8 损坏或正文为空时明确报错，不回退到旧文本。
 
 项目任务每次请求前加载根目录 AGENTS.md 和 `.tilot/skills/*/SKILL.md` 的技能元数据，不搜索父目录或全局技能目录。模型需要使用技能时再通过 read 读取正文。完整发送指令、历史和工具声明，不估算或限制输入 Token，也不发送 max_output_tokens 或预留安全余量。模型服务返回超限等错误时结束本轮并展示原因，不自动摘要、裁剪历史或重试。
 
 ## 模型与工具调用循环
 
-`@tilot/agent-core` 的 `runTurn(store, client, options)` 创建轮次、保存首条输入、构建上下文并调用 Responses，最后返回已保存的轮次终态。`options` 包含 threadId、input、instructions，以及可选的 signal 和 onEvent 回调。回调支持返回 Promise，Core 等待事件处理完成后再继续读取。Server 使用已配置 baseURL 和对应的文件凭据创建 SDK 客户端；Core 不读取密钥。
+`@tilot/agent-core` 的 `runTurn(store, client, options)` 创建轮次、保存首条输入、构建上下文并调用 Responses，最后返回已保存的轮次终态。`options` 包含 threadId、input，以及可选的 instructions、signal 和 onEvent 回调。回调支持返回 Promise，Core 等待事件处理完成后再继续读取。Server 使用已配置 baseURL 和对应的文件凭据创建 SDK 客户端；Core 不读取密钥。
 
-同一任务由 Store 阻止并行轮次，目前不同任务可以并行。每轮开始冻结任务所选服务、模型、推理强度及其余普通配置；首个请求处理原始输入，后续请求采用该轮次最新已保存的输入边界。运行中的引导不会中止请求或工具；即使当前响应没有工具调用，只要仍有未处理引导，就在同一轮追加一次模型请求。系统提示词由 Server 从 Prompts 包传入，每次请求发送；Core 不内置默认提示词。
+同一任务由 Store 阻止并行轮次，目前不同任务可以并行。每轮开始冻结任务所选服务、模型、推理强度及其余普通配置；首个请求处理原始输入，后续请求采用该轮次最新已保存的输入边界。运行中的引导不会中止请求或工具；即使当前响应没有工具调用，只要仍有未处理引导，就在同一轮追加一次模型请求。Core 在每轮开始时通过 Context 读取 `system.md`，轮内固定，修改后下一轮生效且无需重启应用，也可接受调用方显式覆盖；每次模型请求仍发送完整系统策略。读取文件本身不影响缓存，修改靠前的内容可能降低后续请求的前缀缓存命中率。
 
 `turn.started` 提供轮次标识，`response.event` 携带轮次、请求尝试标识和原始 SDK 事件。完整终态先保存再交付；函数返回值是本轮本地最终状态。模型失败、截断、断流或处理事件抛错会停止请求，截断尝试保存为 incomplete，所属轮次记为 failed。取消前已中止的调用不创建轮次；流中取消会结束尝试和轮次并释放请求。终态通知或数据库写入异常直接抛给调用方，不伪装成模型失败。
 

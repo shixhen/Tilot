@@ -1,7 +1,7 @@
 import { lstat, open, readFile, readdir } from "node:fs/promises";
 import { join } from "node:path";
 import { parseDocument } from "yaml";
-import { PROJECT_INSTRUCTIONS_LABEL, SKILLS_INSTRUCTIONS } from "@tilot/prompts";
+import { readPrompt } from "./prompts.ts";
 
 /** 只提供技能索引，不自动把正文加入上下文。 */
 export interface SkillMetadata { name: string; description: string; path: string }
@@ -87,7 +87,7 @@ export async function loadProjectContext(root: string, signal?: AbortSignal): Pr
 /** 将根指令和技能索引追加到系统策略；技能正文保持按需读取。 */
 export function appendProjectInstructions(base: string, project: ProjectContext): string {
   const sections = [base];
-  if (project.instructions.trim()) sections.push(`${PROJECT_INSTRUCTIONS_LABEL}\n${project.instructions}`);
-  if (project.skills.length) sections.push(`${SKILLS_INSTRUCTIONS}\n${JSON.stringify(project.skills)}`);
+  if (project.instructions.trim()) sections.push(`${readPrompt("project-instructions")}\n${project.instructions}`);
+  if (project.skills.length) sections.push(`${readPrompt("skills")}\n${JSON.stringify(project.skills)}`);
   return sections.filter(Boolean).join("\n\n");
 }

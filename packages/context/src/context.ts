@@ -2,14 +2,15 @@ import { toResponseInputItems } from "openai/lib/responses/ResponseInputItems";
 import type { ResponseInputItem } from "openai/resources/responses/responses";
 import type { ModelAttempt, Store, Turn, TurnInput } from "@tilot/store";
 import { getResponseToolCallsFromResponse } from "@tilot/responses/output";
-import { UNKNOWN_TOOL_RESULT } from "@tilot/prompts";
+import { readPrompt } from "./prompts.ts";
 export { loadProjectContext, appendProjectInstructions, type ProjectContext, type SkillMetadata } from "./project.ts";
+export { readPrompt, type PromptName } from "./prompts.ts";
 
-/** 本次构建的边界；Core 在开始请求前选定轮次、用户输入边界和系统策略。 */
+/** 本次构建的边界；未覆盖系统策略时读取内置 Markdown 提示词。 */
 export interface ContextOptions {
   turnId: string;
   inputThroughId: number;
-  instructions: string;
+  instructions?: string | undefined;
 }
 
 /** 下一次请求的系统策略和 SDK 输入；模型、工具声明及预算由各自负责的模块补充。 */
@@ -27,6 +28,7 @@ export function buildContext(store: Store, options: ContextOptions): ModelContex
   if (!target || target.status !== "running") {
     throw new Error("构建上下文需要存在且正在运行的轮次。");
   }
+  const instructions = options.instructions ?? readPrompt("system");
   const input: ResponseInputItem[] = [];
   const itemIds = new Set<string>();
   const callIds = new Set<string>();
@@ -41,7 +43,7 @@ export function buildContext(store: Store, options: ContextOptions): ModelContex
       }
       input.push(...buildTurnInput(store, turn, inputs.filter((item) => item.id <= boundary), itemIds, callIds));
       if (turn.id === target.id) {
-        return { instructions: options.instructions, input };
+        return { instructions, input };
       }
       afterSequence = turn.sequence;
     }
@@ -125,7 +127,7 @@ function buildResponseGroup(
       throw new Error("工具调用记录与原始调用不一致。");
     }
     if (stored.result === null && interrupted) {
-      results.push({ type: "function_call_output", call_id: call.call_id, output: JSON.stringify({ status: "unknown", error: UNKNOWN_TOOL_RESULT }) });
+      results.push({ type: "function_call_output", call_id: call.call_id, output: JSON.stringify({ status: "unknown", error: readPrompt("unknown-tool-result") }) });
       continue;
     }
     if (stored.result?.type !== "function_call_output" || stored.result.call_id !== call.call_id) {

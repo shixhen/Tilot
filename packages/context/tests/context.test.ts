@@ -6,8 +6,7 @@ import { dirname, join, resolve } from "node:path";
 import { test, type TestContext } from "node:test";
 import type { Response, ResponseOutputItem } from "openai/resources/responses/responses";
 import { Store } from "@tilot/store";
-import { buildContext } from "@tilot/context";
-import { UNKNOWN_TOOL_RESULT } from "@tilot/prompts";
+import { buildContext, readPrompt } from "@tilot/context";
 
 /** 为每个测试创建独立数据库，结束时关闭连接并清理本次临时目录。 */
 function openTestStore(context: TestContext): Store {
@@ -36,6 +35,15 @@ function call(id: string): ResponseOutputItem {
   return { type: "function_call", id: `item_${id}`, call_id: id, name: "read_file", arguments: ' { "path": "a.ts" } ', status: "completed" };
 }
 
+test("默认从 Markdown 读取系统策略，显式提供策略或空字符串时保持调用方内容", (context) => {
+  const store = openTestStore(context);
+  const turn = store.startTurn(store.createThread("默认策略").id, "输入");
+  const options = { turnId: turn.id, inputThroughId: store.listTurnInputs(turn.id)[0]!.id };
+  assert.equal(buildContext(store, options).instructions, readPrompt("system"));
+  assert.equal(buildContext(store, { ...options, instructions: "自定义策略" }).instructions, "自定义策略");
+  assert.equal(buildContext(store, { ...options, instructions: "" }).instructions, "");
+});
+
 test("恢复中断历史时保留已知结果，仅在上下文中为未决调用补充未知说明", (context) => {
   const store = openTestStore(context);
   const thread = store.createThread("中断恢复");
@@ -50,7 +58,7 @@ test("恢复中断历史时保留已知结果，仅在上下文中为未决调�
   const built = buildContext(store, { turnId: current.id, inputThroughId: store.listTurnInputs(current.id)[0]!.id, instructions: "" });
   assert.deepEqual(built.input.slice(3, 5), [result, {
     type: "function_call_output", call_id: "unknown",
-    output: JSON.stringify({ status: "unknown", error: UNKNOWN_TOOL_RESULT }),
+    output: JSON.stringify({ status: "unknown", error: readPrompt("unknown-tool-result") }),
   }]);
   assert.equal(store.history.listToolCalls(attempt.id)[1]!.result, null);
   assert.equal(store.getTurn(old.id)?.status, "interrupted");

@@ -1,6 +1,6 @@
 import type OpenAI from "openai";
 import type { Response, ResponseStreamEvent } from "openai/resources/responses/responses";
-import { appendProjectInstructions, buildContext, loadProjectContext } from "@tilot/context";
+import { appendProjectInstructions, buildContext, loadProjectContext, readPrompt } from "@tilot/context";
 import { streamResponse } from "@tilot/responses";
 import { getResponseToolCallsFromResponse } from "@tilot/responses/output";
 import type { AppConfig, AttemptCompletion, Store, Turn } from "@tilot/store";
@@ -18,11 +18,12 @@ export type TurnEvent =
   | { type: "turn.started"; turn: Turn }
   | { type: "response.event"; turnId: string; attemptId: string; event: ResponseStreamEvent };
 
-/** 一轮对话的输入；项目从任务记录取得，系统策略由调用方提供，取消使用 AbortSignal。 */
+/** 一轮对话的输入；项目从任务记录取得，系统策略默认由 Context 读取，取消使用 AbortSignal。 */
 export interface RunTurnOptions {
   threadId: string;
   input: string;
-  instructions: string;
+  /** 未覆盖时每轮开始读取 system.md，轮内保持相同系统策略。 */
+  instructions?: string;
   signal?: AbortSignal;
   /** 普通事件处理失败会停止请求；终态事件在响应及对应状态落库后交付。 */
   onEvent?: (event: TurnEvent) => void | Promise<void>;
@@ -38,6 +39,8 @@ interface AttemptResult {
 /** 执行模型与工具循环；冻结配置，后续请求吸收当前轮次的引导，不自动重试。 */
 export async function runTurn(store: Store, client: OpenAI, options: RunTurnOptions): Promise<Turn> {
   options.signal?.throwIfAborted();
+  const requestOptions = { ...options };
+  requestOptions.instructions = requestOptions.instructions ?? readPrompt("system");
   const turn = store.startTurn(options.threadId, options.input);
   const input = store.listTurnInputs(turn.id, 0, 1)[0]!;
   const thread = store.getThread(options.threadId)!;
@@ -56,7 +59,7 @@ export async function runTurn(store: Store, client: OpenAI, options: RunTurnOpti
   let inputThroughId = input.id;
   // 不限制请求次数；模型完成任务或执行被取消、失败时结束。
   while (true) {
-    const { completion, attemptId, terminal } = await requestAttempt(store, client, turn, inputThroughId, config, workspace, tools, options);
+    const { completion, attemptId, terminal } = await requestAttempt(store, client, turn, inputThroughId, config, workspace, tools, requestOptions);
     let finished: Turn | undefined;
     if (completion.status !== "completed") {
       const status = completion.status === "cancelled" ? "cancelled" : "failed";

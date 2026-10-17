@@ -6,7 +6,8 @@ import { dirname, join, resolve } from "node:path";
 import { test, type TestContext } from "node:test";
 import { Store } from "@tilot/store";
 import { createResponsesClient } from "@tilot/responses";
-import { runTurn } from "@tilot/agent-core";
+import { runTurn, type TurnEvent } from "@tilot/agent-core";
+import { readPrompt } from "@tilot/context";
 import { httpFixture } from "../../tool/tests/http-fixture.ts";
 
 /** 创建独立项目目录，与测试数据库分开，并在测试后清理。 */
@@ -147,6 +148,26 @@ test("思考生成中取消也保存该段耗时，没有收到推理增量时�
   const attempt = store.history.listAttempts(turn.id)[0]!;
   assert.equal(attempt.status, "cancelled");
   assert.ok(attempt.reasoningTimings[0]!.durationMs !== null && attempt.reasoningTimings[0]!.durationMs >= 0);
+});
+
+test("默认策略从 Markdown 读取，整轮只取得一次系统策略，后续轮次重新读取", async (context) => {
+  const store = openTestStore(context);
+  const thread = store.createThread("Markdown 系统策略");
+  const { client, requests } = mockClient();
+  let reads = 0;
+  const options = {
+    threadId: thread.id, input: "任务",
+    get instructions() { return `策略版本 ${++reads}`; },
+    onEvent: (event: TurnEvent) => {
+      if (event.type === "turn.started") store.appendTurnInput(event.turn.id, "补充输入，触发后续请求");
+    },
+  };
+  await runTurn(store, client, options);
+  assert.equal(reads, 1);
+  assert.equal(requests.length, 2);
+  assert.ok(requests.every((request) => JSON.parse(String(request.body)).instructions === "策略版本 1"));
+  await runTurn(store, client, { threadId: thread.id, input: "下一轮" });
+  assert.equal(JSON.parse(String(requests.at(-1)!.body)).instructions, readPrompt("system"));
 });
 
 test("首请求保持原输入与冻结配置，补充输入在同一轮后续请求中处理并完整回放", async (context) => {

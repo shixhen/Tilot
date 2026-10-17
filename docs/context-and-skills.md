@@ -36,6 +36,7 @@ description: 检查当前项目的代码改动与潜在问题
 
 - `packages/context/src/project.ts`：根指令、技能元数据读取及指令组合。
 - `packages/context/src/context.ts`：构建完整历史并校验工具调用与结果配对。
+- `packages/context/src/prompts.ts`：读取内置 UTF-8 Markdown 提示词，正文存放在 `packages/context/prompts/`。
 - `packages/agent-core/src/run-turn.ts`：每次请求前加载指令与技能，API 错误使用既有轮次错误流程。
 
 YAML 使用 [yaml 库](https://eemeli.org/yaml/) 解析，支持带引号的字符串和多行描述，不自行实现 YAML 语法。
@@ -45,4 +46,6 @@ YAML 使用 [yaml 库](https://eemeli.org/yaml/) 解析，支持带引号的字�
 
 桌面仅在最新轮次已中断时显示“继续任务”。turn.resume 创建新的轮次，保留原记录不变，由模型先核实项目状态。不会恢复旧执行栈、自动重放旧工具调用或生成摘要。正常停止和正常关闭服务仍记为 cancelled。
 
-系统、项目和恢复提示词维护在 packages/prompts/（@tilot/prompts 包），见该目录 README.md。工具及参数的描述直接写在 packages/tool 的工具声明中。
+系统、项目和恢复提示词正文维护在 `packages/context/prompts/*.md`，不再建立独立的提示词工作区包。文件用途与修改方式见 [Context 说明](../packages/context/README.md)。工具及参数的描述直接写在 packages/tool 的工具声明中。
+
+系统提示词每轮开始读取一次，轮内固定，修改在下一轮生效，无需重启。仅重新读取相同内容不影响缓存；修改系统提示词前缀可能影响后面历史的缓存复用，下一轮也无法避免新前缀的缓存建立。项目根指令和技能索引继续按每次模型请求加载。

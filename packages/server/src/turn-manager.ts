@@ -3,7 +3,7 @@ import { createResponsesClient } from "@tilot/responses";
 import type { Store, Turn, TurnInput } from "@tilot/store";
 import type { ServerEvent, TurnNotification } from "@tilot/protocol";
 import { listAttemptViews, projectMessages } from "./history.ts";
-import { SYSTEM_PROMPT, RESUME_INPUT } from "@tilot/prompts";
+import { readPrompt } from "@tilot/context";
 
 /** 当前进程持有的执行句柄，关闭连接时取消并等待 Core 完成落库。 */
 interface ActiveTurn {
@@ -41,7 +41,7 @@ export class TurnManager {
     const execution: ActiveTurn = { controller: new AbortController(), done: Promise.resolve() };
     let current: Turn | undefined;
     execution.done = runTurn(this.store, client, {
-      threadId, input, instructions: SYSTEM_PROMPT, signal: execution.controller.signal,
+      threadId, input, signal: execution.controller.signal,
       onEvent: async (event) => {
         if (event.type === "turn.started") {
           current = event.turn;
@@ -85,7 +85,7 @@ export class TurnManager {
     const turn = this.store.getTurn(turnId);
     if (!turn || turn.status !== "interrupted") throw new Error("只能继续已中断的轮次。");
     if (this.store.listTurns(turn.threadId, turn.sequence, 1).length) throw new Error("该任务已经有后续轮次，请继续最新对话。");
-    return this.start(turn.threadId, RESUME_INPUT);
+    return this.start(turn.threadId, readPrompt("resume"));
   }
 
   /** 将引导保存到当前轮次，不取消模型或工具；已结束时返回 null，供界面保留等待消息。 */

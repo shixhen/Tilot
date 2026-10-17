@@ -10,7 +10,7 @@ import type { ResponseUsage } from "openai/resources/responses/responses";
 import type { RpcRequest, RpcResponse, ServerMessage } from "@tilot/protocol";
 import { Store } from "@tilot/store";
 import { serveStdio } from "../src/stdio.ts";
-import { SYSTEM_PROMPT, RESUME_INPUT } from "@tilot/prompts";
+import { readPrompt } from "@tilot/context";
 
 /** 启动本地模拟模型服务，先发送增量，再由测试决定何时发送终态。 */
 async function mockModel(context: TestContext) {
@@ -77,11 +77,11 @@ test("继续仅接受最新中断轮次，创建新轮次并统一使用正式�
   assert.ok(result.success && result.result && !Array.isArray(result.result) && "threadId" in result.result);
   const resumed = result.result;
   assert.notEqual(resumed.id, old.id);
-  assert.equal(session.store.listTurnInputs(resumed.id)[0]?.content, RESUME_INPUT);
+  assert.equal(session.store.listTurnInputs(resumed.id)[0]?.content, readPrompt("resume"));
   assert.equal((await session.request({ id: "duplicate", method: "turn.resume", params: { turnId: old.id } })).success, false);
   await session.waitFor((message) => "event" in message && message.event === "message.delta" && message.turnId === resumed.id);
-  assert.equal(model.requests[0]?.instructions, SYSTEM_PROMPT);
-  assert.deepEqual(model.requests[0]?.input, [{ role: "user", content: "原任务输入" }, { role: "user", content: RESUME_INPUT }]);
+  assert.equal(model.requests[0]?.instructions, readPrompt("system"));
+  assert.deepEqual(model.requests[0]?.input, [{ role: "user", content: "原任务输入" }, { role: "user", content: readPrompt("resume") }]);
   model.finish(0);
   await session.waitFor((message) => "event" in message && message.event === "turn.finished" && message.turn.id === resumed.id);
   assert.equal(session.store.getTurn(old.id)?.status, "interrupted");
