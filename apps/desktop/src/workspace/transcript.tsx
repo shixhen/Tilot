@@ -1,14 +1,14 @@
-import { useLayoutEffect, useRef, useState, type ReactNode } from "react";
+import { useId, useLayoutEffect, useRef, useState, type ReactNode } from "react";
 import { ChevronRight, CircleAlert, Square } from "lucide-react";
 import { Button } from "../components/ui/button";
-import type { MessagePart, TextTiming, ToolView, TurnInput } from "@tilot/protocol";
+import type { MessagePart, TextTiming, ToolView, Turn, TurnInput } from "@tilot/protocol";
 import type { TurnRecord } from "../conversation";
 import { getTurnMetrics, type TurnMetrics } from "../request-metrics";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "../components/ui/collapsible";
 import { MessageMarkdown } from "./markdown";
 import { ToolCall } from "./tool-call";
 import { MessageActions } from "./message-actions";
-import { ElapsedTime } from "./elapsed-time";
+import { ElapsedTime, formatDuration } from "./elapsed-time";
 import { hasSelection, useAutoDisclosure } from "../hooks/use-auto-disclosure";
 
 export { formatDuration } from "./elapsed-time";
@@ -41,7 +41,14 @@ function Reasoning({ text, live, timing }: { text: string; live: boolean; timing
   const box = useRef<HTMLDivElement>(null);
   const follow = useRef(true);
   useLayoutEffect(() => {
-    if (live && follow.current && box.current && !hasSelection(box.current)) box.current.scrollTop = box.current.scrollHeight;
+    if (!live || !open || !follow.current) return;
+    const frame = requestAnimationFrame(() => {
+      const node = box.current;
+      if (!node || !follow.current || hasSelection(node)) return;
+      const bottom = node.scrollHeight - node.clientHeight;
+      if (bottom - node.scrollTop > 1) node.scrollTop = bottom;
+    });
+    return () => cancelAnimationFrame(frame);
   }, [live, text, compact, open]);
   return <Collapsible open={open} onOpenChange={(value) => { onOpenChange(value); if (value) setCompact(false); }} className="text-sm text-muted-foreground">
     <CollapsibleTrigger className="group flex items-center gap-1 rounded-sm outline-none transition-colors hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring">
@@ -71,10 +78,10 @@ function ProcessBlock({ block, live, children }: { block: Extract<TranscriptBloc
   const thoughts = block.entries.filter((entry) => entry.kind === "reasoning").length;
   const tools = block.entries.length - thoughts;
   return <Collapsible open={open} onOpenChange={onOpenChange} className="group/process min-w-0" data-process={block.key}>
-    <CollapsibleTrigger className="flex items-center gap-1.5 rounded-sm text-sm text-muted-foreground outline-none transition-colors hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring">
+    <CollapsibleTrigger className="flex items-end gap-1.5 rounded-sm text-sm text-muted-foreground outline-none transition-colors hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring">
       <span className={live ? "shimmer-text" : undefined}>{live ? "正在思考" : tools > 0 ? "已运行命令" : "已完成思考"}</span>
-      {(thoughts > 0 || tools > 0) && <span className="text-xs">{[thoughts > 0 ? `${thoughts} 次思考` : "", tools > 0 ? `${tools} 次工具调用` : ""].filter(Boolean).join(" · ")}</span>}
-      <ChevronRight className="disclosure-icon size-3.5 transition-transform group-data-[state=open]/process:rotate-90" />
+      {tools > 0 && <span className="text-xs">{thoughts > 0 && `${thoughts} 次思考 · `}{tools} 次工具调用</span>}
+      <ChevronRight className="disclosure-icon size-3.5 self-center transition-transform group-data-[state=open]/process:rotate-90" />
     </CollapsibleTrigger>
     <CollapsibleContent ref={content} className="grid min-w-0 grid-cols-1 gap-2 border-l pl-3 pt-2">{children}</CollapsibleContent>
   </Collapsible>;
@@ -89,13 +96,13 @@ function UserMessage({ input, onEdit, disabled }: { input: TurnInput; onEdit?: (
 }
 
 /** 渲染单个条目；live 表示它是运行中轮次的最新条目。 */
-function EntryView({ entry, active, live, metrics, onEdit, editDisabled }: { entry: Entry; active: boolean; live: boolean; metrics: TurnMetrics; onEdit?: ((text: string) => void) | undefined; editDisabled: boolean }) {
+function EntryView({ entry, active, live, showActions, metrics, onEdit, editDisabled }: { entry: Entry; active: boolean; live: boolean; showActions: boolean; metrics: TurnMetrics; onEdit?: ((text: string) => void) | undefined; editDisabled: boolean }) {
   if (entry.kind === "input") return <UserMessage input={entry.input} onEdit={onEdit} disabled={editDisabled} />;
   if (entry.kind === "tool") return <ToolCall tool={entry.tool} active={active} />;
   if (entry.kind === "reasoning") return <Reasoning text={entry.part.text} timing={entry.part.timing} live={live && entry.part.timing?.durationMs == null} />;
   const text = entry.parts.map((part) => part.text).join("\n\n");
   return <article className="group/message min-w-0 max-w-full"><MessageParts parts={entry.parts} live={live} />
-    {text && <MessageActions text={text} time={entry.time} metrics={metrics} running={active} />}
+    {text && showActions && <MessageActions text={text} time={entry.time} metrics={metrics} running={active} />}
   </article>;
 }
 
@@ -162,7 +169,39 @@ export function listTranscriptBlocks(record: TurnRecord): TranscriptBlock[] {
   return blocks;
 }
 
-/** 一轮对话；正文保持独立，连续的思考和工具调用分块展开及收起。 */
+/** 整轮总开关：保留用户输入及最终正文，其余过程一起折叠，内部仍可独立开关。 */
+function TurnProcess({ turn, blocks, answer, renderBlock }: {
+  turn: Turn; blocks: TranscriptBlock[]; answer: TranscriptBlock | undefined; renderBlock: (block: TranscriptBlock) => ReactNode;
+}) {
+  const contentId = useId();
+  const sections: { key: string; visible: boolean; blocks: TranscriptBlock[] }[] = [];
+  for (const block of blocks) {
+    const visible = block.kind === "input" || block === answer;
+    const previous = sections.at(-1);
+    if (!visible && previous && !previous.visible) previous.blocks.push(block);
+    else sections.push({ key: block.kind === "process" ? block.key : entryKey(block), visible, blocks: [block] });
+  }
+  const foldable = !!answer && sections.some((section) => !section.visible);
+  // 以可见消息为界，每段连续过程共用一个动画容器。
+  const controls = sections.flatMap((section, index) => section.visible ? [] : [`${contentId}-${index}`]).join(" ");
+  // 成功后恢复原有的默认收起；未完成或异常结束时保留过程供用户查看。
+  const { open, onOpenChange, content } = useAutoDisclosure(turn.status !== "completed" || !foldable);
+  return <Collapsible ref={content} open={open} onOpenChange={onOpenChange} className="group/work min-w-0" data-turn-process={turn.id}>
+    {foldable && <CollapsibleTrigger aria-controls={controls} className="flex items-center gap-1 rounded-sm text-sm text-muted-foreground outline-none transition-colors hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring">
+      <span>{turn.status === "running" ? "执行过程" : `用时 ${formatDuration((turn.finishedAt ?? turn.createdAt) - turn.createdAt)}`}</span>
+      <ChevronRight className="disclosure-icon size-3.5 transition-transform group-data-[state=open]/work:rotate-90" />
+    </CollapsibleTrigger>}
+    {sections.map((section, index) => {
+      const spacing = foldable || index > 0 ? "pt-6" : undefined;
+      const children = <div className="grid min-w-0 grid-cols-1 gap-6">{section.blocks.map(renderBlock)}</div>;
+      return section.visible
+        ? <div key={section.key} className={spacing}>{children}</div>
+        : <CollapsibleContent key={section.key} id={`${contentId}-${index}`} className={spacing}>{children}</CollapsibleContent>;
+    })}
+  </Collapsible>;
+}
+
+/** 一轮对话：整轮总开关包住中间正文及过程块，最终正文始终独立显示。 */
 export function TurnMessages({ record, time, onResume, resumeDisabled, onEdit, editDisabled = false }: { record: TurnRecord; time?: number | undefined; onResume?: (() => void) | undefined; resumeDisabled?: boolean; onEdit?: ((text: string) => void) | undefined; editDisabled?: boolean }) {
   const { turn } = record;
   const active = turn.status === "running";
@@ -170,15 +209,21 @@ export function TurnMessages({ record, time, onResume, resumeDisabled, onEdit, e
   const metrics = getTurnMetrics(record);
   const lastBlock = blocks.at(-1);
   const last = lastBlock?.kind === "process" ? lastBlock.entries.at(-1) : lastBlock;
-  const render = (entry: Entry) => <EntryView key={entryKey(entry)} entry={entry} active={active} live={active && entry === last} metrics={metrics} onEdit={onEdit} editDisabled={editDisabled} />;
+  const answer = blocks.findLast((block) => block.kind === "message");
+  const render = (entry: Entry) => <EntryView key={entryKey(entry)} entry={entry} active={active} live={active && entry === last} showActions={entry === answer} metrics={metrics} onEdit={onEdit} editDisabled={editDisabled} />;
+  const renderBlock = (block: TranscriptBlock) => block.kind === "process"
+    ? <ProcessBlock key={block.key} block={block} live={active && block === lastBlock}>{block.entries.map(render)}</ProcessBlock>
+    : render(block);
+  const firstProcess = blocks.findIndex((block) => block.kind !== "input");
+  const inputs = firstProcess < 0 ? blocks : blocks.slice(0, firstProcess);
+  const process = firstProcess < 0 ? [] : blocks.slice(firstProcess);
   const labels = { cancelled: "已停止", interrupted: "运行已中断", failed: "生成失败" };
 
   // 单列使用可缩小到 0 的网格轨道，避免长代码的固有宽度撑开消息列。
   return <section aria-label="对话轮次" data-turn={turn.id} className="grid min-w-0 grid-cols-1 scroll-mt-6 gap-6">
     {time !== undefined && <p className="pt-2 text-center text-[13px] text-muted-foreground">{formatTime(time)}</p>}
-    {blocks.map((block) => block.kind === "process"
-      ? <ProcessBlock key={block.key} block={block} live={active && block === lastBlock}>{block.entries.map(render)}</ProcessBlock>
-      : render(block))}
+    {inputs.map(renderBlock)}
+    {process.length > 0 && <TurnProcess turn={turn} blocks={process} answer={answer} renderBlock={renderBlock} />}
     {!active && record.previews.some((preview) => !preview.complete) && <p className="text-xs text-muted-foreground">未保存的生成片段仅作临时预览。</p>}
     {turn.status !== "running" && turn.status !== "completed" && <p role="status" className={`flex items-center gap-2 text-sm ${turn.status === "failed" ? "text-destructive" : "text-muted-foreground"}`}>
       {turn.status === "cancelled" ? <Square className="size-3" /> : <CircleAlert className="size-3.5" />}

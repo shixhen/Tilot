@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { memo, useState } from "react";
 import { Check, ChevronRight, CircleAlert, FileText, Folder, Globe, LoaderCircle, Search, Terminal } from "lucide-react";
 import type { ToolView } from "@tilot/protocol";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "../components/ui/collapsible";
@@ -16,7 +16,7 @@ function readObject(text: string | null): Record<string, unknown> {
 }
 
 /** 显示工具状态、参数及结果；执行中自动展开，执行结束自动收起。 */
-export function ToolCall({ tool, active }: { tool: ToolView; active: boolean }) {
+export const ToolCall = memo(function ToolCall({ tool, active }: { tool: ToolView; active: boolean }) {
   const args = readObject(tool.arguments);
   const result = readObject(tool.output);
   const data = result.data && typeof result.data === "object" ? result.data as Record<string, unknown> : {};
@@ -61,4 +61,4 @@ export function ToolCall({ tool, active }: { tool: ToolView; active: boolean }) 
       </>}
     </CollapsibleContent>
   </Collapsible>;
-}
+});

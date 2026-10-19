@@ -1,5 +1,5 @@
-import { useEffect, useMemo, useRef, useState, type ComponentProps } from "react";
-import Markdown from "react-markdown";
+import { memo, useEffect, useMemo, useRef, useState, type ComponentProps } from "react";
+import Markdown, { type Components } from "react-markdown";
 import remarkGfm from "remark-gfm";
 import remarkMath from "remark-math";
 import rehypeKatex from "rehype-katex";
@@ -42,6 +42,14 @@ export function WebLink({ href, children, title, className }: ComponentProps<"a"
   return <><a href={href} title={title ?? href} className={className} onClick={(event) => { event.preventDefault(); void open(); }}>{children}</a>{failed && <span role="status" className="text-destructive">（无法打开链接）</span>}</>;
 }
 
+/** 组件类型保持稳定，流式更新时不重新挂载表格等已有内容。 */
+const components: Components = {
+  pre: CodeBlock,
+  a: WebLink,
+  img: ({ alt }) => <span className="text-muted-foreground">[图片：{alt || "未提供说明"}]</span>,
+  table: ({ children }) => <div className="my-4 overflow-x-auto rounded-lg border"><table>{children}</table></div>,
+};
+
 /** 按可见字符切分，不拆开组合字符或 emoji。 */
 const segmenter = new Intl.Segmenter("zh", { granularity: "grapheme" });
 
@@ -68,11 +76,12 @@ function rehypeStreamTail() {
           split(child);
         }
         if (child.type !== "text" || !child.value.trim()) continue;
-        const characters = Array.from(segmenter.segment(child.value));
+        const characters = segmenter.segment(child.value);
         const tail: Element["children"] = [];
         let start = child.value.length;
-        for (let position = characters.length - 1; position >= 0 && remaining > 0; position--) {
-          const { segment, index: offset } = characters[position]!;
+        // 从末尾按字符边界回退，只处理渐变窗口，不枚举整段文字。
+        while (start > 0 && remaining > 0) {
+          const { segment, index: offset } = characters.containing(start - 1)!;
           start = offset;
           if (!segment.trim()) {
             tail.unshift({ type: "text", value: segment });
@@ -92,7 +101,7 @@ function rehypeStreamTail() {
 }
 
 /** 渲染 GFM 与数学公式，禁用 HTML 和自动图片请求；streaming 时普通新文字淡入。 */
-export function MessageMarkdown({ text, streaming = false }: { text: string; streaming?: boolean }) {
+export const MessageMarkdown = memo(function MessageMarkdown({ text, streaming = false }: { text: string; streaming?: boolean }) {
   const [settledText, setSettledText] = useState<string | null>(null);
   const markdown = useMemo(() => normalizeMathDelimiters(text), [text]);
   // 输出暂停时显示完整末尾，避免等待网络或工具期间最后几个字一直透明。
@@ -102,10 +111,5 @@ export function MessageMarkdown({ text, streaming = false }: { text: string; str
     return () => clearTimeout(timer);
   }, [text, streaming]);
   return <div className="message-prose"><Markdown skipHtml remarkPlugins={[remarkGfm, remarkMath]}
-    rehypePlugins={[[rehypeKatex, { trust: false, strict: false }], ...(streaming && settledText !== text ? [rehypeStreamTail] : [])]} urlTransform={webURL} components={{
-    pre: CodeBlock,
-    a: WebLink,
-    img: ({ alt }) => <span className="text-muted-foreground">[图片：{alt || "未提供说明"}]</span>,
-    table: ({ children }) => <div className="my-4 overflow-x-auto rounded-lg border"><table>{children}</table></div>,
-  }}>{markdown}</Markdown></div>;
-}
+    rehypePlugins={[[rehypeKatex, { trust: false, strict: false }], ...(streaming && settledText !== text ? [rehypeStreamTail] : [])]} urlTransform={webURL} components={components}>{markdown}</Markdown></div>;
+});

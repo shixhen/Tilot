@@ -10,6 +10,7 @@ import { SettingsDialog } from "./settings-dialog";
 import { TurnMessages } from "./transcript";
 import { Timeline } from "./timeline";
 import { WorkspaceTitlebar } from "./titlebar";
+import { hasSelection } from "../hooks/use-auto-disclosure";
 
 /** 正文与输入框共用此宽度并同步伸缩：最大 720px，两侧各留 16px。 */
 const column = "mx-auto w-full min-w-0 max-w-[752px] px-4";
@@ -22,18 +23,30 @@ export function WorkspacePage() {
   const state = useWorkspace();
   const scroll = useRef<HTMLDivElement>(null);
   const follow = useRef(true);
+  const scrollFrame = useRef<number | null>(null);
   const dock = useRef<HTMLDivElement>(null);
   const [atBottom, setAtBottom] = useState(true);
   const records = state.chat.records;
-  /** 正在跟随最新内容时滚到底部。 */
+  /** 同一帧的增量及尺寸变化只滚动一次，上翻或选中文字后不抢位置。 */
   function followBottom(): void {
-    if (follow.current && scroll.current) scroll.current.scrollTop = scroll.current.scrollHeight;
+    if (!follow.current || scrollFrame.current !== null) return;
+    scrollFrame.current = requestAnimationFrame(() => {
+      scrollFrame.current = null;
+      const node = scroll.current;
+      if (!node || !follow.current || hasSelection(node)) return;
+      const bottom = node.scrollHeight - node.clientHeight;
+      if (bottom - node.scrollTop > 1) node.scrollTop = bottom;
+    });
   }
   // 输入框变高（多行输入、出现提示）时，同样保持最新内容在输入框上方可见。
   useLayoutEffect(() => {
     const observer = new ResizeObserver(followBottom);
     observer.observe(dock.current!);
-    return () => observer.disconnect();
+    return () => {
+      observer.disconnect();
+      if (scrollFrame.current !== null) cancelAnimationFrame(scrollFrame.current);
+      scrollFrame.current = null;
+    };
   }, []);
   useEffect(() => { follow.current = true; }, [state.chat.selected]);
   useEffect(followBottom, [records, state.chat.selected]);

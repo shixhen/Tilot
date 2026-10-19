@@ -139,7 +139,7 @@ test("重新读取跨页历史后汇总所有请求，不遗漏第 100 次之后
   assert.equal(getTurnMetrics(loaded[0]!).outputTokens, 2400);
 });
 
-test("运行轮次仅显示用户消息操作和时间，AI 正文和用量等整轮结束才显示", () => {
+test("中间正文没有操作栏，整轮结束后仅最后一条正文显示复制、时间和用量", () => {
   const first = attempt(1);
   first.messages = [{ itemId: "intermediate", outputIndex: 0, parts: [{ kind: "text", text: "先检查文件" }] }];
   first.tools = [{ id: "tool", outputIndex: 1, name: "read", arguments: '{}', output: null, running: true }];
@@ -166,7 +166,19 @@ test("运行轮次仅显示用户消息操作和时间，AI 正文和用量等�
     assert.match(html, /aria-label="本轮模型请求统计"/);
     assert.match(html, /aria-label="复制消息"/);
     assert.match(html, /aria-label="编辑消息"/);
-    assert.ok((html.match(/aria-label="复制消息"/g) ?? []).length > 1);
+    assert.equal((html.match(/aria-label="复制消息"/g) ?? []).length, 2);
+    assert.equal((html.match(/aria-label="本轮模型请求统计"/g) ?? []).length, 1);
+    const replies = [...html.matchAll(/<article\b[^>]*>[\s\S]*?<\/article>/g)].map(([article]) => article);
+    if (status === "completed") {
+      assert.equal(replies.length, 1);
+      assert.doesNotMatch(html, /先检查文件/);
+    } else {
+      assert.equal(replies.length, 2);
+      assert.match(replies[0]!, /先检查文件/);
+      assert.doesNotMatch(replies[0]!, /aria-label="复制消息"|aria-label="本轮模型请求统计"|<time\b/);
+    }
+    assert.match(replies.at(-1)!, /aria-label="复制消息"/);
+    assert.match(replies.at(-1)!, /aria-label="本轮模型请求统计"/);
   }
   const previous = record([first]);
   assert.match(render(previous), /aria-label="本轮模型请求统计"/);

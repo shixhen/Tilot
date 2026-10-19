@@ -1,7 +1,6 @@
 import { useLayoutEffect, useRef } from "react";
-import { ArrowUp, Folder, LoaderCircle, Plus, Square, X } from "lucide-react";
+import { ArrowUp, LoaderCircle, Plus, Square } from "lucide-react";
 import type { WorkspaceState } from "../hooks/use-workspace";
-import { projectName } from "../projects";
 import { Button } from "../components/ui/button";
 import { Card, CardContent, CardFooter } from "../components/ui/card";
 import { Textarea } from "../components/ui/textarea";
@@ -58,12 +57,8 @@ export function Composer({ state }: { state: WorkspaceState }) {
           <Button type="button" variant="ghost" size="icon-sm" className="rounded-full hover:bg-white/10!" aria-label={state.chat.selected ? "新建对话" : "选择项目"} title={state.chat.selected ? "新建对话" : "选择项目"}
             disabled={state.busy || !state.chat.connected} onClick={() => state.chat.selected ? state.select(null, state.projectPath) : void state.chooseProject()}><Plus className="size-5" /></Button>
           <PermissionPicker mode={state.permissionMode} project={state.projectPath !== null}
-            locked={state.thread?.permissionLockedAt != null} disabled={state.busy || !state.chat.connected} running={!!state.running}
+            locked={state.thread?.permissionLockedAt != null} disabled={state.busy || !state.chat.connected}
             onChange={(mode) => void state.chat.choosePermission(mode)} />
-          {state.projectPath && <span className="flex h-7 min-w-0 items-center gap-1.5 rounded-full px-2 text-sm text-muted-foreground" title={state.projectPath}>
-            <Folder className="size-4 shrink-0" /><span className="max-w-40 truncate">{projectName(state.projectPath)}</span>
-            {!state.chat.selected && <Button type="button" variant="ghost" size="icon-xs" className="size-5 rounded-full" aria-label="取消选择项目" disabled={state.busy} onClick={() => state.select(null)}><X /></Button>}
-          </span>}
         </div>
         <div className="ml-auto flex shrink-0 items-center gap-1.5">
           {/* 已有任务显示它自己的模型，新对话显示默认值。 */}

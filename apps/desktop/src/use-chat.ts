@@ -4,6 +4,7 @@ import { BackendConnection } from "./backend";
 import { createClient, type Request } from "./client";
 import { applyEvent, loadConversation, mergeHistory, type TurnRecord } from "./conversation";
 import { InputQueue, type QueueView } from "./input-queue";
+import { StreamEvents } from "./stream-events";
 
 /** 管理连接、任务历史和实时事件；每个任务单独保存界面数据，切换不会串流。 */
 export function useChat() {
@@ -92,32 +93,44 @@ export function useChat() {
     }
   }
 
-  /** 更新指定任务；轮次结束后从数据库重新取得正式消息。 */
-  function receive(event: ServerEvent): void {
-    if (event.event === "approval.requested") {
-      const threadId = event.approval.threadId;
-      approvalRevisions.current.set(threadId, (approvalRevisions.current.get(threadId) ?? 0) + 1);
-      setApprovals((current) => [...current.filter((item) => item.id !== event.approval.id), event.approval]);
-      return;
-    }
-    if (event.event === "approval.resolved") {
-      approvalRevisions.current.set(event.threadId, (approvalRevisions.current.get(event.threadId) ?? 0) + 1);
-      setApprovals((current) => current.filter((item) => item.id !== event.approvalId));
-      return;
-    }
-    const threadId = "turn" in event ? event.turn.threadId : event.threadId;
-    setConversations((state) => ({ ...state, [threadId]: applyEvent(state[threadId] ?? [], event) }));
-    if ("turn" in event) queue.current!.observe(event.turn);
-    if (event.event === "turn.started") void refreshThreads().catch(report);
-    if (event.event === "turn.finished") {
-      void Promise.all([refreshHistory(threadId), refreshThreads()]).catch(report);
+  /** 一批增量只更新一次会话状态，审批及轮次事件仍立即处理。 */
+  function receive(events: ServerEvent[]): void {
+    if (!mounted.current) return;
+    const updates = events.filter((event) => event.event !== "approval.requested" && event.event !== "approval.resolved");
+    if (updates.length) setConversations((state) => {
+      const next = { ...state };
+      for (const event of updates) {
+        const threadId = "turn" in event ? event.turn.threadId : event.threadId;
+        next[threadId] = applyEvent(next[threadId] ?? [], event);
+      }
+      return next;
+    });
+    for (const event of events) {
+      if (event.event === "approval.requested") {
+        const threadId = event.approval.threadId;
+        approvalRevisions.current.set(threadId, (approvalRevisions.current.get(threadId) ?? 0) + 1);
+        setApprovals((current) => [...current.filter((item) => item.id !== event.approval.id), event.approval]);
+        continue;
+      }
+      if (event.event === "approval.resolved") {
+        approvalRevisions.current.set(event.threadId, (approvalRevisions.current.get(event.threadId) ?? 0) + 1);
+        setApprovals((current) => current.filter((item) => item.id !== event.approvalId));
+        continue;
+      }
+      if ("turn" in event) queue.current!.observe(event.turn);
+      if (event.event === "turn.started") void refreshThreads().catch(report);
+      if (event.event === "turn.finished") {
+        void Promise.all([refreshHistory(event.turn.threadId), refreshThreads()]).catch(report);
+      }
     }
   }
 
   useEffect(() => {
     mounted.current = true;
     let connection: BackendConnection | undefined;
-    void BackendConnection.connect(receive, (error) => {
+    const stream = new StreamEvents(receive);
+    void BackendConnection.connect((event) => stream.push(event), (error) => {
+      stream.flush();
       client.current = null;
       queue.current!.setConnected(false);
       setConnected(false);
@@ -132,7 +145,7 @@ export function useChat() {
       const [config, status] = await Promise.all([request("config.get", {}), request("credentials.status", {}), refreshThreads()]);
       if (mounted.current) { setConfig(config); setConfigured(status.configured); }
     }).catch(report);
-    return () => { mounted.current = false; queue.current!.setConnected(false); client.current = null; connection?.dispose(); };
+    return () => { mounted.current = false; stream.dispose(); queue.current!.setConnected(false); client.current = null; connection?.dispose(); };
   }, []);
 
   /** 切换或新建空白会话；已存在任务按需读取最新历史。 */

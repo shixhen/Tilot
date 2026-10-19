@@ -31,7 +31,8 @@ test("思考计时不被后续增量抹掉，取消历史可补齐终止耗时�
   assert.deepEqual(records[0]!.previews[0]!.parts[0]!.timing, { startedAt: 1000, durationMs: 1250 });
   assert.equal(records[0]!.previews[0]!.parts[0]!.text, "思考思考");
   const html = renderToStaticMarkup(createElement(TooltipProvider, null, createElement(TurnMessages, { record: records[0]! })));
-  assert.match(html, /1 次思考/);
+  assert.match(html, /已完成思考/);
+  assert.doesNotMatch(html, /次思考/);
   assert.doesNotMatch(html, /正在思考/);
   // 历史过程默认收起；展开的当前块仍显示已保存的终止耗时。
   const resumed = { ...records[0]!, turn: running };

@@ -41,6 +41,15 @@ test("流式 Markdown 仅末尾八个字符渐变，推进后旧字恢复不透�
   assert.equal((emoji.match(/class="stream-tail"/g) ?? []).length, 1);
 });
 
+test("长段落只为末尾八个完整字符生成渐变，组合音标和 emoji 不拆开", () => {
+  const tail = ["e\u0301", "👩‍💻", "🇨🇳", "👍🏽", "👨‍👩‍👧‍👦", "甲", "乙", "丙"];
+  const prefix = "较长的推理内容".repeat(3000);
+  const html = renderToStaticMarkup(createElement(MessageMarkdown, { text: prefix + tail.join(""), streaming: true }));
+  assert.equal((html.match(/class="stream-tail"/g) ?? []).length, 8);
+  assert.ok(html.includes(prefix));
+  for (const character of tail) assert.ok(html.includes(`>${character}</span>`));
+});
+
 // 截图中的反斜杠分隔符必须在 Markdown 吞掉转义前识别，求和上下标交给 KaTeX。
 test("截图中的行内及独立求和公式渲染为数学内容，兼容美元分隔符", () => {
   const text = "先看 \\(\\sum d\\)。\n\n对于原串 \\(s\\)，如果 \\(s_i\\ne s_{i+1}\\)，变化被包含在 \\(i(n-i)\\) 个子串中。\n\n所以：\n\n\\[\n\\sum d=\\sum_{i=1}^{n-1}[s_i\\ne s_{i+1}]\\cdot i(n-i)\n\\]\n\n再看 \\(\\sum(d\\bmod 2)\\)。";
