@@ -13,6 +13,41 @@ function turn(id = "turn"): Turn {
   return { id, threadId: "thread", sequence: 1, permissionMode: "read-only", status: "running", createdAt: 1, finishedAt: null, error: null };
 }
 
+test("取消历史保留完整 A/B 正文，完成快照替换预览，未完成片段仅作临时展示", () => {
+  const running = turn();
+  let records = applyEvent([], { event: "turn.started", turn: running, seq: 1 });
+  const delta = { event: "message.delta" as const, threadId: running.threadId, turnId: running.id, itemId: "options", contentIndex: 0, kind: "text" as const, delta: "A/B", seq: 2 };
+  records = applyEvent(records, delta);
+  records = applyEvent(records, { ...delta, itemId: "partial", delta: "未写完", seq: 3 });
+  const attempt: AttemptView = { id: "attempt", turnId: running.id, sequence: 1, inputThroughId: 1, status: "cancelled", error: "已取消",
+    createdAt: 1, finishedAt: 2, messages: [{ itemId: "options", outputIndex: 0, parts: [{ kind: "text", text: "A：第一项；B：第二项" }] }], tools: [] };
+  records = applyEvent(records, { event: "attempt.updated", threadId: running.threadId, turnId: running.id, attempt, seq: 4 });
+  records = applyEvent(records, { event: "turn.finished", turn: { ...running, status: "cancelled", finishedAt: 2 }, seq: 5 });
+  assert.deepEqual(records[0]!.previews.map((preview) => preview.itemId), ["partial"]);
+  records = mergeHistory(records, [{ turn: { ...running, status: "cancelled", finishedAt: 2 }, inputs: [], attempts: [attempt], previews: [] }]);
+  assert.equal(records[0]!.attempts[0]!.messages.length, 1);
+  const html = renderToStaticMarkup(createElement(TooltipProvider, null, createElement(TurnMessages, { record: records[0]! })));
+  assert.match(html, /A：第一项；B：第二项/);
+  assert.match(html, /未写完/);
+  assert.match(html, /临时预览/);
+  const loaded: TurnRecord = { ...records[0]!, previews: [] };
+  const afterRestart = renderToStaticMarkup(createElement(TooltipProvider, null, createElement(TurnMessages, { record: loaded })));
+  assert.match(afterRestart, /A：第一项；B：第二项/);
+  assert.doesNotMatch(afterRestart, /未写完/);
+});
+
+test("MCP 连接提示独立显示，不被历史查询覆盖，也不影响正常完成", () => {
+  const running = turn();
+  let records = applyEvent([], { event: "turn.started", turn: running, seq: 1 });
+  records = applyEvent(records, { event: "turn.notice", turnId: running.id, threadId: running.threadId, message: "MCP demo：连接失败", seq: 2 });
+  records = mergeHistory(records, [{ turn: running, inputs: [], attempts: [], previews: [] }]);
+  records = applyEvent(records, { event: "turn.finished", turn: { ...running, status: "completed" }, seq: 3 });
+  assert.deepEqual(records[0]!.notices, ["MCP demo：连接失败"]);
+  const html = renderToStaticMarkup(createElement(TooltipProvider, null, createElement(TurnMessages, { record: records[0]! })));
+  assert.match(html, /MCP demo：连接失败/);
+  assert.doesNotMatch(html, /生成失败/);
+});
+
 test("思考计时不被后续增量抹掉，取消历史可补齐终止耗时，迟到起点不恢复计时", () => {
   const running = turn();
   let records = applyEvent([], { event: "turn.started", turn: running, seq: 1 });

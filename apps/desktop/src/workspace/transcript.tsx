@@ -10,6 +10,7 @@ import { ToolCall } from "./tool-call";
 import { MessageActions } from "./message-actions";
 import { ElapsedTime, formatDuration } from "./elapsed-time";
 import { hasSelection, useAutoDisclosure } from "../hooks/use-auto-disclosure";
+import { ImageGallery } from "./images";
 
 export { formatDuration } from "./elapsed-time";
 
@@ -87,11 +88,13 @@ function ProcessBlock({ block, live, children }: { block: Extract<TranscriptBloc
   </Collapsible>;
 }
 
-/** 用户消息使用深蓝色气泡，靠右显示。 */
+/** 图片和文字按同一条用户消息展示，纯图片不额外补正文。 */
 function UserMessage({ input, onEdit, disabled }: { input: TurnInput; onEdit?: ((text: string) => void) | undefined; disabled: boolean }) {
+  const text = input.questionId ? input.content.slice(input.content.indexOf("\n\n") + 2) : input.content;
   return <div className="group/message ml-auto min-w-0 max-w-[75%]">
-    <div className="ml-auto w-fit max-w-full rounded-[18px] bg-bubble px-4 py-2.5 text-[15px] leading-[1.6] whitespace-pre-wrap wrap-anywhere text-white/95">{input.content}</div>
-    <MessageActions user text={input.content} time={input.createdAt} onEdit={onEdit} disabled={disabled} />
+    {input.images?.length ? <div className="mb-2"><ImageGallery images={input.images} /></div> : null}
+    {text && <div className="ml-auto w-fit max-w-full rounded-[18px] bg-bubble px-4 py-2.5 text-[15px] leading-[1.6] whitespace-pre-wrap wrap-anywhere text-white/95">{text}</div>}
+    <MessageActions user text={text} time={input.createdAt} onEdit={onEdit} disabled={disabled} />
   </div>;
 }
 
@@ -223,6 +226,7 @@ export function TurnMessages({ record, time, onResume, resumeDisabled, onEdit, e
   return <section aria-label="对话轮次" data-turn={turn.id} className="grid min-w-0 grid-cols-1 scroll-mt-6 gap-6">
     {time !== undefined && <p className="pt-2 text-center text-[13px] text-muted-foreground">{formatTime(time)}</p>}
     {inputs.map(renderBlock)}
+    {record.notices?.map((notice, index) => <p key={index} role="status" className="break-all text-xs text-muted-foreground">{notice}</p>)}
     {process.length > 0 && <TurnProcess turn={turn} blocks={process} answer={answer} renderBlock={renderBlock} />}
     {!active && record.previews.some((preview) => !preview.complete) && <p className="text-xs text-muted-foreground">未保存的生成片段仅作临时预览。</p>}
     {turn.status !== "running" && turn.status !== "completed" && <p role="status" className={`flex items-center gap-2 text-sm ${turn.status === "failed" ? "text-destructive" : "text-muted-foreground"}`}>

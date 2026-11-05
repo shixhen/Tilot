@@ -42,9 +42,9 @@ Codex 按模型、配置、运行环境和功能开关组装工具；不存在�
 | exec_command、write_stdin | 启动命令，返回会话 id，随后读取输出或写入输入 | shell 每次启动独立 PowerShell，不提供持续会话 |
 | apply_patch | 用补丁创建、修改或删除文件 | write 完整写入，edit 精确替换；删除交给 shell |
 | view_image | 查看图片 | 尚无图片工具 |
-| update_plan、request_user_input 及异步询问 | 更新工作计划、请求用户补充信息 | 目前通过对话文本沟通 |
+| update_plan、request_user_input 及异步询问 | 更新工作计划、请求用户补充信息 | 已接入 request_user_input_async 与逐题答题卡片，见 [异步提问](async-questions.md)；计划工具尚未实现 |
 | web_search | 托管网络搜索 | 尚无专用网络工具 |
-| MCP 工具及资源列表、模板列表、资源读取 | 接入外部工具和资源 | 尚无 MCP 接入 |
+| MCP 工具及资源列表、模板列表、资源读取 | 接入外部工具和资源 | 已接入 MCP 工具；资源和提示词模板尚未实现，见 [MCP 接入](mcp.md) |
 | tool_search、代码模式执行与等待 | 动态发现工具、用代码组织调用 | 固定声明四个函数工具，逐个执行 |
 | spawn_agent、send_message、followup_task、wait_agent 等 | 可选的多代理协作；另保留旧版接口 | 尚无子代理调度 |
 | 权限、上下文余量、时钟、等待、插件安装等辅助工具 | 按配置补充运行控制能力 | 预算由本地请求前检查，尚无对应模型工具 |

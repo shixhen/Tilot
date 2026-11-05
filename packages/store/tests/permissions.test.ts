@@ -52,7 +52,8 @@ test("版本 10 升级保留历史并锁定已有对话，未发送的对话仍�
   const turns = [store.startTurn(project.id, "项目输入"), store.startTurn(chat.id, "普通输入")];
   store.close();
   const legacy = new Database(join(directory, "tilot.sqlite"));
-  legacy.exec(`ALTER TABLE app_config DROP COLUMN defaultPermissionMode;
+  legacy.exec(`DROP TABLE user_questions; ALTER TABLE turn_inputs DROP COLUMN imagesJson; DROP INDEX inputs_delivery; ALTER TABLE turn_inputs DROP COLUMN deliveryId; ALTER TABLE model_attempts DROP COLUMN completedOutputsJson;
+    ALTER TABLE app_config DROP COLUMN defaultPermissionMode;
     ALTER TABLE threads DROP COLUMN permissionMode; ALTER TABLE threads DROP COLUMN permissionLockedAt;
     ALTER TABLE turns DROP COLUMN permissionMode; PRAGMA user_version = 10;`);
   legacy.close();

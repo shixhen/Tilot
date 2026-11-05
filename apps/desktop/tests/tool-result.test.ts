@@ -5,6 +5,21 @@ import { renderToStaticMarkup } from "react-dom/server";
 import { ToolCall } from "../src/workspace/tool-call.tsx";
 import { ToolResult } from "../src/workspace/tool-result.tsx";
 import { ElapsedTime, formatDuration } from "../src/workspace/elapsed-time.tsx";
+import { ApprovalPanel } from "../src/workspace/approval-panel.tsx";
+
+test("MCP 审批显示具体工具及输入，结果只显示正文，业务失败显示失败状态", () => {
+  const approval = { id: "approval", threadId: "thread", turnId: "turn", toolId: "tool", name: "mcp__demo__inspect", arguments: '{"value":"中文"}', createdAt: 1 };
+  const html = renderToStaticMarkup(createElement(ApprovalPanel, { approval, disabled: false, onRespond: () => {} }));
+  assert.match(html, /允许调用 mcp__demo__inspect/);
+  assert.match(html, /中文/);
+  assert.doesNotMatch(html, /修改项目外/);
+  assert.match(render(approval.name, { status: "ok", data: { output: "MCP 正文", outputId: "hidden-cache", nextByteOffset: 3 } }), /MCP 正文/);
+  assert.doesNotMatch(render(approval.name, { status: "ok", data: { output: "MCP 正文", outputId: "hidden-cache" } }), /hidden-cache/);
+  const failed = renderToStaticMarkup(createElement(ToolCall, { active: false, tool: { id: "tool", outputIndex: 0, name: approval.name, arguments: "{}",
+    output: '{"status":"error","error":"远端失败","data":{"output":"远端失败"}}', startedAt: 1, durationMs: 10, running: false } }));
+  assert.match(failed, /执行失败/);
+  assert.match(failed, /耗时/);
+});
 
 /** 直接渲染工具结果，与工具卡片展开后使用同一组件。 */
 function render(name: string, result: Record<string, unknown>): string {

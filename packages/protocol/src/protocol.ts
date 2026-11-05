@@ -1,3 +1,8 @@
+import type { QuestionDelivery, QuestionDraft, QuestionGroup } from "./questions.ts";
+export * from "./questions.ts";
+export * from "./images.ts";
+import type { ImageData, ImageImport, ImageRef } from "./images.ts";
+
 /** 桌面与服务共用的任务数据；项目为空表示普通对话，每个任务记住自己的服务、模型和思考强度，时间均为 Unix 毫秒。 */
 export interface Thread {
   id: string;
@@ -48,12 +53,19 @@ export interface Provider {
 
 /** 当前已实现的任务、配置和凭据 RPC；请求 id 由调用方生成，用于对应返回结果。 */
 export type RpcRequest =
+  | { id: string; method: "image.import"; params: ImageImport }
+  | { id: string; method: "image.read"; params: { imageId: string } }
+  | { id: string; method: "input.receipts"; params: { threadId?: string; deliveryIds: string[] } }
+  | { id: string; method: "question.pending"; params: { threadId: string } }
+  | { id: string; method: "question.draft"; params: { questionId: string; draft: QuestionDraft } }
+  | { id: string; method: "question.close"; params: { questionId: string } }
+  | { id: string; method: "question.submit"; params: { questionId: string; draft: QuestionDraft } }
   | { id: string; method: "turn.list"; params: { threadId: string; afterSequence?: number; limit?: number } }
   | { id: string; method: "turn.read"; params: { turnId: string } }
   | { id: string; method: "turn.inputs"; params: { turnId: string; afterId?: number; limit?: number } }
   | { id: string; method: "turn.attempts"; params: { turnId: string; afterSequence?: number; limit?: number } }
-  | { id: string; method: "turn.start"; params: { threadId: string; input: string } }
-  | { id: string; method: "turn.steer"; params: { turnId: string; input: string } }
+  | { id: string; method: "turn.start"; params: { threadId: string; input: string; images?: ImageRef[]; deliveryId?: string } }
+  | { id: string; method: "turn.steer"; params: { turnId: string; input: string; images?: ImageRef[]; deliveryId?: string } }
   | { id: string; method: "turn.resume"; params: { turnId: string } }
   | { id: string; method: "turn.interrupt"; params: { turnId: string } }
   | { id: string; method: "approval.list"; params: { threadId: string } }
@@ -83,6 +95,8 @@ export type RpcResponse =
 
 /** 已实现方法的返回数据；凭据只返回哪些服务已配置密钥，不返回原文。 */
 export type RpcResult =
+  | ImageRef | ImageData
+  | QuestionGroup | QuestionDelivery
   | Thread | Thread[] | Turn | Turn[] | TurnInput | TurnInput[] | AttemptView[] | AppConfig | string[] | ToolApproval[]
   | { configured: string[] } | { interrupted: boolean } | null;
 
@@ -119,6 +133,11 @@ export interface ReasoningTiming extends TextTiming { itemId: string; contentInd
 
 /** 已保存的用户输入，首条与补充输入都保留原文，id 用于分页和上下文边界。 */
 export interface TurnInput {
+  /** 消息投递身份跨重试不变，与单次 RPC 请求 id 独立。 */
+  deliveryId?: string;
+  images?: ImageRef[];
+  /** 由服务投影的问答来源；正文保留原始上下文，界面可隐藏机器标识。 */
+  questionId?: string;
   id: number;
   turnId: string;
   content: string;
@@ -135,7 +154,7 @@ export interface MessageView {
   parts: MessagePart[];
 }
 
-/** 模型请求的历史展示；只有成功请求有正式消息，不包含 SDK 原始响应与失败片段。 */
+/** 模型请求的历史展示；所有状态均可包含已确认完整的消息，不包含原始响应与未确认片段。 */
 export interface AttemptView {
   id: string;
   turnId: string;
@@ -162,6 +181,7 @@ export interface ResponseMetrics {
 
 /** 工具展示记录；结果为空时尚未保存结果，不代表可以重新执行。 */
 export interface ToolView {
+  images?: ImageRef[];
   id: string;
   outputIndex: number;
   name: string;
@@ -178,6 +198,8 @@ export interface ToolOutputPreview { output: string; truncated: boolean; partial
 
 /** 服务推送数据；不向界面传递 SDK 响应对象或模型请求参数。 */
 export type TurnNotification =
+  | { event: "question.updated"; threadId: string; question: QuestionGroup }
+  | { event: "turn.notice"; threadId: string; turnId: string; message: string }
   | { event: "approval.requested"; approval: ToolApproval }
   | { event: "approval.resolved"; threadId: string; turnId: string; approvalId: string }
   | { event: "attempt.updated"; threadId: string; turnId: string; attempt: AttemptView }

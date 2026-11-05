@@ -164,10 +164,10 @@ test("无效参数、未声明工具和预先取消不搜索文件，缺少 rg �
     ["grep", { pattern: "needle", ignoreCase: null }], ["grep", { pattern: "needle", glob: "src\\*" }],
     ["grep", { pattern: "needle", rgPath: "C:/fake.exe" }], ["grep", { pattern: "needle", path: ".git/file" }],
   ] as const;
-  for (const [name, args] of invalid) assert.equal(JSON.parse(await tools.execute(name, JSON.stringify(args))).status, "error", JSON.stringify(args));
+  for (const [name, args] of invalid) assert.equal(JSON.parse(String(await tools.execute(name, JSON.stringify(args)))).status, "error", JSON.stringify(args));
   for (const [name, args] of [["ls", {}], ["find", { pattern: "*" }], ["grep", { pattern: "needle" }]]) {
-    assert.equal(JSON.parse(await tools.execute(name as string, JSON.stringify(args), AbortSignal.abort())).status, "cancelled");
-    assert.equal(JSON.parse(await createToolSet().execute(name as string, JSON.stringify(args))).status, "error");
+    assert.equal(JSON.parse(String(await tools.execute(name as string, JSON.stringify(args), AbortSignal.abort()))).status, "cancelled");
+    assert.equal(JSON.parse(String(await createToolSet().execute(name as string, JSON.stringify(args)))).status, "error");
   }
   const previous = process.env.TILOT_RG_PATH;
   process.env.TILOT_RG_PATH = workspace.rootPath;
@@ -175,7 +175,7 @@ test("无效参数、未声明工具和预先取消不搜索文件，缺少 rg �
   await assert.rejects(findProjectFiles(workspace, { pattern: "*" }), /TILOT_RG_PATH/);
   assert.equal((await listProjectDirectory(workspace)).truncated, false);
   assert.equal((await readFile(join(workspace.rootPath, "notes.txt"), "utf8")), "needle note");
-  assert.equal(JSON.parse(await tools.execute("read", '{"path":"notes.txt"}')).status, "ok");
+  assert.equal(JSON.parse(String(await tools.execute("read", '{"path":"notes.txt"}'))).status, "ok");
 });
 
 test("流中取消和截断会等待所有 rg 进程退出，包括 glob 交集的两路枚举", async (context) => {

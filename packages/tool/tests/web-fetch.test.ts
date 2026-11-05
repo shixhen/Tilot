@@ -160,10 +160,10 @@ test("网页声明与参数在两种任务共用，非法参数和预先取消�
   assert.deepEqual(tools.definitions.map((tool) => tool.name), ["web_fetch"]);
   for (const args of [{}, { url: null }, { url: "https://public.example", outputId: "x" }, { url: "https://public.example", limit: null },
     { url: "https://public.example", offset: 0 }, { url: "https://public.example", limit: 2001 }, { url: "https://public.example", byteOffset: 0 },
-    { outputId: "x", byteOffset: 0, limit: 1 }, { outputId: "x", byteOffset: -1 }, { outputId: 1 }, { url: "https://public.example", extra: true }]) assert.equal(JSON.parse(await tools.execute("web_fetch", JSON.stringify(args))).status, "error");
-  assert.equal(JSON.parse(await tools.execute("web_fetch", '{"url":"https://public.example"}', AbortSignal.abort())).status, "cancelled");
+    { outputId: "x", byteOffset: 0, limit: 1 }, { outputId: "x", byteOffset: -1 }, { outputId: 1 }, { url: "https://public.example", extra: true }]) assert.equal(JSON.parse(String(await tools.execute("web_fetch", JSON.stringify(args)))).status, "error");
+  assert.equal(JSON.parse(String(await tools.execute("web_fetch", '{"url":"https://public.example"}', AbortSignal.abort()))).status, "cancelled");
   assert.equal(fixture.calls.length, 0);
-  const result = JSON.parse(await tools.execute("web_fetch", '{"url":"https://public.example"}'));
+  const result = JSON.parse(String(await tools.execute("web_fetch", '{"url":"https://public.example"}')));
   assert.equal(result.data.content, '{"text":"<script>"}');
 });
 

@@ -5,6 +5,37 @@ import { renderToStaticMarkup } from "react-dom/server";
 import type { Turn, TurnInput } from "@tilot/protocol";
 import { InputQueue } from "../src/input-queue.ts";
 import { PendingInputs } from "../src/workspace/pending-inputs.tsx";
+import type { ImageRef } from "@tilot/protocol";
+
+test("整个图文队列跨重启恢复为暂停，核对已接收回执后只发送未送达消息", async () => {
+  let saved: string | null = null;
+  const storage = { getItem: () => saved, setItem: (_key: string, value: string) => { saved = value; } };
+  const image: ImageRef = { id: "a".repeat(64), name: "截图.png", bytes: 70, mimeType: "image/png" };
+  const initial: string[] = [];
+  const first = new InputQueue({ start: (_thread, _input, _images, id) => { initial.push(id); return new Promise(() => {}); },
+    steer: async () => null, changed: () => {}, error: (error) => { throw error; } }, storage);
+  first.setConnected(true);
+  first.enqueue("thread", "服务收到但没来得及确认"); first.enqueue("thread", "", [image]);
+  const waiting = first.view("thread").messages[1]!;
+  const delivered: { content: string; images: ImageRef[]; id: string }[] = [];
+  const restored = new InputQueue({ receipts: async (_thread, ids) => { assert.deepEqual(ids, [initial[0], waiting.id]); return [initial[0]!]; },
+    start: async (_thread, content, images, id) => { delivered.push({ content, images, id }); return turn(2); },
+    steer: async () => null, changed: () => {}, error: (error) => { throw error; } }, storage);
+  await restored.restore(); restored.setConnected(true); await flush();
+  assert.equal(restored.view("thread").paused, true); assert.equal(delivered.length, 0);
+  assert.deepEqual(restored.view("thread").messages, [waiting]);
+  restored.resume("thread"); await flush();
+  assert.deepEqual(delivered, [{ content: "", images: [image], id: waiting.id }]);
+  assert.equal(restored.view("thread").messages.length, 0);
+});
+
+test("队列存档失败保留发送草稿的责任交给调用方，不执行未可靠入队的消息", async () => {
+  let starts = 0; const errors: unknown[] = [];
+  const queue = new InputQueue({ start: async () => { starts++; return turn(); }, steer: async () => null,
+    changed: () => {}, error: (error) => { errors.push(error); } }, { getItem: () => null, setItem: () => { throw new Error("磁盘满"); } });
+  queue.setConnected(true); assert.equal(queue.enqueue("thread", "不能丢失"), false); await flush();
+  assert.equal(queue.view("thread").messages.length, 0); assert.equal(starts, 0); assert.equal(errors.length, 1);
+});
 
 /** 构造明确的轮次顺序，测试迟到应答与结束事件交错。 */
 function turn(sequence = 1, status: Turn["status"] = "running", threadId = "thread"): Turn {
@@ -27,6 +58,18 @@ function harness() {
 
 /** 让请求确认及后续队列发送的微任务执行完，不引入真实等待。 */
 async function flush(): Promise<void> { await new Promise<void>((resolve) => setImmediate(resolve)); }
+
+test("答案等待在途启动后优先于下一条普通消息，提交不会恢复暂停队列", async () => {
+  const { queue, starts } = harness();
+  queue.enqueue("thread", "已发出的任务"); queue.enqueue("thread", "后面的普通消息");
+  let answered = false;
+  const priority = queue.withPriority("thread", async () => { answered = true; queue.observe(turn(3)); });
+  queue.observe(turn(2, "completed")); starts[0]!.reply.resolve(turn(2));
+  await priority; assert.equal(answered, true); assert.equal(starts.length, 1);
+  queue.pause("thread");
+  await queue.withPriority("thread", async () => { queue.observe(turn(3, "completed")); });
+  assert.equal(queue.view("thread").paused, true); assert.equal(starts.length, 1);
+});
 
 test("等待消息逐轮按序发送，重复完成和迟到启动应答不重发，后台任务仍独立推进", async () => {
   const { queue, starts } = harness();

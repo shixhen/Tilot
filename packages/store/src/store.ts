@@ -7,6 +7,10 @@ import { migrateDatabase } from "./database.ts";
 import { isPermissionMode, type ModelInfo, type PermissionMode, type Provider, type ReasoningEffort, type Thread } from "@tilot/protocol";
 import type { Turn, TurnFinalStatus, TurnInput } from "@tilot/protocol";
 import { ModelHistoryStore } from "./history.ts";
+import { QuestionStore } from "./questions.ts";
+import { ImageStore } from "./images.ts";
+import type { ImageRef } from "@tilot/protocol";
+import type { QuestionDelivery, QuestionDraft } from "@tilot/protocol";
 import { validatePagination } from "./pagination.ts";
 import { CredentialStore, normalizeBaseURL } from "./credentials.ts";
 export { acquireServiceLock } from "./service-lock.ts";
@@ -16,8 +20,14 @@ export type { Thread } from "@tilot/protocol";
 export type { Turn, TurnFinalStatus, TurnInput } from "@tilot/protocol";
 /** 任务查询统一返回的列。 */
 const THREAD_COLUMNS = "id, title, projectPath, providerId, model, reasoningEffort, permissionMode, permissionLockedAt, createdAt, updatedAt";
+type InputRow = Omit<TurnInput, "images" | "questionId" | "deliveryId"> & { imagesJson: string; questionId?: string | null; deliveryId: string | null };
 
-export type { AttemptStatus, ModelAttempt, AttemptCompletion, ToolResult, StoredToolCall } from "./history-types.ts";
+function projectInput({ imagesJson, questionId, deliveryId, ...input }: InputRow): TurnInput {
+  const images: ImageRef[] = JSON.parse(imagesJson);
+  return { ...input, ...(deliveryId ? { deliveryId } : {}), ...(questionId ? { questionId } : {}), ...(images.length ? { images } : {}) };
+}
+
+export type { AttemptStatus, ModelAttempt, AttemptCompletion, CompletedOutput, ToolResult, StoredToolCall } from "./history-types.ts";
 
 /** 本地 SQLite 存储；由 Server 创建和关闭，负责配置、任务及对话历史。 */
 export class Store {
@@ -26,6 +36,8 @@ export class Store {
   private readonly database: Database.Database;
   /** 模型请求和工具结果的存储入口，与配置、任务共用同一数据库。 */
   readonly history: ModelHistoryStore;
+  readonly questions: QuestionStore;
+  readonly images: ImageStore;
   /** 单独文件保存的本地凭据，不随普通配置读取返回。 */
   readonly credentials: CredentialStore;
 
@@ -42,6 +54,8 @@ export class Store {
       migrateDatabase(this.database);
       this.database.pragma("journal_mode = WAL");
       this.history = new ModelHistoryStore(this.database);
+      this.questions = new QuestionStore(this.database);
+      this.images = new ImageStore(dataDirectory);
       this.credentials = new CredentialStore(dataDirectory);
     } catch (error) {
       this.database.close();
@@ -190,7 +204,7 @@ export class Store {
   }
 
   /** 原子创建运行中的轮次及首条输入；同一任务的运行中轮次由数据库唯一索引限制。 */
-  startTurn(threadId: string, input: string): Turn {
+  startTurn(threadId: string, input: string, images: ImageRef[] = [], deliveryId?: string): Turn {
     return this.database.transaction(() => {
       const thread = this.lockThreadPermissions(threadId);
       const turn = this.database.prepare<{ id: string; threadId: string; permissionMode: PermissionMode; createdAt: number }, Turn>(`
@@ -200,7 +214,7 @@ export class Store {
           @permissionMode, 'running', @createdAt)
         RETURNING id, threadId, sequence, permissionMode, status, createdAt, finishedAt, error
       `).get({ id: randomUUID(), threadId, permissionMode: thread.permissionMode, createdAt: Date.now() })!;
-      this.appendTurnInput(turn.id, input);
+      this.appendTurnInput(turn.id, input, images, deliveryId);
       return turn;
     }).immediate();
   }
@@ -222,40 +236,43 @@ export class Store {
   }
 
   /** 向运行中的轮次追加用户输入并更新任务时间；保存原文，不在此决定何时发送给模型。 */
-  appendTurnInput(turnId: string, content: string): TurnInput {
-    if (!content.trim()) {
+  appendTurnInput(turnId: string, content: string, images: ImageRef[] = [], deliveryId?: string): TurnInput {
+    const attachments = this.images.references(images);
+    if (!content.trim() && !attachments.length) {
       throw new Error("用户输入不能为空。");
     }
     return this.database.transaction(() => {
-      const input = this.database.prepare<[string, number, string], TurnInput>(`
-        INSERT INTO turn_inputs (turnId, content, createdAt)
-        SELECT id, ?, ? FROM turns WHERE id = ? AND status = 'running'
+      const input = this.database.prepare<[string, number, string, string | null, string], TurnInput>(`
+        INSERT INTO turn_inputs (turnId, content, createdAt, imagesJson, deliveryId)
+        SELECT id, ?, ?, ?, ? FROM turns WHERE id = ? AND status = 'running'
         RETURNING id, turnId, content, createdAt
-      `).get(content, Date.now(), turnId);
+      `).get(content, Date.now(), JSON.stringify(attachments), deliveryId ?? null, turnId);
       if (!input) {
         throw new Error("轮次不存在或已结束，不能追加输入。");
       }
       this.database.prepare(`
         UPDATE threads SET updatedAt = ? WHERE id = (SELECT threadId FROM turns WHERE id = ?)
       `).run(input.createdAt, turnId);
-      return input;
+      return { ...input, ...(deliveryId ? { deliveryId } : {}), ...(attachments.length ? { images: attachments } : {}) };
     })();
   }
 
   /** 读取轮次最新输入，用于下一次模型请求的边界；不会遗漏分页后的引导。 */
   getLatestTurnInput(turnId: string): TurnInput | undefined {
-    return this.database.prepare<[string], TurnInput>(`
-      SELECT id, turnId, content, createdAt FROM turn_inputs WHERE turnId = ? ORDER BY id DESC LIMIT 1
+    const row = this.database.prepare<[string], InputRow>(`
+      SELECT id, turnId, content, createdAt, imagesJson, deliveryId FROM turn_inputs WHERE turnId = ? ORDER BY id DESC LIMIT 1
     `).get(turnId);
+    return row ? projectInput(row) : undefined;
   }
 
   /** 按保存顺序分页读取用户输入；下一页传入本页最后一个 id，不修改原始内容。 */
   listTurnInputs(turnId: string, afterId = 0, limit = 50): TurnInput[] {
     validatePagination(limit, afterId);
-    return this.database.prepare<[string, number, number], TurnInput>(`
-      SELECT id, turnId, content, createdAt FROM turn_inputs
-      WHERE turnId = ? AND id > ? ORDER BY id LIMIT ?
-    `).all(turnId, afterId, limit);
+    return this.database.prepare<[string, number, number], InputRow>(`
+      SELECT turn_inputs.id, turn_inputs.turnId, turn_inputs.content, turn_inputs.createdAt, turn_inputs.imagesJson, turn_inputs.deliveryId, user_questions.id AS questionId FROM turn_inputs
+      LEFT JOIN user_questions ON user_questions.inputId = turn_inputs.id
+      WHERE turn_inputs.turnId = ? AND turn_inputs.id > ? ORDER BY turn_inputs.id LIMIT ?
+    `).all(turnId, afterId, limit).map(projectInput);
   }
 
   /** 结束运行中的轮次；失败需提供错误信息，已结束的轮次不能被再次改写。 */
@@ -286,13 +303,15 @@ export class Store {
     })();
   }
 
-  /** 由 Server 确认旧执行已停止后调用，中断遗留轮次和请求；不补造工具结果，打开连接不触发恢复。 */
+  /** 服务确认旧执行停止后恢复：生成中的调用确定未执行，执行中缺失的结果保持未知。 */
   recoverInterruptedTurns(): number {
     return this.database.transaction(() => {
       const now = Date.now();
-      this.database.prepare(`
-        UPDATE model_attempts SET status = 'interrupted', finishedAt = ? WHERE status = 'running'
-      `).run(now);
+      for (const attempt of this.database.prepare<[], { id: string }>("SELECT id FROM model_attempts WHERE status = 'running'").all()) {
+        const saved = this.history.getAttempt(attempt.id)!;
+        this.history.finishAttempt(attempt.id, { status: "interrupted", ...(saved.response ? { response: saved.response } : {}),
+          firstTokenMs: saved.firstTokenMs, reasoningTimings: saved.reasoningTimings });
+      }
       this.database.prepare(`
         UPDATE threads SET updatedAt = ? WHERE id IN (SELECT threadId FROM turns WHERE status = 'running')
       `).run(now);
@@ -300,6 +319,40 @@ export class Store {
         UPDATE turns SET status = 'interrupted', finishedAt = ? WHERE status = 'running'
       `).run(now).changes;
     }).immediate();
+  }
+
+  getRunningTurn(threadId: string): Turn | undefined {
+    return this.database.prepare<[string], Turn>("SELECT * FROM turns WHERE threadId = ? AND status = 'running'").get(threadId);
+  }
+
+  /** 在重试启动或引导前确认旧投递；不修改旧轮次，更不重跑旧工具。 */
+  findInputDelivery(threadId: string, deliveryId: string | undefined, content: string, images: ImageRef[]): TurnInput | undefined {
+    if (deliveryId === undefined) return undefined;
+    if (!deliveryId.trim()) throw new Error("消息投递标识不能为空。");
+    const row = this.database.prepare<[string], InputRow>("SELECT id, turnId, content, createdAt, imagesJson, deliveryId FROM turn_inputs WHERE deliveryId = ?").get(deliveryId);
+    if (!row) return undefined;
+    const input = projectInput(row);
+    if (this.getTurn(input.turnId)!.threadId !== threadId || input.content !== content || JSON.stringify(input.images ?? []) !== JSON.stringify(images)) throw new Error("消息投递标识已用于其他内容，不能重复使用。");
+    return input;
+  }
+
+  inputReceipts(threadId: string | undefined, deliveryIds: string[]): string[] {
+    const query = this.database.prepare<[string, string | null, string | null], { deliveryId: string }>(`SELECT deliveryId FROM turn_inputs JOIN turns ON turns.id = turn_inputs.turnId
+      WHERE deliveryId = ? AND (? IS NULL OR turns.threadId = ?)`);
+    return [...new Set(deliveryIds)].filter((id) => query.get(id, threadId ?? null, threadId ?? null) !== undefined);
+  }
+
+  /** 回答与用户输入原子保存；已提交的同一答案只返回原来的输入，不重新开启任务。 */
+  answerQuestion(id: string, draft: QuestionDraft, turnId?: string): QuestionDelivery {
+    const result = this.questions.submit(id, draft, (threadId, content) => {
+      if (!turnId) {
+        const turn = this.startTurn(threadId, content);
+        return this.listTurnInputs(turn.id, 0, 1)[0]!;
+      }
+      if (this.getTurn(turnId)?.threadId !== threadId) throw new Error("答案与当前对话不匹配。");
+      return this.appendTurnInput(turnId, content);
+    });
+    return { ...result, input: { ...result.input, questionId: id }, turn: this.getTurn(result.input.turnId)! };
   }
 
   /** 释放 SQLite 连接，由 Server 在应用退出时调用。 */

@@ -91,6 +91,28 @@ function sampleResponse(): Response {
   };
 }
 
+test("取消请求的完整消息和未执行工具在重开后仍显示，诊断里的未确认项不投影", async (context) => {
+  const { store, directory } = openHistory(context);
+  const turn = store.startTurn(store.createThread("取消展示").id, "输入");
+  const attempt = store.history.startAttempt(turn.id, store.listTurnInputs(turn.id)[0]!.id);
+  const raw = { ...sampleResponse(), status: "in_progress" as const };
+  const message = raw.output[1]!;
+  store.history.saveCompletedOutput(attempt.id, { outputIndex: 2, item: message }, { response: raw });
+  store.history.saveCompletedOutput(attempt.id, { outputIndex: 4, item: { type: "function_call", id: "unexecuted-tool", call_id: "unexecuted", name: "read", arguments: '{"path":"a.txt"}', status: "completed" } });
+  store.history.finishAttempt(attempt.id, { status: "cancelled", response: raw });
+  store.finishTurn(turn.id, "cancelled");
+  const reopened = new Store(directory);
+  try {
+    const rows = listAttemptViews(reopened, turn.id);
+    assert.equal(rows[0]!.status, "cancelled");
+    assert.deepEqual(rows[0]!.messages.map((message) => [message.itemId, message.outputIndex]), [[message.id, 2]]);
+    assert.equal(rows[0]!.tools[0]!.outputIndex, 4);
+    assert.equal(JSON.parse(rows[0]!.tools[0]!.output!).status, "not_executed");
+    assert.equal(rows[0]!.tools[0]!.startedAt, null);
+    assert.deepEqual(reopened.history.getAttempt(attempt.id)!.response, raw);
+  } finally { reopened.close(); }
+});
+
 test("历史查询保留原文、输入边界和消息位置，只返回展示字段，重开后结果一致", async (context) => {
   const { store, query, directory } = openHistory(context);
   const thread = store.createThread("历史");

@@ -1,9 +1,10 @@
-import { isPermissionMode, type AppConfig, type ModelInfo, type Provider, type ReasoningEffort, type RpcRequest, type RpcResponse, type RpcResult } from "@tilot/protocol";
+import { isImageRef, isPermissionMode, type AppConfig, type ModelInfo, type Provider, type ReasoningEffort, type RpcRequest, type RpcResponse, type RpcResult } from "@tilot/protocol";
 import type { Store } from "@tilot/store";
-import { openWorkspace } from "@tilot/tool";
+import { importImage, openWorkspace } from "@tilot/tool";
 import { listModels } from "@tilot/responses";
 import type { TurnManager } from "./turn-manager.ts";
 import { listAttemptViews } from "./history.ts";
+import type { QuestionDraft } from "@tilot/protocol";
 
 /** 识别普通对象，供进程通信边界读取字段；数组及 null 不是请求对象。 */
 function isObject(value: unknown): value is Record<string, unknown> {
@@ -33,6 +34,27 @@ function parseRequest(value: unknown): RpcRequest {
   }
   const params = value.params;
   switch (value.method) {
+    case "image.import":
+      if (Object.keys(params).length === 1 && typeof params.path === "string") return { id: value.id, method: value.method, params: { path: params.path } };
+      if (Object.keys(params).length === 1 && typeof params.url === "string") return { id: value.id, method: value.method, params: { url: params.url } };
+      if (Object.keys(params).length === 2 && typeof params.base64 === "string" && typeof params.name === "string") return { id: value.id, method: value.method, params: { base64: params.base64, name: params.name } };
+      break;
+    case "image.read":
+      if (typeof params.imageId === "string") return { id: value.id, method: value.method, params: { imageId: params.imageId } };
+      break;
+    case "input.receipts":
+      if ((params.threadId === undefined || typeof params.threadId === "string") && Array.isArray(params.deliveryIds) && params.deliveryIds.every((id) => typeof id === "string")) return { id: value.id, method: value.method, params: { ...(params.threadId === undefined ? {} : { threadId: params.threadId }), deliveryIds: params.deliveryIds } };
+      break;
+    case "question.pending":
+      if (typeof params.threadId === "string") return { id: value.id, method: value.method, params: { threadId: params.threadId } };
+      break;
+    case "question.close":
+      if (typeof params.questionId === "string") return { id: value.id, method: value.method, params: { questionId: params.questionId } };
+      break;
+    case "question.draft":
+    case "question.submit":
+      if (typeof params.questionId === "string" && isObject(params.draft)) return { id: value.id, method: value.method, params: { questionId: params.questionId, draft: params.draft as unknown as QuestionDraft } };
+      break;
     case "approval.list":
       if (typeof params.threadId === "string") return { id: value.id, method: value.method, params: { threadId: params.threadId } };
       break;
@@ -80,13 +102,17 @@ function parseRequest(value: unknown): RpcRequest {
       }
       break;
     case "turn.start":
-      if (typeof params.threadId === "string" && typeof params.input === "string") {
-        return { id: value.id, method: value.method, params: { threadId: params.threadId, input: params.input } };
+      if (typeof params.threadId === "string" && typeof params.input === "string" &&
+          (params.deliveryId === undefined || typeof params.deliveryId === "string" && !!params.deliveryId.trim()) &&
+          (params.images === undefined || Array.isArray(params.images) && params.images.every(isImageRef))) {
+        return { id: value.id, method: value.method, params: { threadId: params.threadId, input: params.input, ...(params.deliveryId === undefined ? {} : { deliveryId: params.deliveryId }), ...(params.images === undefined ? {} : { images: params.images }) } };
       }
       break;
     case "turn.steer":
-      if (typeof params.turnId === "string" && typeof params.input === "string" && params.input.trim()) {
-        return { id: value.id, method: value.method, params: { turnId: params.turnId, input: params.input } };
+      if (typeof params.turnId === "string" && typeof params.input === "string" &&
+          (params.deliveryId === undefined || typeof params.deliveryId === "string" && !!params.deliveryId.trim()) &&
+          (params.images === undefined || Array.isArray(params.images) && params.images.every(isImageRef))) {
+        return { id: value.id, method: value.method, params: { turnId: params.turnId, input: params.input, ...(params.deliveryId === undefined ? {} : { deliveryId: params.deliveryId }), ...(params.images === undefined ? {} : { images: params.images }) } };
       }
       break;
     case "turn.read":
@@ -170,7 +196,7 @@ function parseConfig(value: unknown): AppConfig {
 }
 
 /** 处理一条 JSON 请求并返回对应结果；输入错误不会终止服务或回显原始内容。 */
-export async function handleRpcLine(store: Store, line: string, turns: TurnManager): Promise<RpcResponse> {
+export async function handleRpcLine(store: Store, line: string, turns: TurnManager, signal?: AbortSignal): Promise<RpcResponse> {
   let id: string | null = null;
   let request: RpcRequest;
   try {
@@ -185,6 +211,17 @@ export async function handleRpcLine(store: Store, line: string, turns: TurnManag
   try {
     let result: RpcResult;
     switch (request.method) {
+      case "image.import": {
+        const source = request.params;
+        result = "base64" in source ? await store.images.importBase64(source.base64, source.name, signal) : await importImage({ images: store.images }, source, signal);
+        break;
+      }
+      case "image.read": result = { image: store.images.get(request.params.imageId), dataUrl: await store.images.dataUrl(request.params.imageId, signal) }; break;
+      case "input.receipts": result = store.inputReceipts(request.params.threadId, request.params.deliveryIds); break;
+      case "question.pending": result = store.questions.pending(request.params.threadId); break;
+      case "question.draft": result = store.questions.saveDraft(request.params.questionId, request.params.draft); break;
+      case "question.submit": result = await turns.answer(request.params.questionId, request.params.draft); break;
+      case "question.close": result = await turns.closeQuestion(request.params.questionId); break;
       case "approval.list":
         result = turns.approvals.list(request.params.threadId);
         break;
@@ -208,10 +245,10 @@ export async function handleRpcLine(store: Store, line: string, turns: TurnManag
         result = listAttemptViews(store, request.params.turnId, request.params.afterSequence, request.params.limit);
         break;
       case "turn.start":
-        result = await turns.start(request.params.threadId, request.params.input);
+        result = await turns.start(request.params.threadId, request.params.input, request.params.images, request.params.deliveryId);
         break;
       case "turn.steer":
-        result = await turns.steer(request.params.turnId, request.params.input);
+        result = await turns.steer(request.params.turnId, request.params.input, request.params.images, request.params.deliveryId);
         break;
       case "turn.resume":
         result = await turns.resume(request.params.turnId);

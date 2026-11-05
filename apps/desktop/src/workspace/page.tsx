@@ -11,6 +11,8 @@ import { TurnMessages } from "./transcript";
 import { Timeline } from "./timeline";
 import { WorkspaceTitlebar } from "./titlebar";
 import { hasSelection } from "../hooks/use-auto-disclosure";
+import { ImageProvider } from "./images";
+import { droppedImages } from "../image-drafts";
 
 /** 正文与输入框共用此宽度并同步伸缩：最大 720px，两侧各留 16px。 */
 const column = "mx-auto w-full min-w-0 max-w-[752px] px-4";
@@ -51,11 +53,16 @@ export function WorkspacePage() {
   useEffect(() => { follow.current = true; }, [state.chat.selected]);
   useEffect(followBottom, [records, state.chat.selected]);
 
-  return <SidebarProvider className="h-dvh min-h-0 flex-col overflow-hidden">
+  return <ImageProvider request={state.chat.request} threadId={state.chat.selected}><SidebarProvider className="h-dvh min-h-0 flex-col overflow-hidden">
     <WorkspaceTitlebar />
     <div className="relative flex min-h-0 min-w-0 flex-1">
     <WorkspaceNavigation state={state} />
-    <SidebarInset className="min-h-0 min-w-0 overflow-hidden">
+    <SidebarInset className="min-h-0 min-w-0 overflow-hidden" onDragOver={(event) => {
+      if (Array.from(event.dataTransfer.types).some((type) => ["Files", "text/html", "text/uri-list"].includes(type))) event.preventDefault();
+    }} onDrop={(event) => {
+      const sources = droppedImages(event.dataTransfer);
+      if (sources.length) { event.preventDefault(); state.addImages(sources); }
+    }}>
       <header className="flex h-12 shrink-0 items-center justify-between gap-4 px-5">
         <h1 className="flex min-w-0 items-center gap-2 text-[15px] font-semibold">
           <span className="truncate">{state.thread?.title ?? "新对话"}</span>
@@ -103,5 +110,5 @@ export function WorkspacePage() {
     </SidebarInset>
     </div>
     {state.settingsOpen && state.chat.config && <SettingsDialog config={state.chat.config} configured={state.chat.configured} used={state.chat.threads.map((thread) => thread.providerId)} request={state.chat.request} onSaved={state.chat.refreshConfig} onClose={() => state.setSettingsOpen(false)} />}
-  </SidebarProvider>;
+  </SidebarProvider></ImageProvider>;
 }

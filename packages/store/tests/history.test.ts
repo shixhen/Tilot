@@ -21,6 +21,92 @@ function call(id: string): ResponseOutputItem {
   return { type: "function_call", id: `item_${id}`, call_id: id, name: "read_file", arguments: ' { "path": "a.ts" } ', status: "completed" };
 }
 
+test("完成项按原位置立即保存且不可改写，取消后配对未执行结果，原始响应保持诊断状态", (context) => {
+  const store = new Store(temporaryDirectory(context));
+  try {
+    const turn = store.startTurn(store.createThread("保存完成项").id, "输入");
+    const attempt = store.history.startAttempt(turn.id, store.listTurnInputs(turn.id)[0]!.id);
+    const raw = { ...response(), status: "in_progress" as const };
+    const tool = { outputIndex: 2, item: call("complete") };
+    store.history.saveCompletedOutput(attempt.id, tool, { response: raw });
+    store.history.saveCompletedOutput(attempt.id, tool);
+    const message: ResponseOutputItem = { type: "message", id: "m1", status: "completed", role: "assistant", content: [{ type: "output_text", text: "方案 A、B", annotations: [] }] };
+    store.history.saveCompletedOutput(attempt.id, { outputIndex: 0, item: message });
+    assert.deepEqual(store.history.getAttempt(attempt.id)!.completedOutputs.map((entry) => entry.outputIndex), [0, 2]);
+    assert.throws(() => store.history.saveCompletedOutput(attempt.id, { outputIndex: 0, item: { ...message, content: [] } }), /不能被改写/);
+    assert.throws(() => store.history.saveCompletedOutput(attempt.id, { outputIndex: 3, item: { ...message, id: "partial", status: "incomplete" } }), /未完成/);
+    const saved = store.history.listToolCalls(attempt.id)[0]!;
+    assert.throws(() => store.history.startTool(saved.id));
+    store.history.finishAttempt(attempt.id, { status: "cancelled", response: raw });
+    assert.equal(store.history.getAttempt(attempt.id)!.status, "cancelled");
+    assert.deepEqual(store.history.getAttempt(attempt.id)!.response, raw);
+    assert.equal(JSON.parse(String(store.history.listToolCalls(attempt.id)[0]!.result!.output)).status, "not_executed");
+    assert.equal(store.history.listToolCalls(attempt.id)[0]!.startedAt, null);
+  } finally { store.close(); }
+});
+
+test("进程在工具执行期间退出后允许新请求，旧结果仍为空且可以日后核实补录", (context) => {
+  const directory = temporaryDirectory(context);
+  const store = new Store(directory);
+  const old = store.startTurn(store.createThread("工具中断").id, "执行");
+  const attempt = store.history.startAttempt(old.id, store.listTurnInputs(old.id)[0]!.id);
+  store.history.finishAttempt(attempt.id, { status: "completed", response: response([call("unknown")]) });
+  const tool = store.history.listToolCalls(attempt.id)[0]!;
+  store.history.startTool(tool.id);
+  store.close();
+  const reopened = new Store(directory);
+  try {
+    reopened.recoverInterruptedTurns();
+    const next = reopened.startTurn(old.threadId, "先核实");
+    const request = reopened.history.startAttempt(next.id, reopened.listTurnInputs(next.id)[0]!.id);
+    assert.equal(request.status, "running");
+    assert.equal(reopened.history.listToolCalls(attempt.id)[0]!.result, null);
+    reopened.history.finishAttempt(request.id, { status: "completed", response: response() });
+    assert.equal(reopened.finishTurn(next.id, "completed").status, "completed");
+    reopened.history.saveToolResult(tool.id, { type: "function_call_output", call_id: "unknown", output: "后来核实的真实结果" });
+  } finally { reopened.close(); }
+});
+
+test("进程在模型流期间退出，已保存的完整调用被配为未执行，完成消息重开后保留", (context) => {
+  const directory = temporaryDirectory(context);
+  const store = new Store(directory);
+  const turn = store.startTurn(store.createThread("流中退出").id, "输入");
+  const attempt = store.history.startAttempt(turn.id, store.listTurnInputs(turn.id)[0]!.id);
+  store.history.saveCompletedOutput(attempt.id, { outputIndex: 3, item: call("unexecuted") }, { response: { ...response(), status: "in_progress" } });
+  store.close();
+  const reopened = new Store(directory);
+  try {
+    reopened.recoverInterruptedTurns();
+    const recovered = reopened.history.getAttempt(attempt.id)!;
+    assert.equal(recovered.status, "interrupted");
+    assert.equal(recovered.completedOutputs[0]!.outputIndex, 3);
+    assert.equal(recovered.response?.status, "in_progress");
+    assert.equal(JSON.parse(String(reopened.history.listToolCalls(attempt.id)[0]!.result!.output)).status, "not_executed");
+  } finally { reopened.close(); }
+});
+
+test("版本 11 迁移只为成功历史补齐完整输出清单，不把失败诊断当作确认内容", (context) => {
+  const directory = temporaryDirectory(context);
+  const store = new Store(directory);
+  const turn = store.startTurn(store.createThread("旧数据").id, "输入");
+  const first = store.history.startAttempt(turn.id, store.listTurnInputs(turn.id)[0]!.id);
+  const snapshot = response([call("saved")]);
+  store.history.finishAttempt(first.id, { status: "completed", response: snapshot });
+  const tool = store.history.listToolCalls(first.id)[0]!;
+  store.history.saveToolResult(tool.id, { type: "function_call_output", call_id: "saved", output: "结果" });
+  const second = store.history.startAttempt(turn.id, first.inputThroughId);
+  store.history.finishAttempt(second.id, { status: "cancelled", response: response([call("diagnostic")]) });
+  store.close();
+  const legacy = new Database(join(directory, "tilot.sqlite"));
+  legacy.exec("DROP TABLE user_questions; ALTER TABLE turn_inputs DROP COLUMN imagesJson; DROP INDEX inputs_delivery; ALTER TABLE turn_inputs DROP COLUMN deliveryId; ALTER TABLE model_attempts DROP COLUMN completedOutputsJson; PRAGMA user_version = 11;");
+  legacy.close();
+  const reopened = new Store(directory);
+  try {
+    assert.deepEqual(reopened.history.getAttempt(first.id)!.completedOutputs, [{ outputIndex: 0, item: snapshot.output[0] }]);
+    assert.deepEqual(reopened.history.getAttempt(second.id)!.completedOutputs, []);
+  } finally { reopened.close(); }
+});
+
 test("单段思考和工具执行时间重开后保留，版本 9 的旧过程不估算耗时", (context) => {
   const directory = temporaryDirectory(context);
   const store = new Store(directory);

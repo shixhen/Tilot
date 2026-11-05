@@ -20,6 +20,7 @@
       "decorations": false,
       "theme": "Dark",
       "transparent": true,
+      "dragDropEnabled": false,
       "windowEffects": { "effects": ["mica"] }
     }],
     "security": {

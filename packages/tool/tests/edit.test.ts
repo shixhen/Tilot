@@ -113,7 +113,7 @@ test("参数只接受 1–20 项对象，旧格式、错误类型、未知字段
       [{ oldText: "原文", newText: "x", extra: true }], [{ oldText: "原文", newText: "\ud800" }],
     ].map((edits) => ({ path: "code.txt", edits })),
   ]) {
-    const result = JSON.parse(await tools.execute("edit", JSON.stringify(args)));
+    const result = JSON.parse(String(await tools.execute("edit", JSON.stringify(args))));
     assert.equal(result.status, "error");
     assert.equal(await readFile(file, "utf8"), "原文");
     assert.deepEqual(await readdir(root), ["code.txt"]);

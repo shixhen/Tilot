@@ -35,6 +35,42 @@ function call(id: string): ResponseOutputItem {
   return { type: "function_call", id: `item_${id}`, call_id: id, name: "read_file", arguments: ' { "path": "a.ts" } ', status: "completed" };
 }
 
+test("取消请求的完整输出按位置回放，工具结果配对，补充输入和取消说明各出现一次", (context) => {
+  const store = openTestStore(context);
+  const thread = store.createThread("完整消息取消");
+  const old = store.startTurn(thread.id, "列出方案");
+  const attempt = store.history.startAttempt(old.id, store.listTurnInputs(old.id)[0]!.id);
+  const message: ResponseOutputItem = { type: "message", id: "options", status: "completed", role: "assistant", content: [{ type: "output_text", text: "A：第一方案；B：第二方案", annotations: [] }] };
+  store.history.saveCompletedOutput(attempt.id, { outputIndex: 3, item: call("unexecuted") });
+  store.history.saveCompletedOutput(attempt.id, { outputIndex: 1, item: message });
+  store.appendTurnInput(old.id, "优先简单的实现");
+  store.history.finishAttempt(attempt.id, { status: "cancelled" });
+  store.finishTurn(old.id, "cancelled");
+  const next = store.startTurn(thread.id, "选第二个");
+  const options = { turnId: next.id, inputThroughId: store.listTurnInputs(next.id)[0]!.id, instructions: "" };
+  const input = buildContext(store, options).input;
+  assert.deepEqual(input.slice(0, 3), [{ role: "user", content: "列出方案" }, message, call("unexecuted")]);
+  assert.ok(input[3]?.type === "function_call_output");
+  assert.equal(JSON.parse(String(input[3].output)).status, "not_executed");
+  assert.deepEqual(input.slice(4), [{ role: "user", content: "优先简单的实现" },
+    { role: "developer", content: readPrompt("cancelled-turn") }, { role: "user", content: "选第二个" }]);
+  assert.deepEqual(buildContext(store, options).input, input);
+});
+
+test("取消、请求失败与异常退出的历史说明按真实结束原因区分", (context) => {
+  const store = openTestStore(context);
+  const thread = store.createThread("原因区分");
+  for (const status of ["cancelled", "failed", "interrupted"] as const) {
+    const old = store.startTurn(thread.id, status);
+    if (status === "interrupted") store.recoverInterruptedTurns();
+    else store.finishTurn(old.id, status, status === "failed" ? "请求失败" : null);
+  }
+  const next = store.startTurn(thread.id, "继续");
+  const built = buildContext(store, { turnId: next.id, inputThroughId: store.listTurnInputs(next.id)[0]!.id });
+  const notices = built.input.filter((item) => "role" in item && item.role === "developer");
+  assert.deepEqual(notices, ["cancelled", "failed", "interrupted"].map((status) => ({ role: "developer", content: readPrompt(`${status}-turn` as "cancelled-turn" | "failed-turn" | "interrupted-turn") })));
+});
+
 test("默认从 Markdown 读取系统策略，显式提供策略或空字符串时保持调用方内容", (context) => {
   const store = openTestStore(context);
   const turn = store.startTurn(store.createThread("默认策略").id, "输入");
@@ -121,6 +157,7 @@ test("按输入边界回放完整消息组，保留推理并跳过诊断，固�
     { type: "function_call_output", call_id: "b", output: "第二个结果" },
     { role: "user", content: extra.content }, answer,
     { role: "user", content: "取消前尚未发送的要求" },
+    { role: "developer", content: readPrompt("cancelled-turn") },
     { role: "user", content: boundary.content },
   ]);
   assert.deepEqual(store.history.getAttempt(first.id)?.response, snapshot);

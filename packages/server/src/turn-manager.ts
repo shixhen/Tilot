@@ -1,10 +1,12 @@
 import { runTurn, type TurnEvent } from "@tilot/agent-core";
 import { createResponsesClient } from "@tilot/responses";
 import type { Store, Turn, TurnInput } from "@tilot/store";
-import type { ServerEvent, TurnNotification } from "@tilot/protocol";
+import type { ImageRef, ServerEvent, TurnNotification } from "@tilot/protocol";
+import type { QuestionDelivery, QuestionDraft } from "@tilot/protocol";
 import { listAttemptViews, projectMessages } from "./history.ts";
 import { readPrompt } from "@tilot/context";
 import { ApprovalManager } from "./approvals.ts";
+import { McpManager } from "@tilot/tool";
 
 /** 当前进程持有的执行句柄，关闭连接时取消并等待 Core 完成落库。 */
 interface ActiveTurn {
@@ -15,6 +17,7 @@ interface ActiveTurn {
 /** 管理服务连接中的运行轮次、取消信号与展示事件，不承担 Agent 业务循环。 */
 export class TurnManager {
   readonly approvals: ApprovalManager;
+  private readonly mcp: McpManager;
   private readonly store: Store;
   private readonly send: (event: ServerEvent) => Promise<void>;
   private readonly onFatal: (error: Error) => void;
@@ -23,35 +26,52 @@ export class TurnManager {
   private closed = false;
 
   /** 绑定存储和事件出口；无法保存状态或交付事件时由连接负责人关闭服务。 */
-  constructor(store: Store, send: (event: ServerEvent) => Promise<void>, onFatal: (error: Error) => void) {
+  constructor(store: Store, send: (event: ServerEvent) => Promise<void>, onFatal: (error: Error) => void, mcp = new McpManager()) {
     this.store = store;
     this.send = send;
     this.onFatal = onFatal;
+    this.mcp = mcp;
     this.approvals = new ApprovalManager((event) => this.emit(event));
   }
 
   /** 使用任务所选服务的地址和密钥启动轮次，取得轮次标识即返回，不等待模型完成。 */
-  start(threadId: string, input: string): Promise<Turn> {
+  start(threadId: string, input: string, images: ImageRef[] = [], deliveryId?: string): Promise<Turn> {
     if (this.closed) throw new Error("服务正在关闭，不能开始新轮次。");
-    if (!input.trim()) throw new Error("用户输入不能为空。");
+    const attachments = this.store.images.references(images);
+    const delivered = this.store.findInputDelivery(threadId, deliveryId, input, attachments);
+    if (delivered) return Promise.resolve(this.store.getTurn(delivered.turnId)!);
+    if (!input.trim() && !attachments.length) throw new Error("用户输入不能为空。");
+    return this.launch(threadId, input, this.createClient(threadId), undefined, attachments, deliveryId);
+  }
+
+  private createClient(threadId: string) {
     const thread = this.store.lockThreadPermissions(threadId);
     const provider = this.store.getConfig().providers.find((item) => item.id === thread.providerId);
     if (!provider) throw new Error("对话使用的服务已不存在，请重新选择模型。");
     const apiKey = this.store.credentials.getApiKey(provider.id, provider.baseURL);
     if (!apiKey) throw new Error(`${provider.name} 尚未配置 API Key。`);
-    const client = createResponsesClient({ apiKey, baseURL: provider.baseURL });
+    return createResponsesClient({ apiKey, baseURL: provider.baseURL });
+  }
+
+  private launch(threadId: string, input: string, client: ReturnType<typeof createResponsesClient>, turn?: Turn, images: ImageRef[] = [], deliveryId?: string): Promise<Turn> {
     const started = Promise.withResolvers<Turn>();
     const execution: ActiveTurn = { controller: new AbortController(), done: Promise.resolve() };
     let current: Turn | undefined;
     execution.done = runTurn(this.store, client, {
-      threadId, input, signal: execution.controller.signal,
+      threadId, input, images, signal: execution.controller.signal, mcp: this.mcp,
+      ...(turn ? { turn } : {}),
+      ...(deliveryId ? { deliveryId } : {}),
       onApproval: (request, signal) => this.approvals.request({ ...request, threadId }, signal),
       onEvent: async (event) => {
-        if (event.type === "turn.started") {
+        if (event.type === "question.updated") {
+          await this.emit({ event: "question.updated", threadId, question: event.question });
+        } else if (event.type === "turn.started") {
           current = event.turn;
           this.active.set(current.id, execution);
           started.resolve(current);
           await this.emit({ event: "turn.started", turn: current });
+        } else if (event.type === "turn.notice") {
+          await this.emit({ event: "turn.notice", threadId, turnId: event.turnId, message: event.message });
         } else if (event.type === "reasoning.updated") {
           await this.emit({ event: "message.timing", threadId, turnId: event.turnId, timing: event.timing });
         } else if (event.type === "tool.progress") {
@@ -63,7 +83,7 @@ export class TurnManager {
           for (const tool of attempt.tools) tool.running = tool.id === event.runningToolId;
           await this.emit({ event: "attempt.updated", threadId, turnId: event.turnId, attempt });
         } else {
-          if (["response.created", "response.completed", "response.failed", "response.incomplete"].includes(event.event.type)) {
+          if (["response.created", "response.output_item.done", "response.completed", "response.failed", "response.incomplete"].includes(event.event.type)) {
             const saved = this.store.history.getAttempt(event.attemptId)!;
             const attempt = listAttemptViews(this.store, event.turnId, saved.sequence - 1, 1)[0]!;
             await this.emit({ event: "attempt.updated", threadId, turnId: event.turnId, attempt });
@@ -93,14 +113,40 @@ export class TurnManager {
   }
 
   /** 将引导保存到当前轮次，不取消模型或工具；已结束时返回 null，供界面保留等待消息。 */
-  async steer(turnId: string, content: string): Promise<TurnInput | null> {
-    if (!content.trim()) throw new Error("引导消息不能为空。");
+  async steer(turnId: string, content: string, images: ImageRef[] = [], deliveryId?: string): Promise<TurnInput | null> {
+    const attachments = this.store.images.references(images);
+    if (!content.trim() && !attachments.length) throw new Error("引导消息不能为空。");
     const execution = this.active.get(turnId);
     const turn = this.store.getTurn(turnId);
+    const delivered = turn ? this.store.findInputDelivery(turn.threadId, deliveryId, content, attachments) : undefined;
+    if (delivered) return delivered;
     if (this.closed || !execution || execution.controller.signal.aborted || turn?.status !== "running") return null;
-    const input = this.store.appendTurnInput(turnId, content);
+    const input = this.store.appendTurnInput(turnId, content, attachments, deliveryId);
     await this.emit({ event: "turn.input", threadId: turn.threadId, turnId, input });
     return input;
+  }
+
+  /** 同步登记答案后才异步通知界面；重复 RPC 从数据库取原投递，不重跑模型。 */
+  async answer(questionId: string, draft: QuestionDraft): Promise<QuestionDelivery> {
+    if (this.closed) throw new Error("服务正在关闭，不能提交答案。");
+    const question = this.store.questions.get(questionId);
+    if (!question) throw new Error("问题不存在。");
+    if (question.status === "answered") return this.store.answerQuestion(questionId, draft);
+    if (question.status !== "pending") throw new Error("该组问题已关闭。");
+    const running = this.store.getRunningTurn(question.threadId);
+    if (running && (!this.active.has(running.id) || this.active.get(running.id)!.controller.signal.aborted)) throw new Error("当前轮次正在停止，请稍后再次提交。答案仍保留。");
+    const client = running ? undefined : this.createClient(question.threadId);
+    const delivery = this.store.answerQuestion(questionId, draft, running?.id);
+    if (client) await this.launch(question.threadId, delivery.input.content, client, delivery.turn);
+    else await this.emit({ event: "turn.input", threadId: question.threadId, turnId: delivery.turn.id, input: delivery.input });
+    await this.emit({ event: "question.updated", threadId: question.threadId, question: delivery.question });
+    return delivery;
+  }
+
+  async closeQuestion(id: string) {
+    const question = this.store.questions.close(id);
+    await this.emit({ event: "question.updated", threadId: question.threadId, question });
+    return question;
   }
 
   /** 请求取消当前连接拥有的轮次；不存在或已结束返回 false，不改写历史。 */
@@ -117,6 +163,7 @@ export class TurnManager {
     const running = [...this.active.values()];
     for (const execution of running) execution.controller.abort();
     await Promise.all(running.map((execution) => execution.done));
+    await this.mcp.close();
   }
 
   /** 分配连接内事件序号，再等待传输层完成写入。 */

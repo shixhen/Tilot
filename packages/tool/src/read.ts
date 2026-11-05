@@ -31,11 +31,11 @@ export function createReadTool(workspace: Workspace, host?: ToolHost): Tool {
     access: "read",
     definition: {
       type: "function", name: "read", strict: false,
-      description: `读取 UTF-8 文件或 shell 的已保存日志，path 与 outputId 必须恰好指定一个。支持相对路径和绝对路径，可读取工作目录外的文件；相对路径从对话工作目录开始。默认 ${DEFAULT_READ_LINES} 行，可请求最多 ${MAX_READ_LINES} 行，正文最多 ${MAX_OUTPUT_BYTES / 1024} KiB。用 nextOffset 按行续读；日志遇到超长行会返回 partialLine 和 nextByteOffset，随后只传 outputId、byteOffset 继续读，直到 nextByteOffset 为 null。byteOffset 仅用于日志，不与 offset/limit 同用。日志只属于当前任务，可能过期；artifactTruncated 为 true 表示缓存本身不完整。`,
+      description: `读取 UTF-8 文件或 shell/MCP 的已保存输出，path 与 outputId 必须恰好指定一个。支持相对路径和绝对路径，可读取工作目录外的文件；相对路径从对话工作目录开始。默认 ${DEFAULT_READ_LINES} 行，可请求最多 ${MAX_READ_LINES} 行，正文最多 ${MAX_OUTPUT_BYTES / 1024} KiB。用 nextOffset 按行续读；日志遇到超长行会返回 partialLine 和 nextByteOffset，随后只传 outputId、byteOffset 继续读，直到 nextByteOffset 为 null。byteOffset 仅用于日志，不与 offset/limit 同用。日志只属于当前任务，可能过期；artifactTruncated 为 true 表示缓存本身不完整。`,
       parameters: {
         type: "object", additionalProperties: false, oneOf: [{ required: ["path"] }, { required: ["outputId"] }], properties: {
           path: { type: "string", minLength: 1, description: "相对文件路径或绝对路径，可读取工作目录外的文件；不能与 outputId 同用。" },
-          outputId: { type: "string", description: "shell 返回的当前任务日志标识；不能使用宿主文件路径。" },
+          outputId: { type: "string", description: "shell/MCP 返回的当前任务输出标识；不能使用宿主文件路径。" },
           offset: { type: "integer", minimum: 1, description: "按行读取的起始行，从 1 开始；默认 1。" },
           limit: { type: "integer", minimum: 1, maximum: MAX_READ_LINES, description: `按行读取的最多行数；默认 ${DEFAULT_READ_LINES}。` },
           byteOffset: { type: "integer", minimum: 0, description: "仅用于日志，复制 nextByteOffset 以继续读长行；最多返回 50 KiB，不与 offset/limit 同用。" },

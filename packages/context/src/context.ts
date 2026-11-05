@@ -1,8 +1,9 @@
 import { toResponseInputItems } from "openai/lib/responses/ResponseInputItems";
 import type { ResponseInputItem } from "openai/resources/responses/responses";
 import type { ModelAttempt, Store, Turn, TurnInput } from "@tilot/store";
-import { getResponseToolCallsFromResponse } from "@tilot/responses/output";
+import { getResponseToolCallsFromResponse, isCompletedOutputItem } from "@tilot/responses/output";
 import { readPrompt } from "./prompts.ts";
+import { imageContent } from "@tilot/protocol";
 export { loadProjectContext, appendProjectInstructions, type ProjectContext, type SkillMetadata } from "./project.ts";
 export { readPrompt, type PromptName } from "./prompts.ts";
 
@@ -65,7 +66,7 @@ function readTurnInputs(store: Store, turnId: string): TurnInput[] {
   }
 }
 
-/** 按成功请求的输入边界插入用户消息，工具消息组中间不插入新输入；失败尝试仅作诊断。 */
+/** 按请求边界回放已确认输出，工具消息组中间不插入补充输入。 */
 function buildTurnInput(
   store: Store, turn: Turn, inputs: TurnInput[], itemIds: Set<string>, callIds: Set<string>,
 ): ResponseInputItem[] {
@@ -80,12 +81,12 @@ function buildTurnInput(
       if (attempt.status === "running") {
         throw new Error("该轮次仍有运行中的请求，不能同时构建下一次上下文。");
       }
-      if (attempt.status === "completed") {
+      if (attempt.status === "completed" || attempt.completedOutputs.length > 0) {
         if (attempt.inputThroughId < previousBoundary || !inputs.some((item) => item.id === attempt.inputThroughId)) {
-          throw new Error("成功请求的输入边界倒退或超出本次上下文范围。");
+          throw new Error("请求的输入边界倒退或超出本次上下文范围。");
         }
         while (inputIndex < inputs.length && inputs[inputIndex]!.id <= attempt.inputThroughId) {
-          result.push({ role: "user", content: inputs[inputIndex++]!.content });
+          result.push(userInput(inputs[inputIndex++]!));
         }
         result.push(...buildResponseGroup(store, attempt, itemIds, callIds, turn.status === "interrupted"));
         previousBoundary = attempt.inputThroughId;
@@ -93,37 +94,48 @@ function buildTurnInput(
       afterSequence = attempt.sequence;
     }
   }
-  // 尚未被成功请求消费的输入也保留，取消或中断不能使用户要求消失。
+  // 未消费的补充输入放在该轮输出之后，结束原因只在该轮末尾出现一次。
   for (const item of inputs.slice(inputIndex)) {
-    result.push({ role: "user", content: item.content });
+    result.push(userInput(item));
+  }
+  if (turn.status === "cancelled" || turn.status === "failed" || turn.status === "interrupted") {
+    result.push({ role: "developer", content: readPrompt(`${turn.status}-turn`) });
   }
   return result;
 }
 
-/** 校验并转换一份成功响应及全部配对结果，保留推理正文和工具参数，不修改存储记录。 */
+function userInput(input: TurnInput): ResponseInputItem {
+  return { role: "user", content: input.images?.length
+    ? [...(input.content ? [{ type: "input_text" as const, text: input.content }] : []), ...input.images.map(imageContent)] : input.content };
+}
+
+/** 完整输出及配对结果与请求终态独立；中断轮次的未知结果仅在上下文中说明。 */
 function buildResponseGroup(
   store: Store, attempt: ModelAttempt, itemIds: Set<string>, callIds: Set<string>, interrupted: boolean,
 ): ResponseInputItem[] {
-  const response = attempt.response;
-  if (!response || response.status !== "completed") {
-    throw new Error("成功尝试缺少完整的成功响应。");
+  if (attempt.status === "completed") {
+    if (!attempt.response) throw new Error("成功尝试缺少完整的成功响应。");
+    getResponseToolCallsFromResponse(attempt.response);
   }
-  const calls = getResponseToolCallsFromResponse(response);
+  const outputs = attempt.completedOutputs;
+  const calls = outputs.filter((entry) => entry.item.type === "function_call");
   const storedCalls = store.history.listToolCalls(attempt.id);
   if (calls.length !== storedCalls.length) {
     throw new Error("响应中的工具调用与存储记录数量不一致。");
   }
-  for (const item of response.output) {
+  for (const { item } of outputs) {
+    if (!isCompletedOutputItem(item)) throw new Error("正式历史中包含未完整生成的输出项。");
     // Responses 已校验字段；这里同时收窄 SDK 中其他输出类型的可选 id。
     if (!item.id || itemIds.has(item.id)) throw new Error("上下文中存在缺失或重复的输出项 id。");
     itemIds.add(item.id);
   }
   const results: ResponseInputItem[] = [];
-  for (const [index, call] of calls.entries()) {
+  for (const [index, { item: call, outputIndex }] of calls.entries()) {
+    if (call.type !== "function_call") throw new Error("工具调用类型无效。");
     const stored = storedCalls[index]!;
     if (callIds.has(call.call_id)) throw new Error("上下文中存在重复的工具 call_id。");
     callIds.add(call.call_id);
-    if (stored.callId !== call.call_id || response.output[stored.outputIndex] !== call) {
+    if (stored.callId !== call.call_id || stored.outputIndex !== outputIndex) {
       throw new Error("工具调用记录与原始调用不一致。");
     }
     if (stored.result === null && interrupted) {
@@ -135,5 +147,5 @@ function buildResponseGroup(
     }
     results.push(stored.result);
   }
-  return toResponseInputItems([...response.output, ...results]);
+  return toResponseInputItems([...outputs.map((entry) => entry.item), ...results]);
 }

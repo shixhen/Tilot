@@ -37,6 +37,7 @@ async function respond(request: RpcRequest): Promise<unknown> {
       threads.unshift(thread); return thread;
     }
     case "approval.list": return [];
+    case "question.pending": return null;
     case "thread.permission": {
       const thread = threads.find((item) => item.id === request.params.threadId)!;
       if (thread.permissionLockedAt !== null && (thread.permissionMode === "read-only") !== (request.params.permissionMode === "read-only")) throw new Error("首次发送后不能跨工具组切换。");

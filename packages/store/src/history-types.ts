@@ -1,7 +1,10 @@
-import type { Response, ResponseInputItem } from "openai/resources/responses/responses";
+import type { Response, ResponseInputItem, ResponseOutputItem } from "openai/resources/responses/responses";
 import type { AttemptStatus, ReasoningTiming } from "@tilot/protocol";
 
 export type { AttemptStatus } from "@tilot/protocol";
+
+/** 经过流式完成确认的原始输出项；保留稀疏位置，不将增量拼成正式消息。 */
+export interface CompletedOutput { outputIndex: number; item: ResponseOutputItem }
 
 /** 模型请求的持久记录；inputThroughId 记录本次已纳入上下文的用户输入边界。 */
 export interface ModelAttempt {
@@ -11,6 +14,7 @@ export interface ModelAttempt {
   inputThroughId: number;
   status: AttemptStatus;
   response: Response | null;
+  completedOutputs: CompletedOutput[];
   error: string | null;
   createdAt: number;
   finishedAt: number | null;
@@ -21,7 +25,7 @@ export interface ModelAttempt {
   reasoningTimings: ReasoningTiming[];
 }
 
-/** 结束请求时提交的数据；成功响应须先经 Responses 校验，其余响应仅供诊断。 */
+/** 结束请求时提交的数据；原始非成功响应用于诊断，已确认输出独立保存。 */
 export interface AttemptCompletion {
   status: Exclude<AttemptStatus, "running">;
   response?: Response;

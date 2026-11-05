@@ -8,6 +8,11 @@ import type Database from "better-sqlite3";
 /** 把测试数据库退回版本 9，删除单项过程计时。 */
 export function downgradeToVersion9(database: Database.Database): void {
   database.exec(`
+    DROP TABLE user_questions;
+    ALTER TABLE turn_inputs DROP COLUMN imagesJson;
+    DROP INDEX inputs_delivery;
+    ALTER TABLE turn_inputs DROP COLUMN deliveryId;
+    ALTER TABLE model_attempts DROP COLUMN completedOutputsJson;
     ALTER TABLE app_config DROP COLUMN defaultPermissionMode;
     ALTER TABLE threads DROP COLUMN permissionMode;
     ALTER TABLE threads DROP COLUMN permissionLockedAt;

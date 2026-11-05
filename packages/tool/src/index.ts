@@ -2,6 +2,8 @@ export { openWorkspace, pathSegments, resolveWorkspacePath, type Workspace } fro
 export { readProjectFile, readOutputLog, type ReadInput, type ReadResult, type LogReadInput, type LogReadResult, type LogByteResult } from "./read.ts";
 export { runShell, type ShellInput, type ShellResult } from "./shell.ts";
 export { createToolSet } from "./execute.ts";
+export { importImage } from "./view-image.ts";
+export type { ImageHost, ToolOutput } from "./tool.ts";
 export type { Tool, ToolSet, ToolHost, ToolExecution, ToolPermissions, ApprovalInput } from "./tool.ts";
 export { OutputCache, type OutputCacheLimits, type OutputArtifact } from "./output-cache.ts";
 export type { OutputSnapshot } from "./output-accumulator.ts";
@@ -13,3 +15,4 @@ export { listProjectDirectory, type LsInput, type DirectoryEntry } from "./ls.ts
 export { findProjectFiles, type FindInput } from "./find.ts";
 export { grepProject, type GrepInput, type GrepLine, type GrepMatch } from "./grep.ts";
 export { webFetch, type WebFetchInput } from "./web-fetch.ts";
+export { McpManager, type McpSnapshot } from "./mcp.ts";

@@ -89,6 +89,15 @@ function validateOutputItem(item: ResponseOutputItem): void {
   }
 }
 
+/** done 表示生命周期结束；明确未完成的项不能回放，其余仍须通过完整字段校验。 */
+export function isCompletedOutputItem(item: ResponseOutputItem): boolean {
+  if (item && "status" in item && (item.status === "in_progress" || item.status === "incomplete")) return false;
+  validateOutputItem(item);
+  registerId(item.id, new Set(), "输出项 id");
+  if (item.type === "function_call") registerId(item.call_id, new Set(), "工具 call_id");
+  return true;
+}
+
 /** 检查正文或推理的内容块；正文允许拒绝信息，空文本仍是合法内容。 */
 function validateTextParts(content: unknown, textType: "output_text" | "reasoning_text"): void {
   if (!Array.isArray(content)) {

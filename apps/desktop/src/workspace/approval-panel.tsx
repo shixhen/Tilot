@@ -9,7 +9,7 @@ export function ApprovalPanel({ approval, disabled, onRespond }: {
 }) {
   if (!approval) return null;
   return <section role="region" aria-label="工具审批" aria-live="polite" className="mb-3 grid min-w-0 gap-3 rounded-xl border bg-card p-3">
-    <p className="text-sm font-medium">{approval.name === "shell" ? "允许执行这条命令？" : "允许修改项目外的文件？"}</p>
+    <p className="text-sm font-medium">{approval.name.startsWith("mcp__") ? `允许调用 ${approval.name}？` : approval.name === "shell" ? "允许执行这条命令？" : "允许修改项目外的文件？"}</p>
     {approval.resolvedPath && <p className="break-all text-xs text-muted-foreground">目标：{approval.resolvedPath}</p>}
     <pre className="max-h-48 min-w-0 overflow-y-auto whitespace-pre-wrap break-all rounded-lg bg-muted p-3 text-xs">{approval.arguments}</pre>
     {approval.name === "shell" && <p className="text-xs text-muted-foreground">此命令使用当前系统权限执行，也可能修改项目外的文件。</p>}

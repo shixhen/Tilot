@@ -1,6 +1,6 @@
 import { isDeepStrictEqual } from "node:util";
 import type { ResponseOutputItem, ResponseStreamEvent } from "openai/resources/responses/responses";
-import { getResponseToolCalls, type ResponseTerminalEvent } from "./output.ts";
+import { getResponseToolCalls, isCompletedOutputItem, type ResponseTerminalEvent } from "./output.ts";
 
 /** 单个输出项的开始、完成快照，以及工具参数完成值；不拼接增量文本。 */
 interface TrackedOutput {
@@ -16,6 +16,7 @@ export class ResponseStreamValidator {
   private readonly events = new Map<number, ResponseStreamEvent>();
   private readonly outputs = new Map<number, TrackedOutput>();
   private readonly itemIds = new Set<string>();
+  private readonly callIds = new Set<string>();
 
   /** 接收新事件；完全相同的重复事件返回 false，协议冲突抛错，其余返回 true。 */
   accept(event: ResponseStreamEvent): boolean {
@@ -97,6 +98,10 @@ export class ResponseStreamValidator {
       checkItemIdentity(tracked.added, event.item);
       if (event.item.type === "function_call" && tracked.argumentsDone !== undefined && event.item.arguments !== tracked.argumentsDone) {
         throw new Error("工具参数完成值与输出项不一致。");
+      }
+      if (isCompletedOutputItem(event.item) && event.item.type === "function_call") {
+        if (this.callIds.has(event.item.call_id)) throw new Error("工具 call_id 重复。");
+        this.callIds.add(event.item.call_id);
       }
       tracked.done = structuredClone(event.item);
       return;

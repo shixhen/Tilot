@@ -9,6 +9,252 @@ import { createResponsesClient } from "@tilot/responses";
 import { runTurn, type TurnEvent } from "@tilot/agent-core";
 import { readPrompt } from "@tilot/context";
 import { httpFixture } from "../../tool/tests/http-fixture.ts";
+import { McpManager } from "@tilot/tool";
+import { fileURLToPath } from "node:url";
+import { emptyQuestionDraft } from "@tilot/protocol";
+import { png } from "../../tool/tests/image-fixture.ts";
+
+test("服务拒绝图片时保留原用户图片和失败记录，不切换模型或自动重试", async (context) => {
+  const store = openTestStore(context); const thread = store.createThread("视觉不支持");
+  const image = await store.images.save(png, "保留.png"); let requests = 0;
+  const client = createResponsesClient({ apiKey: "local-test-placeholder", baseURL: "http://localhost:1234" }).withOptions({
+    fetch: async (_url, options) => {
+      requests++; const body = JSON.parse(String(options?.body));
+      assert.equal(body.model, thread.model); assert.equal(body.input[0].content[0].type, "input_image");
+      return new Response(JSON.stringify({ error: { message: "Unsupported image input", type: "invalid_request_error" } }), { status: 400, headers: { "content-type": "application/json" } });
+    },
+  });
+  const turn = await runTurn(store, client, { threadId: thread.id, input: "", images: [image] });
+  assert.equal(turn.status, "failed"); assert.match(turn.error!, /Unsupported image input/); assert.equal(requests, 1);
+  assert.deepEqual(store.listTurnInputs(turn.id)[0]!.images, [image]);
+  assert.equal(await store.images.dataUrl(image.id), `data:image/png;base64,${png.toString("base64")}`);
+});
+
+test("用户图片、图片引导和 view_image 结果进入标准 Responses，取消后使用副本回放", async (context) => {
+  const store = openTestStore(context); const directory = projectDirectory(context);
+  const path = join(directory, "picture.png"); writeFileSync(path, png);
+  const image = await store.images.importFile(path); const thread = store.createThread("图片联调", directory);
+  const controller = new AbortController(); let count = 0;
+  const { client, requests } = mockClient(() => ++count === 1
+    ? toolEvents([{ name: "view_image", arguments: JSON.stringify({ path }) }]) : sampleEvents());
+  const turn = await runTurn(store, client, { threadId: thread.id, input: "", images: [image], signal: controller.signal,
+    onEvent: (event) => {
+      if (event.type === "turn.started") store.appendTurnInput(event.turn.id, "这张也看看", [image]);
+      if (event.type === "tool.updated" && event.runningToolId === null) controller.abort();
+    } });
+  assert.equal(turn.status, "cancelled"); assert.equal(requests.length, 1);
+  assert.deepEqual(JSON.parse(String(requests[0]!.body)).input[0], { role: "user", content: [{ type: "input_image", image_url: `data:image/png;base64,${png.toString("base64")}`, detail: "auto" }] });
+  const attempt = store.history.listAttempts(turn.id)[0]!;
+  assert.ok(Array.isArray(store.history.listToolCalls(attempt.id)[0]!.result!.output));
+  writeFileSync(path, "源文件已经改变", "utf8");
+  await runTurn(store, client, { threadId: thread.id, input: "继续比较" });
+  const replay = JSON.parse(String(requests[1]!.body)).input;
+  assert.ok(!JSON.stringify(replay).includes("tilot-image:"));
+  assert.equal(JSON.stringify(replay).split(png.toString("base64")).length - 1, 3);
+  assert.equal(replay.filter((item: { role?: string; content?: unknown }) => item.role === "user").length, 3);
+  const tool = replay.find((item: { type?: string }) => item.type === "function_call_output");
+  assert.equal(tool.output[1].type, "input_image");
+});
+
+test("图片副本损坏时明确失败且无 API 请求，不遗留 running 轮次", async (context) => {
+  const store = openTestStore(context); const image = await store.images.save(png, "图片.png");
+  writeFileSync(join(store.dataDirectory, "images", `${image.id}.bin`), "损坏", "utf8");
+  const { client, requests } = mockClient(); const thread = store.createThread("损坏图片");
+  const turn = await runTurn(store, client, { threadId: thread.id, input: "", images: [image] });
+  assert.equal(turn.status, "failed"); assert.match(turn.error!, /副本损坏/);
+  assert.equal(requests.length, 0); assert.equal(store.history.listAttempts(turn.id).length, 0);
+});
+
+test("异步提问立即返回，重复提问不覆盖，整组答案按引导进入后续上下文", async (context) => {
+  const store = openTestStore(context);
+  const thread = store.createThread("异步问答");
+  const questions = [{ title: "选方案", options: ["A", "B"] }, { title: "说明", options: [] }];
+  let count = 0;
+  const { client, requests } = mockClient(() => ++count === 1 ? toolEvents([
+    { name: "request_user_input_async", arguments: JSON.stringify({ questions }) },
+    { name: "request_user_input_async", arguments: JSON.stringify({ questions }) },
+  ]) : sampleEvents());
+  const turn = await runTurn(store, client, { threadId: thread.id, input: "先问再继续", onEvent(event) {
+    if (event.type !== "tool.updated" || event.runningToolId !== null || !store.questions.pending(thread.id)) return;
+    const group = store.questions.pending(thread.id)!;
+    const calls = store.history.listToolCalls(event.attemptId);
+    if (calls.some((call) => call.result === null)) return;
+    const draft = emptyQuestionDraft(group.questions);
+    draft.answers[0] = { mode: "option", optionIndex: 1, text: "不发送" }; draft.answers[1]!.mode = "skipped";
+    store.answerQuestion(group.id, draft, event.turnId);
+  } });
+  assert.equal(turn.status, "completed"); assert.equal(requests.length, 2);
+  const calls = store.history.listToolCalls(store.history.listAttempts(turn.id)[0]!.id);
+  assert.equal(JSON.parse(String(calls[0]!.result!.output)).data.accepted, true);
+  assert.match(JSON.parse(String(calls[1]!.result!.output)).error, /已有待回答/);
+  const second = JSON.parse(String(requests[1]!.body));
+  assert.match(second.input.at(-1).content, /回答：B/); assert.doesNotMatch(second.input.at(-1).content, /不发送/);
+  assert.equal(store.questions.pending(thread.id), null);
+});
+
+test("没有回答时提问工具不阻塞轮次，取消不会丢失已经登记的问题", async (context) => {
+  for (const cancel of [false, true]) {
+    const store = openTestStore(context); const thread = store.createThread("待答问题");
+    const controller = new AbortController(); let count = 0;
+    const { client, requests } = mockClient(() => ++count === 1 ? toolEvents([{ name: "request_user_input_async", arguments: '{"questions":[{"title":"你的偏好？"}]}' }]) : sampleEvents());
+    const turn = await runTurn(store, client, { threadId: thread.id, input: "提问", signal: controller.signal,
+      onEvent(event) { if (cancel && event.type === "question.updated") controller.abort(); } });
+    assert.equal(turn.status, cancel ? "cancelled" : "completed");
+    assert.equal(requests.length, cancel ? 1 : 2);
+    assert.ok(store.questions.pending(thread.id));
+  }
+});
+
+test("完整 A/B 消息后取消，重开后能选择第二个方案；完整未执行调用有结果，未完成参数不回放", async (context) => {
+  let store: Store;
+  context.after(() => store.close());
+  const directory = projectDirectory(context);
+  store = new Store(directory);
+  const thread = store.createThread("取消后选择", directory, "full-access");
+  const controller = new AbortController();
+  const answer = { type: "message", id: "options-complete", role: "assistant", status: "completed", content: [{ type: "output_text", text: "A：保守方案；B：第二个方案", annotations: [] }] };
+  const completeCall = { type: "function_call", id: "complete-call", call_id: "not-executed", name: "write", arguments: '{"path":"not-created.txt","content":"不应执行"}', status: "completed" };
+  const unfinishedCall = { ...completeCall, id: "partial-call", call_id: "partial", status: "in_progress", arguments: "" };
+  const events = [
+    { type: "response.created", response: { id: "cancel-response", status: "in_progress", output: [] } },
+    { type: "response.output_item.added", output_index: 0, item: { ...answer, content: [], status: "in_progress" } },
+    { type: "response.output_item.done", output_index: 0, item: answer },
+    { type: "response.output_item.added", output_index: 1, item: { ...completeCall, arguments: "", status: "in_progress" } },
+    { type: "response.output_item.done", output_index: 1, item: completeCall },
+    { type: "response.output_item.added", output_index: 2, item: unfinishedCall },
+    { type: "response.function_call_arguments.delta", output_index: 2, item_id: unfinishedCall.id, delta: '{"path":' },
+    { type: "response.output_item.added", output_index: 3, item: { ...unfinishedCall, id: "args-only", call_id: "args-only" } },
+    { type: "response.function_call_arguments.done", output_index: 3, item_id: "args-only", arguments: completeCall.arguments },
+    { type: "response.output_item.added", output_index: 4, item: { ...answer, id: "partial-text", status: "in_progress", content: [] } },
+    { type: "response.output_text.delta", output_index: 4, item_id: "partial-text", content_index: 0, delta: "继续解释但没有生成完" },
+  ].map((event, sequence_number) => ({ ...event, sequence_number }));
+  const { client } = mockClient(() => events);
+  const cancelled = await runTurn(store, client, { threadId: thread.id, input: "给我 A/B 方案", signal: controller.signal,
+    onEvent: (event) => {
+      if (event.type === "response.event" && event.event.type === "response.output_item.done") {
+        const itemId = event.event.item.id;
+        assert.ok(store.history.getAttempt(event.attemptId)!.completedOutputs.some((entry) => entry.item.id === itemId));
+      }
+      if (event.type === "response.event" && event.event.type === "response.output_text.delta") controller.abort();
+    },
+  });
+  assert.equal(cancelled.status, "cancelled");
+  const attempt = store.history.listAttempts(cancelled.id)[0]!;
+  assert.equal(attempt.status, "cancelled");
+  assert.equal(attempt.response?.status, "in_progress");
+  assert.deepEqual(attempt.completedOutputs.map((entry) => entry.item.id), [answer.id, completeCall.id]);
+  const tool = store.history.listToolCalls(attempt.id)[0]!;
+  assert.equal(JSON.parse(String(tool.result!.output)).status, "not_executed");
+  assert.equal(tool.startedAt, null);
+  assert.equal(existsSync(join(directory, "not-created.txt")), false);
+  store.close();
+  store = new Store(directory);
+  const next = mockClient();
+  const finished = await runTurn(store, next.client, { threadId: thread.id, input: "选第二个" });
+  assert.equal(finished.status, "completed");
+  const input = JSON.parse(String(next.requests[0]!.body)).input;
+  assert.deepEqual(input[1], answer);
+  assert.equal(input.filter((item: { id?: string }) => item.id === answer.id).length, 1);
+  assert.ok(input.every((item: { id?: string }) => !["partial-text", "partial-call", "args-only"].includes(item.id ?? "")));
+  assert.deepEqual(input.at(-2), { role: "developer", content: readPrompt("cancelled-turn") });
+  assert.deepEqual(input.at(-1), { role: "user", content: "选第二个" });
+  assert.equal(store.getTurn(cancelled.id)!.status, "cancelled");
+});
+
+test("旧工具开始后进程退出，新轮可携带 unknown 结果完成请求，不重跑或遗留 running", async (context) => {
+  let store: Store;
+  context.after(() => store.close());
+  const directory = projectDirectory(context);
+  store = new Store(directory);
+  const thread = store.createThread("退出恢复", directory, "full-access");
+  const old = store.startTurn(thread.id, "写文件");
+  const attempt = store.history.startAttempt(old.id, store.listTurnInputs(old.id)[0]!.id);
+  const terminal = toolEvents([{ name: "write", arguments: '{"path":"side-effect.txt","content":"重复执行了"}' }]).at(-1)!;
+  store.history.finishAttempt(attempt.id, { status: "completed", response: terminal.response as import("openai/resources/responses/responses").Response });
+  const tool = store.history.listToolCalls(attempt.id)[0]!;
+  store.history.startTool(tool.id);
+  writeFileSync(join(directory, "side-effect.txt"), "已有副作用", "utf8");
+  store.close();
+  store = new Store(directory);
+  store.recoverInterruptedTurns();
+  const { client, requests } = mockClient();
+  const next = await runTurn(store, client, { threadId: thread.id, input: "核实后继续" });
+  assert.equal(next.status, "completed");
+  assert.equal(store.getTurn(old.id)!.status, "interrupted");
+  assert.equal(store.history.listToolCalls(attempt.id)[0]!.result, null);
+  assert.equal(readFileSync(join(directory, "side-effect.txt"), "utf8"), "已有副作用");
+  const input = JSON.parse(String(requests[0]!.body)).input;
+  const unknown = input.find((item: { type: string; call_id?: string }) => item.type === "function_call_output" && item.call_id === tool.callId);
+  assert.equal(JSON.parse(unknown.output).status, "unknown");
+  assert.deepEqual(input.at(-2), { role: "developer", content: readPrompt("interrupted-turn") });
+  assert.ok(store.listTurns(thread.id).every((turn) => turn.status !== "running"));
+});
+
+test("请求登记失败也结束新轮次，不遗留没有模型请求的 running 状态", async (context) => {
+  const store = openTestStore(context);
+  const mock = context.mock.method(store.history, "startAttempt", () => { throw new Error("请求登记失败"); });
+  const { client, requests } = mockClient();
+  const thread = store.createThread("登记失败");
+  const turn = await runTurn(store, client, { threadId: thread.id, input: "开始" });
+  assert.equal(turn.status, "failed");
+  assert.equal(turn.error, "请求登记失败");
+  assert.equal(requests.length, 0);
+  mock.mock.restore();
+  assert.equal((await runTurn(store, client, { threadId: thread.id, input: "再试一次" })).status, "completed");
+});
+
+test("MCP 整轮声明和配置固定，真实工具审批执行并落库，局部配置错误通知模型和界面", { timeout: 15000 }, async (context) => {
+  const store = openTestStore(context);
+  const project = projectDirectory(context);
+  const path = join(project, "mcp.json");
+  const config = (version: string) => JSON.stringify({ mcpServers: {
+    local: { command: process.execPath, args: [fileURLToPath(new URL("../../tool/tests/mcp-fixture.mjs", import.meta.url))], env: { TILOT_MCP_VERSION: version } },
+    invalid: { url: "not-a-url" },
+  } });
+  writeFileSync(path, config("1"), "utf8");
+  const manager = new McpManager(path);
+  context.after(() => manager.close());
+  const thread = store.createThread("MCP 联调", project);
+  const notices: string[] = [];
+  let request = 0;
+  let approvals = 0;
+  const { client, requests } = mockClient(() => {
+    if (++request === 1) {
+      writeFileSync(path, config("2"), "utf8");
+      return toolEvents([{ name: "mcp__local__inspect", arguments: '{"value":"中文"}' }]);
+    }
+    return sampleEvents();
+  });
+  const turn = await runTurn(store, client, { threadId: thread.id, input: "使用 MCP", mcp: manager,
+    onEvent: (event) => { if (event.type === "turn.notice") notices.push(event.message); },
+    onApproval: async (input) => { approvals++; assert.equal(input.name, "mcp__local__inspect"); assert.equal(input.turnId, store.getTurn(input.turnId)?.id); return true; },
+  });
+  assert.equal(turn.status, "completed");
+  assert.equal(approvals, 1);
+  assert.match(notices.join(), /MCP invalid/);
+  const attempts = store.history.listAttempts(turn.id);
+  const tool = store.history.listToolCalls(attempts[0]!.id)[0]!;
+  const result = JSON.parse(String(tool.result!.output));
+  assert.equal(result.status, "ok");
+  assert.equal(JSON.parse(result.data.output).version, "1");
+  assert.ok(tool.durationMs !== null && tool.startedAt !== null);
+  const bodies = requests.map((options) => JSON.parse(String(options.body)));
+  assert.deepEqual(bodies[0].tools, bodies[1].tools);
+  assert.match(JSON.stringify(bodies[0]), /MCP invalid/);
+  assert.ok(bodies[1].input.some((item: { type: string; output?: string }) => item.type === "function_call_output" && item.output === tool.result!.output));
+  assert.equal((await runTurn(store, client, { threadId: thread.id, input: "下一轮", mcp: manager })).status, "completed");
+});
+
+test("只读轮次不读取 MCP 配置或启动服务", async (context) => {
+  const store = openTestStore(context);
+  const manager = new McpManager();
+  context.mock.method(manager, "snapshot", async () => { throw new Error("只读不得发现 MCP"); });
+  const { client, requests } = mockClient();
+  const turn = await runTurn(store, client, { threadId: store.createThread("只读 MCP").id, input: "读取", mcp: manager });
+  assert.equal(turn.status, "completed");
+  assert.ok(JSON.parse(String(requests[0]!.body)).tools.every((tool: { name: string }) => !tool.name.startsWith("mcp__")));
+  await manager.close();
+});
 
 /** 创建独立项目目录，与测试数据库分开，并在测试后清理。 */
 function projectDirectory(context: TestContext): string {
@@ -204,7 +450,7 @@ test("首请求保持原输入与冻结配置，补充输入在同一轮后续�
   assert.equal("max_output_tokens" in body, false);
   assert.deepEqual(body.reasoning, { effort: config.reasoningEffort });
   assert.deepEqual(body.input, [{ role: "user", content: "你好" }]);
-  assert.deepEqual(body.tools.map((tool: { name: string }) => tool.name), ["read", "ls", "find", "grep", "web_fetch"]);
+  assert.deepEqual(body.tools.map((tool: { name: string }) => tool.name), ["read", "ls", "find", "grep", "web_fetch", "request_user_input_async", "view_image"]);
   assert.equal(body.tool_choice, "auto");
   const steered = JSON.parse(String(requests[1]!.body));
   assert.equal(steered.model, config.model);
@@ -381,7 +627,7 @@ test("项目工具按顺序执行并配对落库，下一次请求保留推理�
   const calls = store.history.listToolCalls(attempts[0]!.id);
   assert.equal(calls.length, 2);
   const first = JSON.parse(String(requests[0]!.body));
-  assert.deepEqual(first.tools.map((tool: { name: string }) => tool.name), ["write", "edit", "read", "shell", "ls", "find", "grep", "web_fetch"]);
+  assert.deepEqual(first.tools.map((tool: { name: string }) => tool.name), ["write", "edit", "read", "shell", "ls", "find", "grep", "web_fetch", "request_user_input_async", "view_image"]);
   assert.equal(first.tool_choice, "auto");
   const second = JSON.parse(String(requests[1]!.body));
   assert.deepEqual(second.tools, first.tools);
@@ -457,7 +703,7 @@ test("普通只读对话可抓取并续读网页，声明本地读取工具并�
   assert.equal(turn.status, "completed");
   assert.equal(requests.length, 3);
   assert.equal(fixture.calls.length, 1);
-  for (const request of requests) assert.deepEqual(JSON.parse(String(request.body)).tools.map((tool: { name: string }) => tool.name), ["read", "ls", "find", "grep", "web_fetch"]);
+  for (const request of requests) assert.deepEqual(JSON.parse(String(request.body)).tools.map((tool: { name: string }) => tool.name), ["read", "ls", "find", "grep", "web_fetch", "request_user_input_async", "view_image"]);
   const final = JSON.parse(String(requests[2]!.body));
   const outputs = final.input.filter((item: { type: string }) => item.type === "function_call_output");
   const first = JSON.parse(outputs[0].output).data;

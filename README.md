@@ -1,7 +1,7 @@
 # Tilot
 
 基于 Tauri、React、TypeScript 和 Node.js 的本地桌面 Agent。
-当前已建立 Responses 客户端、SQLite 历史存储、Context 上下文构建、Core 工具调用循环，以及桌面宿主与 Node 服务连接。工具支持 read、write、edit、shell、ls、find、grep、web_fetch；按对话选择只读、项目内修改或完全访问，工具声明在首次发送后固定，需审批的调用在输入框上方单次允许或拒绝。普通对话默认只读，也可在首次发送前选择完全访问。桌面支持多服务与模型配置、普通对话、流式正文与推理、命令输出预览、编辑差异、目录和搜索结果、网页来源与正文、取消、历史切换和中断后继续。Context 已接入项目指令和技能元数据；不设置应用输入或输出 Token 限制，也不启用自动摘要。正式 Server 链路已通过 deepseek-flash 真实联调，原生桌面交互仍待验收，详见 [联调记录](docs/deepseek-live-testing.md)。
+当前已建立 Responses 客户端、SQLite 历史存储、Context 上下文构建、Core 工具调用循环，以及桌面宿主与 Node 服务连接。工具支持 read、write、edit、shell、ls、find、grep、web_fetch、view_image 和 request_user_input_async；按对话选择只读、项目内修改或完全访问，工具声明在首次发送后固定，需审批的调用在输入框上方单次允许或拒绝。普通对话默认只读，也可在首次发送前选择完全访问。桌面支持多服务与模型配置、普通对话、流式正文与推理、命令输出预览、编辑差异、目录和搜索结果、网页来源与正文、取消、历史切换和中断后继续。Context 已接入项目指令和技能元数据；不设置应用输入或输出 Token 限制，也不启用自动摘要。正式 Server 链路已通过 deepseek-flash 真实联调，原生桌面交互仍待验收，详见 [联调记录](docs/deepseek-live-testing.md)。
 
 分批开发顺序与验收方式见 [开发计划](docs/development-plan.md)。
 
@@ -52,9 +52,9 @@ Core 提供 `host = {outputs: OutputCache, threadId}` 和 `execution = {executio
 
 抓取总超时 30 秒，最多 5 次重定向；下载、解压后正文及转换后正文各最多 2 MiB，超限明确失败，不发布部分网页。支持 gzip/deflate/br，按响应 charset 解码，未声明时使用 UTF-8；不支持的编码或内容类型明确报错。允许本机、局域网及公网地址，逐跳校验 HTTP(S) 协议和 URL 凭据，不额外检查 IP 范围或固定 DNS 地址。只发匿名网页请求，不执行 JS、不加载图片或其他资源、不提供登录态或 PDF 解析；导航等页面文本可能保留，不承诺文章主体提取。
 
-网页正文与命令日志共用宿主输出缓存和 7 天/256 MiB 总限额，通过类型及任务归属隔离；web_fetch 只能续读网页，read 的 outputId 只能读命令日志。网络层按宿主 HTTP_PROXY/HTTPS_PROXY（含小写）、ALL_PROXY 和 NO_PROXY 自动选择代理或直连，支持 HTTP/HTTPS 代理，没有额外界面开关。未配置代理或匹配 NO_PROXY 时使用系统 DNS 与路由，兼容系统 TUN/Fake-IP；显式代理模式由代理解析及连接目标。代理凭据仅发给代理，错误结果不回显凭据，代理出错不自动改为直连。代理选择使用 [proxy-from-env](https://github.com/Rob--W/proxy-from-env)，传输使用 [Node 内置代理支持](https://nodejs.org/docs/latest-v24.x/api/http.html#built-in-proxy-support)。
+网页正文与命令日志共用宿主输出缓存和 7 天/256 MiB 总限额，通过类型及任务归属隔离；web_fetch 只能续读网页，read 的 outputId 可读命令和 MCP 输出。网络层按宿主 HTTP_PROXY/HTTPS_PROXY（含小写）、ALL_PROXY 和 NO_PROXY 自动选择代理或直连，支持 HTTP/HTTPS 代理，没有额外界面开关。未配置代理或匹配 NO_PROXY 时使用系统 DNS 与路由，兼容系统 TUN/Fake-IP；显式代理模式由代理解析及连接目标。代理凭据仅发给代理，错误结果不回显凭据，代理出错不自动改为直连。代理选择使用 [proxy-from-env](https://github.com/Rob--W/proxy-from-env)，传输使用 [Node 内置代理支持](https://nodejs.org/docs/latest-v24.x/api/http.html#built-in-proxy-support)。
 
-八个模型工具在 `packages/tool/src/` 的对应模块中各自维护描述、参数、access 类别和执行校验，不单独维护提示词文件。`createToolSet(workspace?, host?, permissions?)` 创建本轮工具集合，由 `execute.ts` 统一检查权限、等待审批、执行和包装结果；Core 的请求声明与执行共享这个集合。项目及普通对话均可使用本地工具，实际声明及执行规则见 [工具权限与审批](docs/tool-permissions.md)。Git、测试与构建继续由 shell 承担；目前没有专用网络搜索或 MCP 接入。[工具重写计划](docs/tool-rewrite-plan.md)的 A1–A3、B1、B3a 已实现，按开发者要求暂缓搜索；背景调研见 [工具对比](docs/tool-comparison.md)。
+内置模型工具在 `packages/tool/src/` 的对应模块中各自维护描述、参数、access 类别和执行校验，不单独维护提示词文件。`createToolSet(workspace?, host?, permissions?, additional?)` 创建本轮工具集合，由 `execute.ts` 统一检查权限、等待审批、执行和包装结果；Core 的请求声明与执行共享这个集合。项目及普通对话均可使用本地工具，实际声明及执行规则见 [工具权限与审批](docs/tool-permissions.md)。Git、测试与构建继续由 shell 承担；目前没有专用网络搜索；已支持 MCP 本地和远程工具，配置与权限见 [MCP 接入](docs/mcp.md)。[工具重写计划](docs/tool-rewrite-plan.md)的 A1–A3、B1、B3a 已实现，按开发者要求暂缓搜索；背景调研见 [工具对比](docs/tool-comparison.md)。
 
 启动 Windows 桌面开发版还需要 Rust、Visual Studio C++ Build Tools 和 WebView2：
 
@@ -80,7 +80,7 @@ Enter 发送，Shift + Enter 换行；中文输入法确认候选不会触发发
 
 正文和推理使用 Markdown 排版，支持标题、列表、引用、表格与任务列表。数学公式支持行内 `$...$`、`\(...\)` 和独立 `$$...$$`、`\[...\]`，由 KaTeX 渲染，字体随应用打包，长独立公式可横向滚动。公式转换只用于显示，历史原文与复制消息不变；普通代码块和行内代码保留原文，无效公式回退显示源码，流式输出中的未完成公式不会中断消息。代码块保留缩进，支持横向滚动和复制，流式未闭合代码块也能显示。网页链接经 Tauri Opener 交给系统默认浏览器，仅支持完整 HTTP(S) 地址；模型输出的 HTML 不执行，图片仅显示说明，不自动下载。代码语法着色暂未接入。
 
-完成消息替换临时预览，失败或取消片段标为临时预览；重新打开应用只恢复数据库中已保存的消息。历史读取覆盖全部分页，任务切换隔离消息与本次打开期间的草稿；向上阅读时不强制滚回底部。项目及普通对话按权限使用本地工具和网页读取；审批在输入框上方逐条处理，运行中切换权限仅在下一轮生效。每段思考与每次工具调用显示独立耗时，运行中更新，结束后保留实测时间。思考只计该段首个非空增量到结束；工具只计实际执行，取消后未执行的调用不计时。整个轮次的过程、单段思考、工具卡片和侧栏分组共用 200ms 的高度过渡，后续内容连续移动，支持嵌套与快速切换，并遵循系统减少动态效果设置。工具详情只显示输入和实际输出，标题保留名称、状态和耗时；网页不附加标题、来源、抓取时间，其他工具也不额外展示数量、日志/缓存及续读说明。ls/find/grep 保留路径、类型、匹配和上下文行号；edit 保留新增和删除着色，旧历史没有 diff 时仍显示原始结果，新调用只接受 edits 数组。shell 临时输出仅作界面预览，正式结果会替换预览；完整工具元数据仍保存并返回模型，缓存续读和上下文不受界面简化影响。数据库版本 10 保存单项计时，旧记录缺失时显示“耗时未知”。用户消息发送后立即提供复制等操作，悬停时显示发送时间；AI 消息的复制和用量图标只在所属轮次结束后显示，运行中不能悬停查看统计。AI 操作栏保留高度，失败、取消或中断结束后也可查看统计。回复统计以“本轮模型请求”为标题，累计本轮全部模型请求的用量，展示请求次数、首 token 耗时、输出速度、取整的缓存命中率、缓存命中/未命中与输出 token。缓存命中率按累计缓存命中除以累计输入计算；TPS 按累计输出除以各次模型生成时间之和计算，扣除首 token 等待与工具执行时间。失败请求已返回的用量也计入，缺失字段对应的合计显示“暂无数据”并注明缺失请求数；没有正文的轮次也有统计入口。历史重开后重新汇总全部请求，汇总逻辑独立以供未来对话总统计复用，当前只展示本轮数据。
+已确认完整的消息替换临时预览，即使请求取消或失败也会保存；未完成片段仅作临时预览；重新打开应用只恢复数据库中已保存的消息。历史读取覆盖全部分页，任务切换隔离消息与本次打开期间的草稿；向上阅读时不强制滚回底部。项目及普通对话按权限使用本地工具和网页读取；审批在输入框上方逐条处理，运行中切换权限仅在下一轮生效。每段思考与每次工具调用显示独立耗时，运行中更新，结束后保留实测时间。思考只计该段首个非空增量到结束；工具只计实际执行，取消后未执行的调用不计时。整个轮次的过程、单段思考、工具卡片和侧栏分组共用 200ms 的高度过渡，后续内容连续移动，支持嵌套与快速切换，并遵循系统减少动态效果设置。工具详情只显示输入和实际输出，标题保留名称、状态和耗时；网页不附加标题、来源、抓取时间，其他工具也不额外展示数量、日志/缓存及续读说明。ls/find/grep 保留路径、类型、匹配和上下文行号；edit 保留新增和删除着色，旧历史没有 diff 时仍显示原始结果，新调用只接受 edits 数组。shell 临时输出仅作界面预览，正式结果会替换预览；完整工具元数据仍保存并返回模型，缓存续读和上下文不受界面简化影响。数据库版本 10 保存单项计时，旧记录缺失时显示“耗时未知”。用户消息发送后立即提供复制等操作，悬停时显示发送时间；AI 消息的复制和用量图标只在所属轮次结束后显示，运行中不能悬停查看统计。AI 操作栏保留高度，失败、取消或中断结束后也可查看统计。回复统计以“本轮模型请求”为标题，累计本轮全部模型请求的用量，展示请求次数、首 token 耗时、输出速度、取整的缓存命中率、缓存命中/未命中与输出 token。缓存命中率按累计缓存命中除以累计输入计算；TPS 按累计输出除以各次模型生成时间之和计算，扣除首 token 等待与工具执行时间。失败请求已返回的用量也计入，缺失字段对应的合计显示“暂无数据”并注明缺失请求数；没有正文的轮次也有统计入口。历史重开后重新汇总全部请求，汇总逻辑独立以供未来对话总统计复用，当前只展示本轮数据。
 
 目录选择使用 Tauri Dialog 系统对话框，当前浏览器验收模拟了选择和取消的返回值；原生 Windows 目录选择器仍需人工交互验收。Server 测试覆盖无效目录、目录链接解析和项目绑定持久化。
 
@@ -103,7 +103,7 @@ Markdown 使用 [react-markdown](https://github.com/remarkjs/react-markdown)、r
 | `packages/responses` | 通过 OpenAI SDK 调用 Responses API |
 | `packages/protocol` | 桌面端与 Server 共用的 RPC 请求、响应和事件类型 |
 
-桌面应用及各包已有实现；Tool 已接入八个工具，项目和普通对话按各自权限开放，Context 已加载项目指令和技能元数据，不设置应用 Token 限制。上表中的 MCP 和历史压缩是模块规划职责，尚未实现。
+桌面应用及各包已有实现；Tool 已接入八个工具，项目和普通对话按各自权限开放，Context 已加载项目指令和技能元数据，不设置应用 Token 限制。MCP 已接入本地 stdio 和远程 Streamable HTTP 工具，历史压缩尚未实现。
 根目录的类型检查覆盖各包和桌面的 `src/` 与 `tests/`；桌面使用独立 React 配置。
 
 ## 数据存储
@@ -120,9 +120,9 @@ SQLite 的 providers 和 provider_models 表保存服务及模型，app_config �
 
 每个任务最多有一个运行中的轮次。`startTurn` 同时保存轮次和首条输入，`appendTurnInput` 保存运行中的引导输入，`finishTurn` 记录完成、失败或取消。输入原文不会被裁剪；轮次列表按 sequence、输入列表按 id 顺序分页，`getLatestTurnInput` 单独查询最新输入，避免分页上限遗漏引导。等待区尚未提交的消息由桌面保存在内存中。
 
-`Store.history` 提供模型历史接口：`startAttempt` 记录一次请求及其用户输入边界，`finishAttempt` 保存完整 SDK 响应和本地终态。成功响应须由调用方先经 Responses 校验；Store 保留 reasoning 和原始参数，失败、截断或取消尝试只作诊断，不登记可执行调用。重试使用新的尝试记录，不覆盖旧记录。
+`Store.history` 提供模型历史接口：`startAttempt` 记录一次请求及其用户输入边界，`finishAttempt` 保存完整 SDK 响应和本地终态。成功响应须由调用方先经 Responses 校验；Store 保留 reasoning 和原始参数，失败、截断或取消仍保留真实终态及原始诊断；saveCompletedOutput 逐项保存完成确认，完整但未执行的工具配 not_executed 结果。数据库版本 12 增加完成项清单，成功响应复用原始输出，详见 [取消与恢复](packages/context/README.md#取消与恢复)。重试使用新的尝试记录，不覆盖旧记录。
 
-成功响应及其工具调用记录在同一事务中保存。`saveToolResult` 使用本地执行 id 定位记录，并核对模型的 call_id；结果只能保存一次。查询结果按原始输出位置排序，工具结果未补齐时不能开始该任务的下一次请求，也不能将所属轮次标为完成。`getAttempt`、`listAttempts` 和 `listToolCalls` 用于读取这些记录。
+成功响应及其工具调用记录在同一事务中保存。`saveToolResult` 使用本地执行 id 定位记录，并核对模型的 call_id；结果只能保存一次。查询结果按原始输出位置排序，运行中或未核实的非中断轮次存在缺失结果时，不能开始下一次请求；旧中断轮次允许携带 unknown 说明继续，旧结果仍为空。所属轮次内工具结果未补齐时不能标记为完成。`getAttempt`、`listAttempts` 和 `listToolCalls` 用于读取这些记录。
 
 Server 启动时先取得数据目录的服务排他锁，再调用 `recoverInterruptedTurns`，把遗留运行轮次和请求标记为中断；另一个服务持有锁时不会进行恢复。创建 Store 或关闭连接不会自动修改状态。缺少结果的工具调用保留为未决，不自动重跑；继续中断任务时，Context 只向模型补入“执行结果未知”的配对结果，不把它写成数据库中的实际执行结果。模型须先核实状态，继续操作创建新轮次，保留旧记录。
 
@@ -132,7 +132,7 @@ Store 使用 [better-sqlite3](https://github.com/WiseLibs/better-sqlite3)，数�
 
 `@tilot/context` 的 `buildContext(store, { turnId, inputThroughId, instructions? })` 返回下一次请求所需的 `instructions` 和 `input`。未传入 instructions 时，从内置 `system.md` 读取系统策略；显式传入字符串或空字符串时保持原文。调用方先选定正在运行的轮次及输入边界，在 `startAttempt` 之前构建上下文；同一任务的执行互斥由 Core 管理。
 
-Context 读完该任务截至目标轮次的历史，按成功请求记录的输入边界插入用户消息，再放入完整响应及其全部工具结果。失败诊断不参与回放，reasoning 正文和原始工具参数保留，转换使用 SDK 的 `toResponseInputItems`。缺失结果、标识冲突或输入边界倒退直接报错，不返回残缺上下文。
+Context 读完该任务截至目标轮次的历史，按请求记录的输入边界插入用户消息，再放入已确认完整的输出项及其配对工具结果。取消等非成功请求中的完成项也参与回放，未确认的诊断片段不参与；在每个取消、失败或异常中断轮次末尾追加一次对应原因说明。reasoning 正文和原始工具参数保留，转换使用 SDK 的 `toResponseInputItems`。缺失结果、标识冲突或输入边界倒退直接报错，不返回残缺上下文。
 
 当前默认保留旧轮次中取消或中断前尚未发送的输入，将其放在该轮次最后一个完整消息组之后；当前轮次只纳入指定边界以内的输入。Context 不写数据库，不发起模型请求。提示词按模块位置读取，不依赖进程工作目录；文件缺失、UTF-8 损坏或正文为空时明确报错，不回退到旧文本。
 
@@ -146,7 +146,7 @@ Context 读完该任务截至目标轮次的历史，按成功请求记录的输
 
 `turn.started` 提供轮次标识，`response.event` 携带轮次、请求尝试标识和原始 SDK 事件。完整终态先保存再交付；函数返回值是本轮本地最终状态。模型失败、截断、断流或处理事件抛错会停止请求，截断尝试保存为 incomplete，所属轮次记为 failed。取消前已中止的调用不创建轮次；流中取消会结束尝试和轮次并释放请求。终态通知或数据库写入异常直接抛给调用方，不伪装成模型失败。
 
-普通任务声明 web_fetch；项目任务另外声明 read、write、edit、shell、ls、find、grep，两者使用 tool_choice=auto。Tool 校验参数后执行；成功响应先落库，同一响应中的调用依次执行，每个结果按原 call_id 保存，再通过 Context 构建下一次请求。普通任务要求访问项目文件同样返回未声明工具错误。未知工具、非法参数和执行失败返回错误结果供模型处理，Core 不自动重试。工具开始和结果保存后通过内部 tool.updated 事件通知 Server，再转换为桌面的 attempt.updated 展示事件。
+项目和普通对话均按权限声明本地与网页工具；可修改对话额外加载全局配置的 MCP 工具，使用 tool_choice=auto。Tool 校验参数后执行；成功响应先落库，同一响应中的调用依次执行，每个结果按原 call_id 保存，再通过 Context 构建下一次请求。只读对话不会加载 MCP，执行入口另行检查权限。未知工具、非法参数和执行失败返回错误结果供模型处理，Core 不自动重试。工具开始和结果保存后通过内部 tool.updated 事件通知 Server，再转换为桌面的 attempt.updated 展示事件。
 
 shell 的临时输出通过 `tool.progress` 交付，最多每 100 ms 一次。日志和事件写入等待期间暂停输出管道，避免无界排队；取消仍会等待进程和在途输出处理结束。进度交付失败时先停止命令，保存实际结果并为后续调用补齐未执行结果，再结束轮次和连接。
 
@@ -184,11 +184,11 @@ node packages/server/src/main.ts
 
 配置类型与数值范围分别在 RPC 边界和 Store 校验，校验失败不会覆盖旧值。保存配置不会写入新密钥，但删除服务会清理对应凭据；保存密钥不会修改当前服务地址。
 
-响应使用 `{id, success, result}` 或 `{id, success, error}`；找不到任务时 read 返回 null，格式错误且无法识别请求时 id 为 null。创建有项目的任务时，Server 先验证并解析真实目录。请求按到达顺序处理；当前不提供重试去重。
+响应使用 `{id, success, result}` 或 `{id, success, error}`；找不到任务时 read 返回 null，格式错误且无法识别请求时 id 为 null。创建有项目的任务时，Server 先验证并解析真实目录。普通请求按到达顺序处理，图片 I/O 独立执行；消息投递使用持久 deliveryId 去重。
 
-`turn.start` 的参数为 `{threadId, input}`，取得轮次标识后返回 Turn，不等待模型结束；同一任务的重复启动会失败。`turn.interrupt` 接收 `{turnId}`，返回 `{interrupted: boolean}`：true 表示已请求取消，最终状态以 turn.finished 为准；轮次已结束或不属于当前连接时返回 false。`turn.resume` 接收 `{turnId}`，仅允许继续没有后续轮次的最新中断轮次，创建新轮次核实并继续，不重跑旧调用。不同任务可以并行，流式执行不阻塞后续管理请求。
+`turn.start` 的参数为 `{threadId, input, images?, deliveryId?}`，取得轮次标识后返回 Turn，不等待模型结束；同一任务的并行启动会失败；相同 deliveryId 的重试返回原轮次，不重新执行。`turn.interrupt` 接收 `{turnId}`，返回 `{interrupted: boolean}`：true 表示已请求取消，最终状态以 turn.finished 为准；轮次已结束或不属于当前连接时返回 false。`turn.resume` 接收 `{turnId}`，仅允许继续没有后续轮次的最新中断轮次，创建新轮次核实并继续，不重跑旧调用。不同任务可以并行，流式执行不阻塞后续管理请求。
 
-`turn.steer` 接收 `{turnId, input}`，向当前连接拥有的运行中轮次追加非空引导，保存后返回 TurnInput 并推送 turn.input，不取消当前模型或工具。轮次已结束、正在取消或不属于当前连接时返回 null，桌面保留该等待消息并按原队列处理；错误或断连则暂停队列。
+`turn.steer` 接收 `{turnId, input, images?, deliveryId?}`，向当前连接拥有的运行中轮次追加文字或图片引导，保存后返回 TurnInput 并推送 turn.input，不取消当前模型或工具。轮次已结束、正在取消或不属于当前连接时返回 null，桌面保留该等待消息并按原队列处理；错误或断连则暂停队列。
 
 服务会交错推送以下事件：
 
@@ -224,6 +224,14 @@ Protocol 只包含通信类型、展示数据及共享任务、轮次与配置�
 - Responses 使用 OpenAI SDK 接入 Responses API，优先复用 SDK 类型。
 - 支持多个 Responses 模型服务的配置，不设计通用模型协议适配层，不自行实现模型 HTTP 或 SSE 协议解析。
 - 模块划分见 `docs/technical-design.md`，模型接入细节见 `docs/deepseek-integration.md`。
-- 当前工具为 read、write、edit、shell、ls、find、grep、web_fetch；项目及普通对话按各自权限开放。shell 使用 PowerShell，网络搜索按开发者要求暂缓；规格与进度见 [工具重写计划](docs/tool-rewrite-plan.md)，权限规则见 [工具权限与审批](docs/tool-permissions.md)。
+- 当前工具为 read、write、edit、shell、ls、find、grep、web_fetch、view_image、request_user_input_async；项目及普通对话按各自权限开放。shell 使用 PowerShell，网络搜索按开发者要求暂缓；规格与进度见 [工具重写计划](docs/tool-rewrite-plan.md)，权限规则见 [工具权限与审批](docs/tool-permissions.md)。
 - 执行体验按开发者 Codex 截图中的“完全访问”模式：直接执行，不逐次弹窗；四个基础工具、文件差异、命令进度与日志续读已接入。
 - 分小批次开发，函数和类型添加中文用途注释；每批解释并经确认后继续。
+
+## 异步提问
+
+Agent 可通过内置工具在输入框上方提出一组问题，逐题填写后整组提交；运行中作为引导，空闲时开启下一轮。每题 0–4 个文字选项，并始终支持自定义答案。问题和草稿跨重启保留，关闭不触发模型，每个对话最多一组待回答问题。详见 [异步提问](docs/async-questions.md)。
+
+## 图片输入
+
+支持加号菜单上传、拖拽、粘贴、多图和纯图消息，以及 view_image 读取本地／网络图片和 MCP 图片结果。统一使用 Responses API，保存原图副本并随历史回放；图文草稿和整个等待队列持久保存，重启后核对投递回执并暂停待继续。详细行为、接口和验证边界见 [图片输入与恢复](docs/images.md)。

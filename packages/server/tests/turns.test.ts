@@ -1,16 +1,148 @@
 import assert from "node:assert/strict";
 import { EventEmitter, once } from "node:events";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { createServer, type ServerResponse } from "node:http";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { PassThrough } from "node:stream";
 import { test, type TestContext } from "node:test";
 import type { ResponseUsage } from "openai/resources/responses/responses";
+import type { Response as ModelResponse } from "openai/resources/responses/responses";
 import type { RpcRequest, RpcResponse, ServerMessage } from "@tilot/protocol";
 import { Store } from "@tilot/store";
 import { serveStdio } from "../src/stdio.ts";
 import { readPrompt } from "@tilot/context";
+import { McpManager } from "@tilot/tool";
+import { fileURLToPath } from "node:url";
+import { emptyQuestionDraft, type QuestionGroup, type QuestionDelivery } from "@tilot/protocol";
+import { type ImageRef, type ImageData, type Turn, type AttemptView } from "@tilot/protocol";
+import { png } from "../../tool/tests/image-fixture.ts";
+import { httpFixture } from "../../tool/tests/http-fixture.ts";
+
+test("慢图片下载不会阻塞当前轮次的停止请求", { timeout: 10000 }, async (context) => {
+  const model = await mockModel(context); const session = openSession(context, model.baseURL);
+  const received = Promise.withResolvers<void>(); const release = Promise.withResolvers<void>();
+  await httpFixture(context, (_request, response) => { received.resolve(); void release.promise.then(() => response.end(png)); });
+  const thread = session.store.createThread("上传中停止"); const turnId = await session.start(thread.id, "start-slow");
+  await session.waitFor((e) => "event" in e && e.event === "message.delta");
+  const uploading = session.request({ id: "slow-image", method: "image.import", params: { url: "https://image.test/slow.png" } });
+  await received.promise;
+  await session.request({ id: "stop-slow", method: "turn.interrupt", params: { turnId } });
+  await session.waitFor((e) => "event" in e && e.event === "turn.finished" && e.turn.id === turnId);
+  assert.equal(session.store.getTurn(turnId)!.status, "cancelled");
+  release.resolve(); assert.equal((await uploading).success, true);
+});
+
+test("启动与引导投递身份可跨重试和恢复核对，丢失确认也不会重复执行模型或工具", { timeout: 10000 }, async (context) => {
+  const model = await mockModel(context); const session = openSession(context, model.baseURL);
+  const thread = session.store.createThread("投递确认"); const image = await session.store.images.save(png, "图片.png");
+  const params = { threadId: thread.id, input: "", images: [image], deliveryId: "stable-start" };
+  const first = await session.request({ id: "first", method: "turn.start", params });
+  assert.ok(first.success); const turnId = (first.result as Turn).id;
+  const duplicate = await session.request({ id: "duplicate", method: "turn.start", params });
+  assert.ok(duplicate.success); assert.equal((duplicate.result as Turn).id, turnId);
+  await session.waitFor((e) => "event" in e && e.event === "message.delta" && e.itemId === "response_0_message");
+  const steer = { turnId, input: "补充", images: [image], deliveryId: "stable-steer" };
+  assert.equal((await session.request({ id: "steer", method: "turn.steer", params: steer })).success, true);
+  assert.equal((await session.request({ id: "steer-again", method: "turn.steer", params: steer })).success, true);
+  assert.equal(session.store.listTurnInputs(turnId).length, 2);
+  model.finish(0); await session.waitFor((e) => "event" in e && e.event === "message.delta" && e.itemId === "response_1_message");
+  model.finish(1); await session.waitFor((e) => "event" in e && e.event === "turn.finished" && e.turn.id === turnId);
+  const receipts = await session.request({ id: "receipts", method: "input.receipts", params: { threadId: thread.id, deliveryIds: ["stable-start", "stable-steer", "not-sent"] } });
+  assert.ok(receipts.success); assert.deepEqual(receipts.result, ["stable-start", "stable-steer"]);
+  // 引导的应答丢失后，恢复队列尝试新开轮次，也只能得到原来的接收记录。
+  const retry = await session.request({ id: "retry-as-start", method: "turn.start", params: { threadId: thread.id, input: steer.input, images: steer.images, deliveryId: steer.deliveryId } });
+  assert.ok(retry.success); assert.equal((retry.result as Turn).id, turnId);
+  const mismatch = await session.request({ id: "bad-reuse", method: "turn.start", params: { ...params, input: "换成另一项任务" } });
+  assert.equal(mismatch.success, false); assert.equal(model.requests.length, 2);
+  const reopened = new Store(session.store.dataDirectory);
+  try {
+    assert.deepEqual(reopened.inputReceipts(thread.id, ["stable-start", "stable-steer"]), ["stable-start", "stable-steer"]);
+    assert.equal(reopened.findInputDelivery(thread.id, "stable-start", "", [image])!.turnId, turnId);
+    assert.equal(reopened.listTurns(thread.id).length, 1);
+  } finally { reopened.close(); }
+});
+
+test("图片 RPC 经真实进程协议支持纯图开始、运行中图片引导和工具缩略图引用", { timeout: 10000 }, async (context) => {
+  const model = await mockModel(context); const session = openSession(context, model.baseURL);
+  const imported = await session.request({ id: "image-import", method: "image.import", params: { base64: png.toString("base64"), name: "截图.png" } });
+  assert.ok(imported.success); const image = imported.result as ImageRef;
+  const read = await session.request({ id: "image-read", method: "image.read", params: { imageId: image.id } });
+  assert.ok(read.success); assert.equal((read.result as ImageData).dataUrl, `data:image/png;base64,${png.toString("base64")}`);
+  const thread = session.store.createThread("纯图对话");
+  const started = await session.request({ id: "image-start", method: "turn.start", params: { threadId: thread.id, input: "", images: [image] } });
+  assert.ok(started.success); const turnId = (started.result as Turn).id;
+  await session.waitFor((e) => "event" in e && e.event === "message.delta" && e.itemId === "response_0_message");
+  const steered = await session.request({ id: "image-steer", method: "turn.steer", params: { turnId, input: "比较这张", images: [image] } });
+  assert.ok(steered.success);
+  const path = join(session.store.dataDirectory, "local.png"); writeFileSync(path, png);
+  model.finish(0, false, [{ name: "view_image", arguments: JSON.stringify({ path }) }]);
+  await session.waitFor((e) => "event" in e && e.event === "message.delta" && e.itemId === "response_1_message");
+  const input = JSON.stringify(model.requests[1]!.input);
+  assert.ok(!input.includes("tilot-image:")); assert.equal(input.split(png.toString("base64")).length - 1, 3);
+  const history = await session.request({ id: "image-history", method: "turn.attempts", params: { turnId } });
+  assert.ok(history.success); const tool = (history.result as AttemptView[])[0]!.tools[0]!;
+  assert.equal(tool.images![0]!.id, image.id); assert.ok(!JSON.stringify(tool).includes(png.toString("base64")));
+  model.finish(1); await session.waitFor((e) => "event" in e && e.event === "turn.finished" && e.turn.id === turnId);
+});
+
+test("提问 RPC 在运行中追加答案，重复提交不重发，空闲提交只创建一个新轮次", { timeout: 15000 }, async (context) => {
+  for (const duringRun of [true, false]) {
+    const model = await mockModel(context); const session = openSession(context, model.baseURL);
+    const thread = session.store.createThread("异步问题"); const turn = await session.start(thread.id, "开始");
+    await session.waitFor((e) => "event" in e && e.event === "message.delta" && e.turnId === turn);
+    model.finish(0, false, [{ name: "request_user_input_async", arguments: '{"questions":[{"title":"方案？","options":["A","B"]}]}' }]);
+    const event = await session.waitFor((e) => "event" in e && e.event === "question.updated");
+    assert.ok("event" in event && event.event === "question.updated");
+    const group = event.question; const draft = emptyQuestionDraft(group.questions);
+    await session.waitFor((e) => "event" in e && e.event === "message.delta" && e.itemId === "response_1_message");
+    if (!duringRun) {
+      model.finish(1);
+      await session.waitFor((e) => "event" in e && e.event === "turn.finished" && e.turn.id === turn);
+    }
+    draft.answers[0] = { mode: "option", optionIndex: 1, text: "草稿不发送" };
+    const saved = await session.request({ id: "save", method: "question.draft", params: { questionId: group.id, draft } });
+    assert.ok(saved.success); assert.deepEqual((saved.result as QuestionGroup).draft, draft);
+    const result = await session.request({ id: "answer", method: "question.submit", params: { questionId: group.id, draft } });
+    assert.ok(result.success); const delivery = result.result as QuestionDelivery;
+    assert.equal(delivery.turn.id === turn, duringRun);
+    const duplicate = await session.request({ id: "duplicate-answer", method: "question.submit", params: { questionId: group.id, draft } });
+    assert.ok(duplicate.success); assert.equal((duplicate.result as QuestionDelivery).input.id, delivery.input.id);
+    if (duringRun) model.finish(1);
+    await session.waitFor((e) => "event" in e && e.event === "message.delta" && e.itemId === "response_2_message");
+    assert.equal(model.requests.length, 3);
+    const input = model.requests[2]!.input as { role?: string; content?: string }[];
+    assert.match(input.at(-1)!.content!, /回答：B/); assert.doesNotMatch(input.at(-1)!.content!, /草稿不发送/);
+    model.finish(2);
+    await session.waitFor((e) => "event" in e && e.event === "turn.finished" && e.turn.id === delivery.turn.id);
+    assert.equal(session.store.listTurns(thread.id).length, duringRun ? 1 : 2);
+  }
+});
+
+test("停止保留待答组，停止后提交开启新轮次，缺少凭据时答案不被伪装成已投递", { timeout: 10000 }, async (context) => {
+  const model = await mockModel(context); const session = openSession(context, model.baseURL);
+  const thread = session.store.createThread("停止后回答"); const turnId = await session.start(thread.id, "提问");
+  await session.waitFor((e) => "event" in e && e.event === "message.delta" && e.itemId === "response_0_message");
+  model.finish(0, false, [{ name: "request_user_input_async", arguments: '{"questions":[{"title":"补充要求？"}]}' }]);
+  const event = await session.waitFor((e) => "event" in e && e.event === "question.updated");
+  assert.ok("event" in event && event.event === "question.updated");
+  await session.waitFor((e) => "event" in e && e.event === "message.delta" && e.itemId === "response_1_message");
+  await session.request({ id: "stop-question", method: "turn.interrupt", params: { turnId } });
+  await session.waitFor((e) => "event" in e && e.event === "turn.finished" && e.turn.id === turnId);
+  const draft = emptyQuestionDraft(event.question.questions); draft.answers[0] = { mode: "text", optionIndex: null, text: "继续处理这个要求" };
+  session.store.credentials.retain([]);
+  const failed = await session.request({ id: "no-key", method: "question.submit", params: { questionId: event.question.id, draft } });
+  assert.equal(failed.success, false); assert.equal(session.store.questions.pending(thread.id)?.id, event.question.id);
+  assert.equal(session.store.listTurns(thread.id).length, 1);
+  session.store.credentials.saveApiKey("default", model.baseURL, "local-test-only");
+  const result = await session.request({ id: "retry-answer", method: "question.submit", params: { questionId: event.question.id, draft } });
+  assert.ok(result.success); const next = (result.result as QuestionDelivery).turn;
+  assert.notEqual(next.id, turnId);
+  await session.waitFor((e) => "event" in e && e.event === "message.delta" && e.itemId === "response_2_message");
+  model.finish(2); await session.waitFor((e) => "event" in e && e.event === "turn.finished" && e.turn.id === next.id);
+  assert.equal(session.store.getTurn(turnId)!.status, "cancelled");
+  assert.equal(session.store.listTurnInputs(next.id)[0]!.questionId, event.question.id);
+});
 
 /** 启动本地模拟模型服务，先发送增量，再由测试决定何时发送终态。 */
 async function mockModel(context: TestContext) {
@@ -81,10 +213,37 @@ test("继续仅接受最新中断轮次，创建新轮次并统一使用正式�
   assert.equal((await session.request({ id: "duplicate", method: "turn.resume", params: { turnId: old.id } })).success, false);
   await session.waitFor((message) => "event" in message && message.event === "message.delta" && message.turnId === resumed.id);
   assert.equal(model.requests[0]?.instructions, readPrompt("system"));
-  assert.deepEqual(model.requests[0]?.input, [{ role: "user", content: "原任务输入" }, { role: "user", content: readPrompt("resume") }]);
+  assert.deepEqual(model.requests[0]?.input, [{ role: "user", content: "原任务输入" }, { role: "developer", content: readPrompt("interrupted-turn") }, { role: "user", content: readPrompt("resume") }]);
   model.finish(0);
   await session.waitFor((message) => "event" in message && message.event === "turn.finished" && message.turn.id === resumed.id);
   assert.equal(session.store.getTurn(old.id)?.status, "interrupted");
+});
+
+test("工具开始但结果未落库时异常退出，RPC 恢复可完成新轮次且不改写未知结果", { timeout: 10000 }, async (context) => {
+  const model = await mockModel(context);
+  const session = openSession(context, model.baseURL);
+  const thread = session.store.createThread("工具退出恢复", session.store.dataDirectory, "full-access");
+  const old = session.store.startTurn(thread.id, "执行旧工具");
+  const attempt = session.store.history.startAttempt(old.id, session.store.listTurnInputs(old.id)[0]!.id);
+  const call = { type: "function_call", id: "old-item", call_id: "old-call", name: "write", arguments: '{"path":"kept.txt","content":"不应重跑"}', status: "completed" };
+  session.store.history.finishAttempt(attempt.id, { status: "completed", response: { id: "old-response", status: "completed", output: [call] } as ModelResponse });
+  const tool = session.store.history.listToolCalls(attempt.id)[0]!;
+  session.store.history.startTool(tool.id);
+  writeFileSync(join(session.store.dataDirectory, "kept.txt"), "已发生的副作用", "utf8");
+  session.store.recoverInterruptedTurns();
+  const result = await session.request({ id: "resume-unknown", method: "turn.resume", params: { turnId: old.id } });
+  assert.ok(result.success && result.result && !Array.isArray(result.result) && "threadId" in result.result);
+  const resumed = result.result;
+  await session.waitFor((message) => "event" in message && message.event === "message.delta" && message.turnId === resumed.id);
+  const input = model.requests[0]!.input as { type?: string; call_id?: string; output?: string }[];
+  const unknown = input.find((item) => item.type === "function_call_output" && item.call_id === call.call_id);
+  assert.equal(JSON.parse(unknown!.output!).status, "unknown");
+  model.finish(0);
+  await session.waitFor((message) => "event" in message && message.event === "turn.finished" && message.turn.id === resumed.id);
+  assert.equal(session.store.getTurn(resumed.id)!.status, "completed");
+  assert.equal(session.store.history.listToolCalls(attempt.id)[0]!.result, null);
+  assert.equal(readFileSync(join(session.store.dataDirectory, "kept.txt"), "utf8"), "已发生的副作用");
+  assert.ok(session.store.listTurns(thread.id).every((turn) => turn.status !== "running"));
 });
 
 /** 创建完整服务连接及数据库，使用本地模拟模型地址和测试密钥。 */
@@ -108,7 +267,7 @@ function openSession(context: TestContext, baseURL: string) {
       notifications.emit("message");
     }
   });
-  const serving = serveStdio(store, input, output);
+  const serving = serveStdio(store, input, output, new McpManager(join(directory, "mcp.json")));
   // 出错断连测试会在后面断言拒绝，先挂接处理以免等待消息时出现未处理拒绝。
   void serving.catch(() => {});
   context.after(async () => {
@@ -144,6 +303,38 @@ function openSession(context: TestContext, baseURL: string) {
   }
   return { store, input, output, serving, received, waitFor, request, start };
 }
+
+test("MCP 真实子进程经过行协议审批、输出计时和连接退出清理，单服务错误独立通知", { timeout: 10000 }, async (context) => {
+  const model = await mockModel(context);
+  const session = openSession(context, model.baseURL);
+  writeFileSync(join(session.store.dataDirectory, "mcp.json"), JSON.stringify({ mcpServers: {
+    local: { command: process.execPath, args: [fileURLToPath(new URL("../../tool/tests/mcp-fixture.mjs", import.meta.url))] },
+    invalid: { url: "invalid" },
+  } }), "utf8");
+  const thread = session.store.createThread("MCP 协议", session.store.dataDirectory);
+  const turnId = await session.start(thread.id, "mcp-start");
+  await session.waitFor((message) => "event" in message && message.event === "turn.notice" && message.turnId === turnId);
+  await session.waitFor((message) => "event" in message && message.event === "message.delta" && message.turnId === turnId);
+  model.finish(0, false, [{ name: "mcp__local__inspect", arguments: '{"value":"协议联调"}' }]);
+  const approval = await session.waitFor((message) => "event" in message && message.event === "approval.requested");
+  assert.ok("event" in approval && approval.event === "approval.requested");
+  assert.equal(approval.approval.name, "mcp__local__inspect");
+  assert.ok((await session.request({ id: "mcp-allow", method: "approval.respond", params: { approvalId: approval.approval.id, allowed: true } })).success);
+  const result = await session.waitFor((message) => "event" in message && message.event === "attempt.updated" && message.attempt.tools.some((tool) => tool.output !== null));
+  assert.ok("event" in result && result.event === "attempt.updated");
+  const tool = result.attempt.tools[0]!;
+  assert.ok(tool.startedAt !== null && tool.durationMs !== null);
+  const output = JSON.parse(tool.output!);
+  assert.equal(output.status, "ok");
+  const value = JSON.parse(output.data.output);
+  assert.equal(value.value, "协议联调");
+  await session.waitFor((message) => "event" in message && message.event === "attempt.updated" && message.attempt.sequence === 2);
+  model.finish(1);
+  await session.waitFor((message) => "event" in message && message.event === "turn.finished" && message.turn.id === turnId);
+  session.input.end();
+  await session.serving;
+  assert.throws(() => process.kill(value.pid, 0), { code: "ESRCH" });
+});
 
 test("思考起点和结束通过行协议交付，正文仍在生成时计时已停止，成功和失败历史保留耗时", { timeout: 10000 }, async (context) => {
   const model = await mockModel(context);

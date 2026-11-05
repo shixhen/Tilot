@@ -14,6 +14,7 @@ export interface TurnRecord {
   inputs: TurnInput[];
   attempts: AttemptView[];
   previews: Preview[];
+  notices?: string[];
 }
 
 /** 读取任务全部分页历史，避免默认每页 50 条导致消息静默缺失。 */
@@ -53,7 +54,7 @@ export function mergeHistory(current: TurnRecord[], history: TurnRecord[]): Turn
     const persisted = new Set(attempts.flatMap((attempt) => attempt.messages.map((message) => message.itemId)));
     const inputs = new Map(live?.inputs.map((input) => [input.id, input]));
     for (const input of saved.inputs) inputs.set(input.id, input);
-    records.set(turn.id, { ...saved, inputs: [...inputs.values()].sort((a, b) => a.id - b.id), attempts, turn,
+    records.set(turn.id, { ...saved, ...(live?.notices ? { notices: live.notices } : {}), inputs: [...inputs.values()].sort((a, b) => a.id - b.id), attempts, turn,
       previews: updatePreviewTimings(live?.previews.filter((preview) => !persisted.has(preview.itemId)) ?? [], attempts.flatMap((attempt) => attempt.reasoningTimings ?? [])) });
   }
   return [...records.values()].sort((a, b) => a.turn.sequence - b.turn.sequence);
@@ -76,6 +77,7 @@ function mergeAttempts(current: AttemptView[], incoming: AttemptView[]): Attempt
 
 /** 应用单个服务事件；完成消息替换增量，终态不被迟到的启动应答覆盖。 */
 export function applyEvent(records: TurnRecord[], event: ServerEvent): TurnRecord[] {
+  if (event.event === "question.updated") return records;
   if (event.event === "approval.requested" || event.event === "approval.resolved") return records;
   if ("turn" in event) {
     const existing = records.find((record) => record.turn.id === event.turn.id);
@@ -84,6 +86,7 @@ export function applyEvent(records: TurnRecord[], event: ServerEvent): TurnRecor
   }
   return records.map((record) => {
     if (record.turn.id !== event.turnId || record.turn.threadId !== event.threadId) return record;
+    if (event.event === "turn.notice") return { ...record, notices: [...(record.notices ?? []), event.message] };
     if (event.event === "turn.input") {
       if (record.inputs.some((input) => input.id === event.input.id)) return record;
       return { ...record, inputs: [...record.inputs, event.input].sort((a, b) => a.id - b.id) };

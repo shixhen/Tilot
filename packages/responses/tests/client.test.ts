@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { createResponsesClient, streamResponse } from "@tilot/responses";
+import { isCompletedOutputItem } from "@tilot/responses/output";
 
 /** 使用本地 SSE 数据替代网络请求，并记录 SDK 实际生成的请求。 */
 function mockClient(events: Record<string, unknown>[]) {
@@ -39,6 +40,30 @@ function sampleEvents(): Record<string, unknown>[] {
   ];
   return events.map((event, index) => ({ ...event, sequence_number: index * 2 }));
 }
+
+test("项 done 仍区分 incomplete 与 completed，参数 done 不替代完整工具项确认", async () => {
+  const events = sampleEvents();
+  const messageDone = events.find((event) => event.type === "response.output_item.done" && (event.item as { type: string }).type === "message")!;
+  (messageDone.item as { status: string }).status = "incomplete";
+  const terminal = events.at(-1)!;
+  terminal.type = "response.failed";
+  terminal.response = { id: "resp_1", status: "failed", output: [] };
+  const received = await readEvents(events);
+  const done = received.find((event) => event.type === "response.output_item.done" && event.item.type === "message")!;
+  assert.ok(done.type === "response.output_item.done");
+  assert.equal(isCompletedOutputItem(done.item), false);
+  assert.ok(received.some((event) => event.type === "response.function_call_arguments.done"));
+});
+
+test("重复 call_id 在完整项确认时立即拒绝，不必等请求终态", async () => {
+  const events = sampleEvents();
+  for (const event of events) {
+    if ((event.type === "response.output_item.added" || event.type === "response.output_item.done") && (event.item as { id: string }).id === "item_1") {
+      (event.item as { call_id: string }).call_id = "call_0";
+    }
+  }
+  await assert.rejects(readEvents(events), /call_id 重复/);
+});
 
 /** 从本地模拟流读取所有事件，检查与正式请求相同的校验路径。 */
 async function readEvents(events: Record<string, unknown>[]) {

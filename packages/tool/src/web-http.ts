@@ -23,14 +23,14 @@ export function parseFetchUrl(value: unknown): URL {
 }
 
 /** 显式代理由代理解析目标；其余请求使用系统 DNS 和路由，兼容 TUN/Fake-IP。 */
-async function requestPage(url: URL, signal: AbortSignal): Promise<IncomingMessage> {
+async function requestPage(url: URL, signal: AbortSignal, accept = "text/html,application/xhtml+xml,text/*,application/json"): Promise<IncomingMessage> {
   signal.throwIfAborted();
   const protocol = url.protocol === "https:" ? https : http;
   const proxy = getProxyForUrl(url.href);
   let agent: http.Agent | undefined;
   let connecting: Duplex | null | undefined;
   const options: RequestOptions = { method: "GET", signal, agent: false,
-    headers: { "user-agent": "Tilot/0.1 web_fetch", accept: "text/html,application/xhtml+xml,text/*,application/json", "accept-encoding": "gzip,deflate,br" },
+    headers: { "user-agent": "Tilot/0.1 web_fetch", accept, "accept-encoding": "gzip,deflate,br" },
   };
   if (proxy) {
     let proxyUrl: URL;
@@ -65,8 +65,8 @@ async function requestPage(url: URL, signal: AbortSignal): Promise<IncomingMessa
 }
 
 /** 同时限制压缩前下载量和解压后正文，不能仅信 Content-Length。 */
-async function readBody(response: IncomingMessage, signal: AbortSignal): Promise<Buffer> {
-  if (Number(response.headers["content-length"]) > MAX_DOWNLOAD_BYTES) throw new Error("网页下载超过 2 MiB 上限。");
+async function readBody(response: IncomingMessage, signal: AbortSignal, limit = MAX_DOWNLOAD_BYTES): Promise<Buffer> {
+  if (Number(response.headers["content-length"]) > limit) throw new Error("网页下载超过 2 MiB 上限。");
   const encoding = (response.headers["content-encoding"] ?? "identity").toLowerCase().trim();
   const decoder = encoding === "gzip" ? createGunzip() : encoding === "deflate" ? createInflate()
     : encoding === "br" ? createBrotliDecompress() : encoding === "identity" ? new PassThrough() : undefined;
@@ -75,7 +75,7 @@ async function readBody(response: IncomingMessage, signal: AbortSignal): Promise
     let bytes = 0;
     for await (const chunk of source) {
       bytes += chunk.length;
-      if (bytes > MAX_DOWNLOAD_BYTES) throw new Error("网页下载超过 2 MiB 上限。");
+      if (bytes > limit) throw new Error("网页下载超过 2 MiB 上限。");
       yield chunk;
     }
   }, decoder, async (source) => {
@@ -83,11 +83,30 @@ async function readBody(response: IncomingMessage, signal: AbortSignal): Promise
     let bytes = 0;
     for await (const chunk of source) {
       bytes += chunk.length;
-      if (bytes > MAX_DOWNLOAD_BYTES) throw new Error("网页解压后的正文超过 2 MiB 上限。");
+      if (bytes > limit) throw new Error("网页解压后的正文超过 2 MiB 上限。");
       chunks.push(chunk);
     }
     return Buffer.concat(chunks);
   }, { signal });
+}
+
+/** 图片不套用网页正文的字节上限；共用代理、重定向、解压与取消机制。 */
+export async function fetchHttpImage(value: string, signal: AbortSignal): Promise<Buffer> {
+  let current = parseFetchUrl(value);
+  for (let redirects = 0; ; redirects++) {
+    signal.throwIfAborted();
+    const response = await requestPage(current, signal, "image/png,image/jpeg,image/webp");
+    try {
+      const status = response.statusCode!;
+      if ([301, 302, 303, 307, 308].includes(status)) {
+        if (redirects >= MAX_REDIRECTS || !response.headers.location) throw new Error("图片重定向超过上限或缺少 Location。");
+        current = parseFetchUrl(new URL(response.headers.location, current).href);
+        continue;
+      }
+      if (status < 200 || status >= 300) throw new Error(`图片请求失败，HTTP ${status}。`);
+      return await readBody(response, signal, Infinity);
+    } finally { response.destroy(); }
+  }
 }
 
 /** 各次重定向重新验证 HTTP(S) URL，始终使用匿名请求；错误响应不作为正文保存。 */

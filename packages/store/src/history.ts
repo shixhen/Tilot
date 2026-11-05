@@ -1,10 +1,11 @@
 import { randomUUID } from "node:crypto";
+import { isDeepStrictEqual } from "node:util";
 import type Database from "better-sqlite3";
-import type { AttemptCompletion, ModelAttempt, StoredToolCall, ToolResult } from "./history-types.ts";
+import type { AttemptCompletion, CompletedOutput, ModelAttempt, StoredToolCall, ToolResult } from "./history-types.ts";
 import { validatePagination } from "./pagination.ts";
 
 /** 数据库中的请求记录；完整 SDK 响应以 JSON 保存。 */
-type AttemptRow = Omit<ModelAttempt, "response" | "reasoningTimings"> & { responseJson: string | null; reasoningTimingsJson: string };
+type AttemptRow = Omit<ModelAttempt, "response" | "reasoningTimings" | "completedOutputs"> & { responseJson: string | null; reasoningTimingsJson: string; completedOutputsJson: string };
 
 /** 数据库中的工具记录；完整 SDK 结果以 JSON 保存。 */
 type ToolCallRow = Omit<StoredToolCall, "result"> & { resultJson: string | null };
@@ -18,7 +19,7 @@ export class ModelHistoryStore {
     this.database = database;
   }
 
-  /** 开始一次请求，绑定当前轮次的输入边界；前次工具结果未补齐时不能发起下一次请求。 */
+  /** 未决调用阻止继续；旧中断轮次可由 Context 配 unknown 说明后继续，不改写实际结果。 */
   startAttempt(turnId: string, inputThroughId: number): ModelAttempt {
     return this.database.transaction(() => {
       const turn = this.database.prepare<[string, number], { threadId: string }>(`
@@ -32,7 +33,7 @@ export class ModelHistoryStore {
         SELECT 1 FROM tool_calls
         JOIN model_attempts ON model_attempts.id = tool_calls.attemptId
         JOIN turns ON turns.id = model_attempts.turnId
-        WHERE turns.threadId = ? AND tool_calls.resultJson IS NULL LIMIT 1
+        WHERE turns.threadId = ? AND turns.status != 'interrupted' AND tool_calls.resultJson IS NULL LIMIT 1
       `).get(turn.threadId);
       if (pending) {
         throw new Error("该任务仍有工具调用缺少结果，请先核对并补齐。");
@@ -46,39 +47,83 @@ export class ModelHistoryStore {
     }).immediate();
   }
 
-  /** 原子保存请求终态及工具意图；只为成功响应登记调用，不修改原始响应或解析参数。 */
+  /** 完整输出先于界面通知落库；工具仅登记意图，成功终态前不能执行。 */
+  saveCompletedOutput(id: string, output: CompletedOutput, diagnostics: Pick<AttemptCompletion, "response" | "firstTokenMs" | "reasoningTimings"> = {}): void {
+    if (!Number.isSafeInteger(output.outputIndex) || output.outputIndex < 0 || !output.item.id) throw new Error("完整输出缺少有效位置或标识。");
+    if ("status" in output.item && output.item.status !== undefined && output.item.status !== "completed") throw new Error("不能保存未完成的输出项。");
+    this.database.transaction(() => {
+      const attempt = this.getAttempt(id);
+      if (!attempt || attempt.status !== "running") throw new Error("请求尝试不存在或已结束。");
+      const existing = attempt.completedOutputs.find((entry) => entry.outputIndex === output.outputIndex || entry.item.id === output.item.id);
+      if (existing) {
+        if (!isDeepStrictEqual(existing, output)) throw new Error("已保存的完整输出不能被改写或移动。");
+        return;
+      }
+      const outputs = [...attempt.completedOutputs, output].sort((a, b) => a.outputIndex - b.outputIndex);
+      const updated = this.database.prepare(`
+        UPDATE model_attempts SET completedOutputsJson = ?, responseJson = ?, firstTokenMs = COALESCE(?, firstTokenMs), reasoningTimingsJson = ?
+          WHERE id = ? AND status = 'running'
+          AND EXISTS (SELECT 1 FROM turns WHERE turns.id = model_attempts.turnId AND turns.status = 'running')
+      `).run(JSON.stringify(outputs), JSON.stringify(diagnostics.response ?? attempt.response), diagnostics.firstTokenMs ?? null,
+        JSON.stringify(diagnostics.reasoningTimings ?? attempt.reasoningTimings), id);
+      if (updated.changes !== 1) throw new Error("请求所属轮次已结束。");
+      this.registerToolCalls(id, [output], Date.now());
+    })();
+  }
+
+  /** 请求状态与完整输出独立保存；未成功的请求仅为已确认调用补未执行结果。 */
   finishAttempt(id: string, completion: AttemptCompletion): ModelAttempt {
-    const response = completion.response ?? null;
     const error = completion.error ?? null;
-    if (completion.status === "completed" && (response?.status !== "completed" || error !== null)) {
+    if (completion.status === "completed" && (completion.response?.status !== "completed" || error !== null)) {
       throw new Error("成功尝试必须提供成功响应，且不能包含本地错误。");
     }
     return this.database.transaction(() => {
+      const current = this.getAttempt(id);
+      if (!current || current.status !== "running") throw new Error("请求尝试不存在或已结束。");
+      const response = completion.response ?? current.response;
+      const outputs = completion.status === "completed" ? response!.output.map((item, outputIndex) => ({ outputIndex, item })) : current.completedOutputs;
+      if (completion.status === "completed" && current.completedOutputs.some((saved) => !isDeepStrictEqual(response!.output[saved.outputIndex], saved.item))) {
+        throw new Error("成功响应与已保存的完整输出不一致。");
+      }
       const now = Date.now();
-      const row = this.database.prepare<[string, string | null, string | null, number, number | null, number | null, string, string], AttemptRow>(`
-        UPDATE model_attempts SET status = ?, responseJson = ?, error = ?, finishedAt = ?, firstTokenMs = ?, durationMs = ?, reasoningTimingsJson = ?
+      const row = this.database.prepare<[string, string | null, string | null, number, number | null, number | null, string, string, string], AttemptRow>(`
+        UPDATE model_attempts SET status = ?, responseJson = ?, error = ?, finishedAt = ?, firstTokenMs = ?, durationMs = ?, reasoningTimingsJson = ?, completedOutputsJson = ?
         WHERE id = ? AND status = 'running'
           AND EXISTS (SELECT 1 FROM turns WHERE turns.id = model_attempts.turnId AND turns.status = 'running')
         RETURNING *
-      `).get(completion.status, response === null ? null : JSON.stringify(response), error, now, completion.firstTokenMs ?? null, completion.durationMs ?? null, JSON.stringify(completion.reasoningTimings ?? []), id);
+      `).get(completion.status, response === null ? null : JSON.stringify(response), error, now, completion.firstTokenMs ?? null, completion.durationMs ?? null,
+        JSON.stringify(completion.reasoningTimings ?? []), JSON.stringify(completion.status === "completed" ? [] : outputs), id);
       if (!row) {
         throw new Error("请求尝试不存在或已结束，或所属轮次已结束。");
       }
-      if (completion.status === "completed" && response) {
-        const insert = this.database.prepare(`
-          INSERT INTO tool_calls (id, attemptId, outputIndex, callId, createdAt) VALUES (?, ?, ?, ?, ?)
-        `);
-        for (const [index, item] of response.output.entries()) {
-          if (item.type === "function_call") {
-            insert.run(randomUUID(), id, index, item.call_id, now);
-          }
-        }
+      this.registerToolCalls(id, outputs, now);
+      if (completion.status !== "completed") {
+        const reasons = { cancelled: "用户取消了模型请求，此工具调用未执行。", interrupted: "模型请求因进程退出而中断，此工具调用未执行。",
+          failed: "模型请求失败，此工具调用未执行。", incomplete: "模型请求未完整结束，此工具调用未执行。" };
+        this.database.prepare(`
+          UPDATE tool_calls SET resultJson = json_object('type', 'function_call_output', 'call_id', callId, 'output', ?), finishedAt = ?
+          WHERE attemptId = ? AND resultJson IS NULL
+        `).run(JSON.stringify({ status: "not_executed", error: reasons[completion.status] }), now, id);
       }
       this.database.prepare(`
         UPDATE threads SET updatedAt = ? WHERE id = (SELECT threadId FROM turns WHERE id = ?)
       `).run(now, row.turnId);
       return decodeAttempt(row);
     })();
+  }
+
+  private registerToolCalls(id: string, outputs: CompletedOutput[], now: number): void {
+    const existing = this.listToolCalls(id);
+    for (const { outputIndex, item } of outputs) {
+      if (item.type !== "function_call") continue;
+      const saved = existing.find((call) => call.outputIndex === outputIndex);
+      if (saved) {
+        if (saved.callId !== item.call_id) throw new Error("完整输出与工具调用记录不一致。");
+      } else {
+        this.database.prepare("INSERT INTO tool_calls (id, attemptId, outputIndex, callId, createdAt) VALUES (?, ?, ?, ?, ?)")
+          .run(randomUUID(), id, outputIndex, item.call_id, now);
+      }
+    }
   }
 
   /** 读取一次请求，包括成功响应或失败诊断；调用方需根据 status 区分用途。 */
@@ -106,6 +151,8 @@ export class ModelHistoryStore {
   startTool(executionId: string): void {
     const result = this.database.prepare(`
       UPDATE tool_calls SET startedAt = ? WHERE id = ? AND startedAt IS NULL AND resultJson IS NULL
+        AND EXISTS (SELECT 1 FROM model_attempts JOIN turns ON turns.id = model_attempts.turnId
+          WHERE model_attempts.id = tool_calls.attemptId AND model_attempts.status = 'completed' AND turns.status = 'running')
     `).run(Date.now(), executionId);
     if (result.changes !== 1) throw new Error("工具调用不存在、已开始执行或已有结果。");
   }
@@ -128,8 +175,12 @@ export class ModelHistoryStore {
 
 /** 恢复完整 SDK 响应；数据库中的 JSON 损坏时直接报错，不丢弃历史或填充假响应。 */
 function decodeAttempt(row: AttemptRow): ModelAttempt {
-  const { responseJson, reasoningTimingsJson, ...attempt } = row;
-  return { ...attempt, response: responseJson === null ? null : JSON.parse(responseJson), reasoningTimings: JSON.parse(reasoningTimingsJson) };
+  const { responseJson, reasoningTimingsJson, completedOutputsJson, ...attempt } = row;
+  const response = responseJson === null ? null : JSON.parse(responseJson) as ModelAttempt["response"];
+  // 完整成功响应本身已是可靠快照，不在数据库重复保存整份正文。
+  const completedOutputs = attempt.status === "completed" && response
+    ? response.output.map((item, outputIndex) => ({ item, outputIndex })) : JSON.parse(completedOutputsJson) as CompletedOutput[];
+  return { ...attempt, response, reasoningTimings: JSON.parse(reasoningTimingsJson), completedOutputs };
 }
 
 /** 恢复完整 SDK 工具结果，保留 output 字符串和原始 call_id。 */

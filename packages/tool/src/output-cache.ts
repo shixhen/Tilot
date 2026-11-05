@@ -14,7 +14,7 @@ const DEFAULT_LIMITS: OutputCacheLimits = { artifactBytes: 10 * 1024 * 1024, cac
 export interface OutputArtifact { outputId: string; bytesWritten: number; artifactTruncated: boolean }
 /** 网页正文的固定来源，分页继续使用同一份抓取结果。 */
 export interface WebSource { url: string; finalUrl: string; fetchedAt: number; title?: string }
-interface OutputMetadata extends OutputArtifact { threadId: string; finishedAt: number; kind?: "shell" | "web"; source?: WebSource }
+interface OutputMetadata extends OutputArtifact { threadId: string; finishedAt: number; kind?: "shell" | "web" | "mcp"; source?: WebSource }
 
 /** 宿主数据目录中的输出缓存；一份服务共用一个实例，清理与读取串行。 */
 export class OutputCache {
@@ -32,7 +32,7 @@ export class OutputCache {
   }
 
   /** 不透明 id 定位正文，打开前预留单条上限及来源元数据容量。 */
-  async create(threadId: string, executionId: string = randomUUID(), source?: WebSource): Promise<OutputLog> {
+  async create(threadId: string, executionId: string = randomUUID(), source?: WebSource, kind: "shell" | "mcp" = "shell"): Promise<OutputLog> {
     if (!UUID.test(executionId) || !threadId) throw new Error("输出标识或任务归属无效。");
     return this.exclusive(async () => {
       await mkdir(this.directory, { recursive: true });
@@ -48,7 +48,7 @@ export class OutputCache {
             if (artifact === null) await this.remove(executionId);
             else {
               await rename(join(this.directory, `${executionId}.pending`), join(this.directory, `${executionId}.log`));
-              const metadata: OutputMetadata = { ...artifact, threadId, finishedAt: Date.now(), kind: source ? "web" : "shell", ...(source ? { source } : {}) };
+              const metadata: OutputMetadata = { ...artifact, threadId, finishedAt: Date.now(), kind: source ? "web" : kind, ...(source ? { source } : {}) };
               await writeFile(join(this.directory, `${executionId}.json`), JSON.stringify(metadata), { encoding: "utf8", flag: "wx" });
             }
           } finally { this.active.delete(executionId); }
@@ -65,7 +65,8 @@ export class OutputCache {
       try {
         await this.checkDirectory();
         const metadata = await this.metadata(outputId);
-        if (metadata.threadId !== threadId || (metadata.kind ?? "shell") !== kind || Date.now() - metadata.finishedAt > this.limits.retentionMs) throw new Error(missing);
+        const matchesKind = kind === "shell" ? metadata.kind !== "web" : metadata.kind === "web";
+        if (metadata.threadId !== threadId || !matchesKind || Date.now() - metadata.finishedAt > this.limits.retentionMs) throw new Error(missing);
         const path = join(this.directory, `${outputId}.log`);
         if (!(await lstat(path)).isFile()) throw new Error(missing);
         return await operation(path, { outputId, bytesWritten: metadata.bytesWritten, artifactTruncated: metadata.artifactTruncated }, metadata.source);
@@ -95,7 +96,7 @@ export class OutputCache {
     const metadata = JSON.parse(await readFile(path, "utf8")) as OutputMetadata;
     if (metadata.outputId !== outputId || typeof metadata.threadId !== "string" || !Number.isSafeInteger(metadata.finishedAt) ||
       !Number.isSafeInteger(metadata.bytesWritten) || metadata.bytesWritten < 0 || typeof metadata.artifactTruncated !== "boolean") throw new Error("日志元数据损坏，无法读取。");
-    if (metadata.kind !== undefined && !["shell", "web"].includes(metadata.kind)) throw new Error("缓存类型损坏，无法读取。");
+    if (metadata.kind !== undefined && !["shell", "web", "mcp"].includes(metadata.kind)) throw new Error("缓存类型损坏，无法读取。");
     if (metadata.kind === "web" && (!metadata.source || typeof metadata.source.url !== "string" || typeof metadata.source.finalUrl !== "string" ||
       !Number.isSafeInteger(metadata.source.fetchedAt) || (metadata.source.title !== undefined && typeof metadata.source.title !== "string"))) throw new Error("网页来源元数据损坏，无法读取。");
     return metadata;

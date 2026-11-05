@@ -30,7 +30,7 @@ test("按行数和 UTF-8 字节限制截断，不切断字符或丢失续读内�
   assert.equal(lines.lineCount, 200);
   assert.equal(lines.nextOffset, 201);
   assert.equal(lines.truncatedBy, "lines");
-  const extended = JSON.parse(await createToolSet(workspace).execute("read", '{"path":"many.txt","limit":2000}')).data;
+  const extended = JSON.parse(String(await createToolSet(workspace).execute("read", '{"path":"many.txt","limit":2000}'))).data;
   assert.equal(extended.lineCount, 201);
   assert.equal(extended.content, "x\n".repeat(201));
   assert.equal(extended.nextOffset, null);

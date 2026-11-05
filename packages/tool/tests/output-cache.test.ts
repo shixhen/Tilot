@@ -33,13 +33,13 @@ test("日志跨实例保留并按行续读，归属和路径参数不能越过�
   for (const args of [{}, { path: "x", outputId: artifact.outputId }, { outputId: null }, { outputId: artifact.outputId, byteOffset: 0, offset: 1 },
     { outputId: artifact.outputId, byteOffset: 0, limit: 1 }, { path: "x", byteOffset: 0 }, { outputId: artifact.outputId, byteOffset: -1 },
     { outputId: artifact.outputId, byteOffset: 0.5 }, { outputId: artifact.outputId, byteOffset: null }]) {
-    assert.equal(JSON.parse(await tools.execute("read", JSON.stringify(args))).status, "error");
+    assert.equal(JSON.parse(String(await tools.execute("read", JSON.stringify(args)))).status, "error");
   }
-  const result = JSON.parse(await tools.execute("read", JSON.stringify({ outputId: artifact.outputId })));
+  const result = JSON.parse(String(await tools.execute("read", JSON.stringify({ outputId: artifact.outputId }))));
   assert.equal(result.status, "ok");
   assert.equal(result.data.content, original);
   assert.deepEqual(await readdir(root), []);
-  for (const name of ["write", "edit"]) assert.equal(JSON.parse(await tools.execute(name, JSON.stringify({ outputId: artifact.outputId }))).status, "error");
+  for (const name of ["write", "edit"]) assert.equal(JSON.parse(String(await tools.execute(name, JSON.stringify({ outputId: artifact.outputId })))).status, "error");
 });
 
 test("超长日志行返回字符边界上的字节位置，续读可完整重组混合 UTF-8 输出", async (context) => {

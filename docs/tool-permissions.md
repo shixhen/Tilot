@@ -28,20 +28,20 @@
 
 ## 缓存与执行检查
 
-只读对话固定声明 read、ls、find、grep、web_fetch 五个工具；其他对话固定声明全部八个。项目内修改与完全访问的声明、描述、参数和顺序一致，仅执行前的审批策略不同。不在切换时重写系统提示词或历史消息，因此不会因增删工具声明破坏前缀复用；实际缓存命中仍由模型服务决定。
+只读对话固定声明 read、ls、find、grep、web_fetch、view_image 和 request_user_input_async；其他对话额外声明 write、edit、shell，并在每轮开始加载全局配置的 MCP 工具。view_image 沿用只读权限，提问不代表批准其他工具。项目内修改与完全访问的声明、描述、参数和顺序一致，仅执行前的审批策略不同。不在切换时重写系统提示词或历史消息，因此不会因增删工具声明破坏前缀复用；实际缓存命中仍由模型服务决定。
 
 执行入口另行检查只读限制，拒绝模型意外返回的修改或 shell 调用。写入在创建父目录和临时文件前判断权限；现有父目录链接按真实路径判断边界，审批后再次核对目标。原子写入继续使用受约束的目标目录，保留同文件队列、目录链接检查及 edit 的外部字节变更检查。
 
 ## 代码入口
 
-- `packages/tool/src/tool.ts`：工具声明与执行函数共同定义，`access` 明确标为 read、write 或 shell。
+- `packages/tool/src/tool.ts`：工具声明与执行函数共同定义，`access` 明确标为 read、write、shell 或 mcp。
 - `packages/tool/src/execute.ts`：固定本轮工具声明、权限检查、发起审批、执行及结果封装。
 - `packages/tool/src/local-path.ts`：模型可用的相对及绝对路径解析、写入目标和真实边界判断；`workspace.ts` 保留原子文件操作所用的受约束路径检查。
 - `packages/server/src/approvals.ts`：当前连接的等待审批，不保存长期授权。
 - `packages/protocol/src/protocol.ts`：PermissionMode、ToolApproval、审批 RPC 和事件。
 - `packages/store/src/database.ts`：版本 11 保存默认权限、对话权限及锁定时间、轮次权限快照。已有项目对话初始为项目内修改，已有普通对话为只读；有历史的对话已锁定。
 
-新增内置工具时，在对应模块维护 `definition`、`access` 和 `execute`，再加入 `createToolSet` 的集合。当前写入类工具统一使用 path 字段，审批放行的是解析后的精确目标；如果新增涉及多个文件或其他副作用的工具，应同时扩展权限判断。本批不引入外部工具加载器或 MCP。
+新增内置工具时，在对应模块维护 `definition`、`access` 和 `execute`，再加入 `createToolSet` 的集合。当前写入类工具统一使用 path 字段，审批放行的是解析后的精确目标；如果新增涉及多个文件或其他副作用的工具，应同时扩展权限判断。MCP 使用独立的 mcp 权限类别：只读不加载，项目内修改逐条审批，完全访问直接执行，详见 [MCP 接入](mcp.md)。
 
 RPC：`thread.create` 可指定初始 permissionMode，`thread.permission` 修改对话权限，`approval.list` 查询该对话的等待调用，`approval.respond` 提交单次允许或拒绝。审批事件为 `approval.requested`、`approval.resolved`；终态仍使用现有轮次与工具结果事件。
 

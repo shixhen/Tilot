@@ -1,6 +1,7 @@
 import { CornerUpLeft, LoaderCircle, X } from "lucide-react";
 import type { QueueView } from "../input-queue";
 import { Button } from "../components/ui/button";
+import { ImageGallery } from "./images";
 
 /** 输入框上方的等待区；成功完成后逐条发送，引导只提交指定消息。 */
 export function PendingInputs({ queue, running, connected, onSteer, onRemove, onResume }: {
@@ -15,7 +16,8 @@ export function PendingInputs({ queue, running, connected, onSteer, onRemove, on
     </div>
     <ol className="max-h-48 space-y-1 overflow-y-auto">
       {queue.messages.map((message) => <li key={message.id} className="flex min-w-0 items-start gap-2 rounded-lg px-1 py-1.5">
-        <p className="min-w-0 flex-1 whitespace-pre-wrap wrap-anywhere">{message.content}</p>
+        <div className="min-w-0 flex-1">{message.content && <p className="whitespace-pre-wrap wrap-anywhere">{message.content}</p>}
+          {!!message.images?.length && <ImageGallery images={message.images} />}</div>
         <div className="flex shrink-0 items-center gap-1">
           {message.status !== "waiting" ? <span className="flex items-center gap-1 text-xs text-muted-foreground"><LoaderCircle className="size-3 animate-spin" />{message.status === "steering" ? "提交引导" : "发送中"}</span>
             : <>

@@ -16,10 +16,10 @@ test("只读只声明五种读取工具，并在执行层拒绝伪造的修改�
   });
   assert.deepEqual(tools.definitions.map((tool) => tool.name), ["read", "ls", "find", "grep", "web_fetch"]);
   for (const [name, input] of [["write", { path: "new.txt", content: "坏" }], ["edit", { path: "../outside.txt", edits: [] }], ["shell", { command: "Write-Output blocked" }]] as const) {
-    const result = JSON.parse(await tools.execute(name, JSON.stringify(input), undefined, { executionId: name }));
+    const result = JSON.parse(String(await tools.execute(name, JSON.stringify(input), undefined, { executionId: name })));
     assert.match(result.error, /只读模式禁止/);
   }
-  const result = JSON.parse(await tools.execute("read", JSON.stringify({ path: "../outside.txt" })));
+  const result = JSON.parse(String(await tools.execute("read", JSON.stringify({ path: "../outside.txt" }))));
   assert.equal(result.data.content, "外部");
   assert.equal(approvals, 0);
   await assert.rejects(access(join(project, "new.txt")), { code: "ENOENT" });
@@ -39,19 +39,19 @@ test("项目内自动写入，外部调用逐次审批，拒绝时连父目录�
   } };
   const tools = createToolSet(workspace, undefined, policy);
   const execute = (path: string) => tools.execute("write", JSON.stringify({ path, content: "新文件" }), undefined, { executionId: String(requests.length) });
-  assert.equal(JSON.parse(await execute("inside.txt")).status, "ok");
+  assert.equal(JSON.parse(String(await execute("inside.txt"))).status, "ok");
   assert.equal(requests.length, 0);
   const outside = join(directory, "new", "nested", "outside.txt");
-  assert.match(JSON.parse(await execute(outside)).error, /用户拒绝/);
+  assert.match(JSON.parse(String(await execute(outside))).error, /用户拒绝/);
   await assert.rejects(access(join(directory, "new")), { code: "ENOENT" });
   allow = true;
-  assert.equal(JSON.parse(await execute(outside)).status, "ok");
+  assert.equal(JSON.parse(String(await execute(outside))).status, "ok");
   assert.equal(await readFile(outside, "utf8"), "新文件");
   assert.equal(requests.length, 2);
   assert.equal(requests[0]!.resolvedPath, outside);
   assert.deepEqual(tools.definitions, createToolSet(workspace, undefined, { mode: "full-access" }).definitions);
   const full = createToolSet(workspace, undefined, { mode: "full-access", approve: async () => { throw new Error("不应审批"); } });
-  assert.equal(JSON.parse(await full.execute("write", JSON.stringify({ path: outside, content: "完全访问" }))).status, "ok");
+  assert.equal(JSON.parse(String(await full.execute("write", JSON.stringify({ path: outside, content: "完全访问" })))).status, "ok");
   assert.equal(await readFile(outside, "utf8"), "完全访问");
 });
 
@@ -68,7 +68,7 @@ test("目录链接按真实目标审批，等待期间替换链接不会写入�
     await symlink(join(project, "inside"), join(project, "linked"), "junction");
     return true;
   } });
-  assert.equal(JSON.parse(await tools.execute("write", '{"path":"linked/file.txt","content":"不会写入"}', undefined, { executionId: "link" })).status, "error");
+  assert.equal(JSON.parse(String(await tools.execute("write", '{"path":"linked/file.txt","content":"不会写入"}', undefined, { executionId: "link" }))).status, "error");
   await assert.rejects(access(join(outside, "file.txt")), { code: "ENOENT" });
   await assert.rejects(access(join(project, "inside", "file.txt")), { code: "ENOENT" });
 });
@@ -79,7 +79,7 @@ test("项目模式每次 shell 都等待审批；取消审批后不启动命令�
   let starts = 0;
   const controller = new AbortController();
   const tools = createToolSet(workspace, undefined, { mode: "workspace-write", approve: async () => { calls++; controller.abort(); return true; } });
-  const result = JSON.parse(await tools.execute("shell", '{"command":"Write-Output blocked"}', controller.signal, { executionId: "shell", onStart: () => { starts++; } }));
+  const result = JSON.parse(String(await tools.execute("shell", '{"command":"Write-Output blocked"}', controller.signal, { executionId: "shell", onStart: () => { starts++; } })));
   assert.equal(result.status, "cancelled");
   assert.equal(calls, 1);
   assert.equal(starts, 0);

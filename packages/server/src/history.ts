@@ -1,25 +1,22 @@
-import type { Response } from "openai/resources/responses/responses";
+import type { Response, ResponseInputItem } from "openai/resources/responses/responses";
 import type { AttemptView, MessagePart, MessageView, ReasoningTiming, ToolView } from "@tilot/protocol";
-import type { Store } from "@tilot/store";
-import { getResponseToolCallsFromResponse } from "@tilot/responses/output";
+import { isImageRef } from "@tilot/protocol";
+import type { CompletedOutput, Store } from "@tilot/store";
+import { getResponseToolCallsFromResponse, isCompletedOutputItem } from "@tilot/responses/output";
 
-/** 按顺序分页读取模型请求的展示记录；只选取界面字段，不传出原始响应或失败片段。 */
+/** 按顺序分页读取已确认输出的展示记录；不传出原始响应或未完成片段。 */
 export function listAttemptViews(store: Store, turnId: string, afterSequence = 0, limit = 50): AttemptView[] {
   return store.history.listAttempts(turnId, afterSequence, limit).map((attempt) => {
-    let messages: MessageView[] = [];
+    const messages = projectCompletedMessages(attempt.completedOutputs, attempt.reasoningTimings);
     const tools: ToolView[] = [];
-    if (attempt.status === "completed") {
-      if (!attempt.response) throw new Error("成功请求缺少已保存的响应。");
-      messages = projectMessages(attempt.response, attempt.reasoningTimings);
-      for (const record of store.history.listToolCalls(attempt.id)) {
-        const call = attempt.response.output[record.outputIndex];
-        if (call?.type !== "function_call") throw new Error("工具记录与模型响应不匹配。");
-        tools.push({
-          id: record.id, outputIndex: record.outputIndex, name: call.name, arguments: call.arguments,
-          output: record.result === null ? null : typeof record.result.output === "string" ? record.result.output : JSON.stringify(record.result.output),
-          running: false, startedAt: record.startedAt, durationMs: record.durationMs,
-        });
-      }
+    for (const record of store.history.listToolCalls(attempt.id)) {
+      const call = attempt.completedOutputs.find((entry) => entry.outputIndex === record.outputIndex)?.item;
+      if (call?.type !== "function_call") throw new Error("工具记录与模型响应不匹配。");
+      tools.push({
+        id: record.id, outputIndex: record.outputIndex, name: call.name, arguments: call.arguments,
+        ...projectToolOutput(record.result?.output ?? null),
+        running: false, startedAt: record.startedAt, durationMs: record.durationMs,
+      });
     }
     return {
       id: attempt.id, turnId: attempt.turnId, sequence: attempt.sequence,
@@ -37,12 +34,29 @@ export function listAttemptViews(store: Store, turnId: string, afterSequence = 0
   });
 }
 
+/** 展示层只传图片引用；原始多模态工具结果仍完整保存在模型历史中。 */
+function projectToolOutput(output: ResponseInputItem.FunctionCallOutput["output"] | null): Pick<ToolView, "output" | "images"> {
+  if (output === null || typeof output === "string") return { output };
+  const text = output.filter((part) => part.type === "input_text").map((part) => part.text).join("\n");
+  // 引用已经保存在文本元数据中，即使图片文件损坏也能读取历史并显示取图错误。
+  let metadata;
+  try { metadata = JSON.parse(text); } catch { return { output: text }; }
+  const images = Array.isArray(metadata?.data?.images) ? metadata.data.images.filter(isImageRef) : [];
+  return { output: text, ...(images.length ? { images } : {}) };
+}
+
 /** 将成功响应投影为正文、推理和拒绝文本，实时完成事件和历史查询共用，不改变保存数据。 */
 export function projectMessages(response: Response, timings: ReasoningTiming[] = []): MessageView[] {
   if (response.status !== "completed") throw new Error("只有成功响应可以生成正式历史消息。");
   getResponseToolCallsFromResponse(response);
+  return projectCompletedMessages(response.output.map((item, outputIndex) => ({ item, outputIndex })), timings);
+}
+
+/** 输出是否已确认完整与整个请求的终态无关，保留原始位置供界面排序。 */
+function projectCompletedMessages(outputs: CompletedOutput[], timings: ReasoningTiming[]): MessageView[] {
   const messages: MessageView[] = [];
-  for (const [outputIndex, item] of response.output.entries()) {
+  for (const { outputIndex, item } of outputs) {
+    if (!isCompletedOutputItem(item)) throw new Error("正式历史中包含未完整生成的输出项。");
     const parts: MessagePart[] = [];
     if (item.type === "message") {
       for (const part of item.content) {

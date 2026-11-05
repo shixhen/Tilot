@@ -1,8 +1,12 @@
-import type { AppConfig, AttemptView, RpcRequest, Thread, ToolApproval, Turn, TurnInput } from "@tilot/protocol";
+import type { AppConfig, AttemptView, ImageData, ImageRef, RpcRequest, Thread, ToolApproval, Turn, TurnInput } from "@tilot/protocol";
 import type { BackendConnection } from "./backend";
+import type { QuestionDelivery, QuestionGroup } from "@tilot/protocol";
 
 /** 已有 RPC 方法与返回值的对应关系，让界面调用保留具体类型。 */
 interface Results {
+  "image.import": ImageRef; "image.read": ImageData;
+  "input.receipts": string[];
+  "question.pending": QuestionGroup | null; "question.draft": QuestionGroup; "question.close": QuestionGroup; "question.submit": QuestionDelivery;
   "thread.create": Thread; "thread.read": Thread | null; "thread.list": Thread[]; "thread.rename": Thread;
   "turn.start": Turn; "turn.resume": Turn; "turn.interrupt": { interrupted: boolean }; "turn.read": Turn | null;
   "turn.steer": TurnInput | null;

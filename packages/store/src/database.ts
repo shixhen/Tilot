@@ -5,7 +5,7 @@ import { DEFAULT_CONFIG } from "./config.ts";
 export function migrateDatabase(database: Database.Database): void {
   database.transaction(() => {
     const version = database.pragma("user_version", { simple: true });
-    if (typeof version !== "number" || !Number.isInteger(version) || version < 0 || version > 11) {
+    if (typeof version !== "number" || !Number.isInteger(version) || version < 0 || version > 15) {
       throw new Error("不支持此数据库版本，请使用匹配的 Tilot 版本。");
     }
     if (version === 0) {
@@ -200,6 +200,34 @@ export function migrateDatabase(database: Database.Database): void {
         UPDATE turns SET permissionMode = (SELECT permissionMode FROM threads WHERE id = turns.threadId);
       `);
       database.pragma("user_version = 11");
+    }
+    if (version < 12) {
+      database.exec(`
+        ALTER TABLE model_attempts ADD COLUMN completedOutputsJson TEXT NOT NULL DEFAULT '[]' CHECK (json_valid(completedOutputsJson));
+      `);
+      database.pragma("user_version = 12");
+    }
+    if (version < 13) {
+      database.exec(`
+        CREATE TABLE user_questions (
+          id TEXT PRIMARY KEY REFERENCES tool_calls(id),
+          threadId TEXT NOT NULL REFERENCES threads(id), turnId TEXT NOT NULL REFERENCES turns(id),
+          questionsJson TEXT NOT NULL CHECK (json_valid(questionsJson)), draftJson TEXT NOT NULL CHECK (json_valid(draftJson)),
+          status TEXT NOT NULL CHECK (status IN ('pending', 'answered', 'closed')),
+          inputId INTEGER UNIQUE REFERENCES turn_inputs(id), createdAt INTEGER NOT NULL,
+          CHECK ((status = 'answered') = (inputId IS NOT NULL))
+        ) STRICT;
+        CREATE UNIQUE INDEX questions_one_pending ON user_questions (threadId) WHERE status = 'pending';
+      `);
+      database.pragma("user_version = 13");
+    }
+    if (version < 14) {
+      database.exec("ALTER TABLE turn_inputs ADD COLUMN imagesJson TEXT NOT NULL DEFAULT '[]' CHECK (json_valid(imagesJson));");
+      database.pragma("user_version = 14");
+    }
+    if (version < 15) {
+      database.exec("ALTER TABLE turn_inputs ADD COLUMN deliveryId TEXT; CREATE UNIQUE INDEX inputs_delivery ON turn_inputs(deliveryId) WHERE deliveryId IS NOT NULL;");
+      database.pragma("user_version = 15");
     }
   }).immediate();
 }

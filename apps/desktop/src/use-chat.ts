@@ -1,10 +1,12 @@
-import { useEffect, useRef, useState } from "react";
-import type { AppConfig, PermissionMode, ReasoningEffort, ServerEvent, Thread, ToolApproval } from "@tilot/protocol";
+import { useEffect, useMemo, useRef, useState } from "react";
+import type { AppConfig, ImageRef, PermissionMode, ReasoningEffort, ServerEvent, Thread, ToolApproval } from "@tilot/protocol";
 import { BackendConnection } from "./backend";
 import { createClient, type Request } from "./client";
 import { applyEvent, loadConversation, mergeHistory, type TurnRecord } from "./conversation";
 import { InputQueue, type QueueView } from "./input-queue";
 import { StreamEvents } from "./stream-events";
+import { QuestionSession, type QuestionState } from "./questions";
+import type { QuestionDraft } from "@tilot/protocol";
 
 /** 管理连接、任务历史和实时事件；每个任务单独保存界面数据，切换不会串流。 */
 export function useChat() {
@@ -30,6 +32,8 @@ export function useChat() {
   const [historyLoading, setHistoryLoading] = useState<Record<string, boolean>>({});
   const [queues, setQueues] = useState<Record<string, QueueView>>({});
   const queue = useRef<InputQueue | null>(null);
+  const [questions, setQuestions] = useState<Record<string, QuestionState | null>>({});
+  const questionSession = useRef<QuestionSession | null>(null);
 
   /** 使用当前服务连接，连接中断后拒绝新操作。 */
   const request: Request = (method, params) => {
@@ -43,18 +47,28 @@ export function useChat() {
   }
 
   if (!queue.current) queue.current = new InputQueue({
-    start: async (threadId, input) => {
-      const turn = await request("turn.start", { threadId, input });
+    start: async (threadId, input, images, deliveryId) => {
+      const turn = await request("turn.start", { threadId, input, images, deliveryId });
       if (mounted.current) {
         setConversations((state) => ({ ...state, [threadId]: applyEvent(state[threadId] ?? [], { event: "turn.started", turn, seq: 0 }) }));
         void refreshHistory(threadId).catch(report);
       }
       return turn;
     },
-    steer: (turnId, input) => request("turn.steer", { turnId, input }),
+    steer: (turnId, input, images, deliveryId) => request("turn.steer", { turnId, input, images, deliveryId }),
+    receipts: (threadId, deliveryIds) => request("input.receipts", { threadId, deliveryIds }),
     changed: (threadId, view) => { if (mounted.current) setQueues((state) => ({ ...state, [threadId]: view })); },
     error: report,
-  });
+  }, localStorage);
+  if (!questionSession.current) questionSession.current = new QuestionSession(request, localStorage,
+    (threadId, state) => { if (mounted.current) setQuestions((current) => ({ ...current, [threadId]: state })); },
+    async (threadId, action) => {
+      await queue.current!.withPriority(threadId, async () => {
+        const delivery = await action();
+        queue.current!.observe(delivery.turn);
+        await refreshHistory(threadId);
+      });
+    });
 
   /** 读完任务列表；固定分页大小，不遗漏第 100 条以后的任务。 */
   async function refreshThreads(): Promise<void> {
@@ -96,7 +110,7 @@ export function useChat() {
   /** 一批增量只更新一次会话状态，审批及轮次事件仍立即处理。 */
   function receive(events: ServerEvent[]): void {
     if (!mounted.current) return;
-    const updates = events.filter((event) => event.event !== "approval.requested" && event.event !== "approval.resolved");
+    const updates = events.filter((event) => event.event !== "approval.requested" && event.event !== "approval.resolved" && event.event !== "question.updated");
     if (updates.length) setConversations((state) => {
       const next = { ...state };
       for (const event of updates) {
@@ -106,6 +120,7 @@ export function useChat() {
       return next;
     });
     for (const event of events) {
+      if (event.event === "question.updated") { questionSession.current!.receive(event.threadId, event.question); continue; }
       if (event.event === "approval.requested") {
         const threadId = event.approval.threadId;
         approvalRevisions.current.set(threadId, (approvalRevisions.current.get(threadId) ?? 0) + 1);
@@ -133,6 +148,7 @@ export function useChat() {
       stream.flush();
       client.current = null;
       queue.current!.setConnected(false);
+      questionSession.current!.setConnected(false);
       setConnected(false);
       setApprovals([]);
       report(error);
@@ -140,13 +156,18 @@ export function useChat() {
       connection = backend;
       if (!mounted.current) { backend.dispose(); return; }
       client.current = createClient(backend);
+      await queue.current!.restore();
+      if (!mounted.current) return;
       setConnected(true);
       queue.current!.setConnected(true);
+      questionSession.current!.setConnected(true);
       const [config, status] = await Promise.all([request("config.get", {}), request("credentials.status", {}), refreshThreads()]);
       if (mounted.current) { setConfig(config); setConfigured(status.configured); }
     }).catch(report);
-    return () => { mounted.current = false; stream.dispose(); queue.current!.setConnected(false); client.current = null; connection?.dispose(); };
+    return () => { mounted.current = false; stream.dispose(); queue.current!.setConnected(false); questionSession.current!.dispose(); client.current = null; connection?.dispose(); };
   }, []);
+
+  useEffect(() => { if (connected && selected) void questionSession.current!.refresh(selected).catch(report); }, [connected, selected]);
 
   /** 切换或新建空白会话；已存在任务按需读取最新历史。 */
   function select(threadId: string | null, projectPath: string | null = null): void {
@@ -156,12 +177,11 @@ export function useChat() {
     if (threadId) void Promise.all([refreshHistory(threadId), refreshApprovals(threadId)]).catch(report);
   }
 
-  /** 首次发送时创建任务，输入经服务确认后清空；已结束状态不会被启动应答覆盖。 */
-  async function send(input: string): Promise<{ accepted: boolean; threadId: string | null }> {
+  /** 首次发送时创建任务；所有消息先可靠入队，再由相同投递身份提交服务。 */
+  async function send(input: string, images: ImageRef[] = [], deliveryId?: string): Promise<{ accepted: boolean; threadId: string | null }> {
     let threadId = selected;
     if (threadId && queue.current!.hasActivity(threadId)) {
-      queue.current!.enqueue(threadId, input);
-      return { accepted: true, threadId };
+      return { accepted: queue.current!.enqueue(threadId, input, images, deliveryId), threadId };
     }
     if (submitting.current) return { accepted: false, threadId };
     submitting.current = true;
@@ -169,17 +189,14 @@ export function useChat() {
     setError("");
     try {
       if (!threadId) {
-        const thread = await request("thread.create", { title: input.trim().slice(0, 36), projectPath: newProjectPath,
+        const thread = await request("thread.create", { title: input.trim().slice(0, 36) || images[0]?.name || "图片对话", projectPath: newProjectPath,
           ...(newPermissionMode === null ? {} : { permissionMode: newPermissionMode }) });
         threadId = thread.id;
         setThreads((threads) => [thread, ...threads]);
         setSelected(threadId);
       }
       queue.current!.resume(threadId);
-      const turn = await request("turn.start", { threadId, input });
-      setConversations((state) => ({ ...state, [turn.threadId]: applyEvent(state[turn.threadId] ?? [], { event: "turn.started", turn, seq: 0 }) }));
-      void refreshHistory(threadId).catch(report);
-      return { accepted: true, threadId };
+      return { accepted: queue.current!.enqueue(threadId, input, images, deliveryId), threadId };
     } catch (error) {
       report(error);
       if (threadId) void refreshThreads().catch(report);
@@ -249,12 +266,21 @@ export function useChat() {
     setConfigured(status.configured);
   }
 
+  const questionActions = useMemo(() => ({
+    editQuestion: (draft: QuestionDraft) => { if (selected) questionSession.current!.edit(selected, draft); },
+    submitQuestion: () => { if (selected) void questionSession.current!.submit(selected); },
+    closeQuestion: () => { if (selected) void questionSession.current!.close(selected); },
+    retryQuestion: () => { if (selected) questionSession.current!.retry(selected); },
+  }), [selected]);
+
   return { connected, threads, selected, newProjectPath, records: selected ? conversations[selected] ?? [] : [], config, configured,
+    ...questionActions, question: selected ? questions[selected] ?? null : null,
     newPermissionMode, permissionBusy, approvals: approvals.filter((item) => item.threadId === selected), approvalBusy, choosePermission, respondApproval,
     queue: selected ? queues[selected] ?? { messages: [], paused: false, busy: false } : { messages: [], paused: false, busy: false },
     steer: (id: string) => selected ? queue.current!.steer(selected, id) : Promise.resolve(),
     removeQueued: (id: string) => { if (selected) queue.current!.remove(selected, id); },
     resumeQueue: () => { if (selected) queue.current!.resume(selected); },
     error, busy, historyLoading: selected ? historyLoading[selected] ?? false : false,
+    knownDeliveries: async (deliveryIds: string[]) => [...queue.current!.pendingDeliveryIds(), ...await request("input.receipts", { deliveryIds })],
     request, select, send, resume, stop, updateThread, updateDefaults, refreshConfig };
 }
