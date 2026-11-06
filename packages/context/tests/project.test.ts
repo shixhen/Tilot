@@ -57,3 +57,31 @@ test("不通过项目内目录链接加载外部技能，预先取消不读取",
   await assert.rejects(loadProjectContext(root), /内部链接/);
   await assert.rejects(loadProjectContext(root, AbortSignal.abort()), { name: "AbortError" });
 });
+
+test("项目技能覆盖同名全局技能，全局冲突项都跳过并报告文件", async (context) => {
+  const root = await project(context);
+  const globalDirectory = join(await project(context), ".tilot", "skills");
+  const projectDirectory = join(root, ".tilot", "skills");
+  for (const [directory, folder, name, description] of [
+    [projectDirectory, "review", "review", "项目审查流程"],
+    [globalDirectory, "shared-review", "review", "全局审查流程"],
+    [globalDirectory, "docs", "docs", "全局文档流程"],
+    [globalDirectory, "duplicate-a", "duplicate", "冲突版本 A"],
+    [globalDirectory, "duplicate-b", "duplicate", "冲突版本 B"],
+  ] as const) {
+    const skillDirectory = join(directory, folder);
+    await mkdir(skillDirectory, { recursive: true });
+    await writeFile(join(skillDirectory, "SKILL.md"), `---\nname: ${name}\ndescription: ${description}\n---\n正文`, "utf8");
+  }
+
+  const loaded = await loadProjectContext(root, undefined, globalDirectory);
+  assert.deepEqual(loaded.skills, [
+    { name: "review", description: "项目审查流程", path: ".tilot/skills/review/SKILL.md" },
+    { name: "docs", description: "全局文档流程", path: join(globalDirectory, "docs", "SKILL.md") },
+  ]);
+  assert.equal(loaded.warnings?.length, 1);
+  const warning = loaded.warnings![0]!;
+  assert.match(warning, /同名全局技能 duplicate/);
+  assert.ok(warning.includes(join(globalDirectory, "duplicate-a", "SKILL.md")));
+  assert.ok(warning.includes(join(globalDirectory, "duplicate-b", "SKILL.md")));
+});

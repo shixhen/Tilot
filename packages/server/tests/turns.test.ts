@@ -19,6 +19,44 @@ import { type ImageRef, type ImageData, type Turn, type AttemptView } from "@til
 import { png } from "../../tool/tests/image-fixture.ts";
 import { httpFixture } from "../../tool/tests/http-fixture.ts";
 
+test("普通对话按需读取全局技能，后续请求刷新索引且坏文件每轮只提示一次", { timeout: 10000 }, async (context) => {
+  const model = await mockModel(context);
+  const session = openSession(context, model.baseURL);
+  const path = join(session.globalSkillsDirectory, "guide", "SKILL.md");
+  const invalidPath = join(session.globalSkillsDirectory, "invalid", "SKILL.md");
+  mkdirSync(dirname(path), { recursive: true });
+  mkdirSync(dirname(invalidPath), { recursive: true });
+  const body = "仅通过工具读取的技能正文";
+  writeFileSync(path, `---\nname: guide\ndescription: 初始技能描述\n---\n${body}`, "utf8");
+  writeFileSync(invalidPath, "---\nname: invalid\n---\n缺少描述", "utf8");
+
+  const thread = session.store.createThread("普通对话使用全局技能");
+  const turnId = await session.start(thread.id, "start-global-skill");
+  await session.waitFor((message) => "event" in message && message.event === "message.delta" && message.itemId === "response_0_message");
+  const firstInstructions = String(model.requests[0]!.instructions);
+  assert.match(firstInstructions, /初始技能描述/);
+  assert.ok(firstInstructions.includes(JSON.stringify(path)));
+  assert.ok(!firstInstructions.includes(body));
+  assert.doesNotMatch(firstInstructions, /"name":"invalid"/);
+
+  writeFileSync(path, `---\nname: guide\ndescription: 更新后的技能描述\n---\n${body}`, "utf8");
+  model.finish(0, false, [{ name: "read", arguments: JSON.stringify({ path }) }]);
+  await session.waitFor((message) => "event" in message && message.event === "message.delta" && message.itemId === "response_1_message");
+  assert.match(String(model.requests[1]!.instructions), /更新后的技能描述/);
+  const input = model.requests[1]!.input as { type?: string; output?: string }[];
+  const result = JSON.parse(input.find((item) => item.type === "function_call_output")!.output!);
+  assert.equal(result.status, "ok");
+  assert.ok(result.data.content.includes(body));
+
+  model.finish(1);
+  await session.waitFor((message) => "event" in message && message.event === "turn.finished" && message.turn.id === turnId);
+  assert.equal(session.store.getTurn(turnId)?.status, "completed");
+  const notices = session.received.filter((message) => "event" in message && message.event === "turn.notice");
+  assert.equal(notices.length, 1);
+  assert.ok(notices[0]!.message.includes(invalidPath));
+  assert.match(notices[0]!.message, /name 和 description/);
+});
+
 test("慢图片下载不会阻塞当前轮次的停止请求", { timeout: 10000 }, async (context) => {
   const model = await mockModel(context); const session = openSession(context, model.baseURL);
   const received = Promise.withResolvers<void>(); const release = Promise.withResolvers<void>();
@@ -267,7 +305,8 @@ function openSession(context: TestContext, baseURL: string) {
       notifications.emit("message");
     }
   });
-  const serving = serveStdio(store, input, output, new McpManager(join(directory, "mcp.json")));
+  const globalSkillsDirectory = join(directory, "global-skills");
+  const serving = serveStdio(store, input, output, { mcp: new McpManager(join(directory, "mcp.json")), globalSkillsDirectory });
   // 出错断连测试会在后面断言拒绝，先挂接处理以免等待消息时出现未处理拒绝。
   void serving.catch(() => {});
   context.after(async () => {
@@ -301,7 +340,7 @@ function openSession(context: TestContext, baseURL: string) {
     assert.ok(result.success && result.result && !Array.isArray(result.result) && "threadId" in result.result);
     return result.result.id;
   }
-  return { store, input, output, serving, received, waitFor, request, start };
+  return { store, input, output, serving, received, waitFor, request, start, globalSkillsDirectory };
 }
 
 test("MCP 真实子进程经过行协议审批、输出计时和连接退出清理，单服务错误独立通知", { timeout: 10000 }, async (context) => {

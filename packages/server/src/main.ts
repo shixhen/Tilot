@@ -1,3 +1,5 @@
+import { homedir } from "node:os";
+import { join } from "node:path";
 import { acquireServiceLock, Store } from "@tilot/store";
 import { getDefaultDataDirectory } from "./data-directory.ts";
 import { serveStdio } from "./stdio.ts";
@@ -10,7 +12,7 @@ async function main(): Promise<void> {
     const store = new Store(directory);
     try {
       store.recoverInterruptedTurns();
-      await serveStdio(store, process.stdin, process.stdout);
+      await serveStdio(store, process.stdin, process.stdout, { globalSkillsDirectory: join(homedir(), ".tilot", "skills") });
     } finally { store.close(); }
   } finally {
     unlock();

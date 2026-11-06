@@ -3,11 +3,10 @@ import type { Readable, Writable } from "node:stream";
 import type { Store } from "@tilot/store";
 import type { ServerMessage } from "@tilot/protocol";
 import { handleRpcLine } from "./rpc.ts";
-import { TurnManager } from "./turn-manager.ts";
-import type { McpManager } from "@tilot/tool";
+import { TurnManager, type TurnManagerOptions } from "./turn-manager.ts";
 
 /** 按 UTF-8 JSON Lines 收发请求及事件；启动请求不等待模型，输入关闭后取消活动轮次。 */
-export async function serveStdio(store: Store, input: Readable, output: Writable, mcp?: McpManager): Promise<void> {
+export async function serveStdio(store: Store, input: Readable, output: Writable, options?: TurnManagerOptions): Promise<void> {
   const lines = createInterface({ input, crlfDelay: Infinity });
   const images = new Set<Promise<void>>();
   const shutdown = new AbortController();
@@ -32,7 +31,7 @@ export async function serveStdio(store: Store, input: Readable, output: Writable
     writes = next.catch(onError);
     return next;
   };
-  const turns = new TurnManager(store, send, onError, mcp);
+  const turns = new TurnManager(store, send, onError, options);
   try {
     for await (const line of lines) {
       if (transportError) throw transportError;

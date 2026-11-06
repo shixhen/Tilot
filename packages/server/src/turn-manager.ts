@@ -8,6 +8,11 @@ import { readPrompt } from "@tilot/context";
 import { ApprovalManager } from "./approvals.ts";
 import { McpManager } from "@tilot/tool";
 
+export interface TurnManagerOptions {
+  mcp?: McpManager;
+  globalSkillsDirectory?: string;
+}
+
 /** 当前进程持有的执行句柄，关闭连接时取消并等待 Core 完成落库。 */
 interface ActiveTurn {
   controller: AbortController;
@@ -18,6 +23,7 @@ interface ActiveTurn {
 export class TurnManager {
   readonly approvals: ApprovalManager;
   private readonly mcp: McpManager;
+  private readonly globalSkillsDirectory: string | undefined;
   private readonly store: Store;
   private readonly send: (event: ServerEvent) => Promise<void>;
   private readonly onFatal: (error: Error) => void;
@@ -26,11 +32,12 @@ export class TurnManager {
   private closed = false;
 
   /** 绑定存储和事件出口；无法保存状态或交付事件时由连接负责人关闭服务。 */
-  constructor(store: Store, send: (event: ServerEvent) => Promise<void>, onFatal: (error: Error) => void, mcp = new McpManager()) {
+  constructor(store: Store, send: (event: ServerEvent) => Promise<void>, onFatal: (error: Error) => void, options: TurnManagerOptions = {}) {
     this.store = store;
     this.send = send;
     this.onFatal = onFatal;
-    this.mcp = mcp;
+    this.mcp = options.mcp ?? new McpManager();
+    this.globalSkillsDirectory = options.globalSkillsDirectory;
     this.approvals = new ApprovalManager((event) => this.emit(event));
   }
 
@@ -59,6 +66,7 @@ export class TurnManager {
     let current: Turn | undefined;
     execution.done = runTurn(this.store, client, {
       threadId, input, images, signal: execution.controller.signal, mcp: this.mcp,
+      ...(this.globalSkillsDirectory ? { globalSkillsDirectory: this.globalSkillsDirectory } : {}),
       ...(turn ? { turn } : {}),
       ...(deliveryId ? { deliveryId } : {}),
       onApproval: (request, signal) => this.approvals.request({ ...request, threadId }, signal),
