@@ -62,7 +62,7 @@ function Reasoning({ text, live, timing }: { text: string; live: boolean; timing
       <div ref={box} onScroll={(event) => {
         const node = event.currentTarget;
         follow.current = node.scrollHeight - node.scrollTop - node.clientHeight < 16;
-      }} className={`mt-2 border-l-2 pl-4 ${compact ? "max-h-36 overflow-hidden mask-t-from-75%" : "max-h-72 overflow-auto"}`}><MessageMarkdown text={text} streaming={live} /></div>
+      }} className={`mt-2 border-l-2 pl-4 ${compact ? "max-h-36 overflow-hidden mask-t-from-75%" : "max-h-72 overflow-auto"}`}><MessageMarkdown text={text} streaming={live} autoLoadImages={false} /></div>
     </CollapsibleContent>
   </Collapsible>;
 }

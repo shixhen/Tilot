@@ -37,6 +37,113 @@ test("缩略图只读取本地图片，点击打开应用内预览，可缩放�
   } finally { await act(async () => root.unmount()); win.close(); }
 });
 
+test("正文图片进入可见区域就显示缩略图，点击放大，右键复制原始地址，失败后可重试", async () => {
+  const dom = new JSDOM('<!doctype html><div id="root"></div>', { url: "http://localhost", pretendToBeVisual: true });
+  const win = dom.window;
+  for (const key of ["window", "document", "HTMLElement", "Element", "Node", "NodeFilter", "HTMLInputElement", "MutationObserver", "Event", "KeyboardEvent", "CustomEvent", "getComputedStyle"] as const) {
+    Object.defineProperty(globalThis, key, { value: key === "window" ? win : win[key], configurable: true });
+  }
+  Object.defineProperty(globalThis, "IS_REACT_ACT_ENVIRONMENT", { value: true, configurable: true });
+  const observed = new Map<Element, () => void>();
+  Object.defineProperty(globalThis, "IntersectionObserver", {
+    configurable: true,
+    value: class {
+      private readonly callback: (entries: { isIntersecting: boolean }[]) => void;
+      private element?: Element;
+      constructor(callback: (entries: { isIntersecting: boolean }[]) => void) { this.callback = callback; }
+      observe(element: Element) {
+        this.element = element;
+        observed.set(element, () => this.callback([{ isIntersecting: true }]));
+      }
+      disconnect() { if (this.element) observed.delete(this.element); }
+    },
+  });
+  const copied: string[] = [];
+  Object.defineProperty(navigator, "clipboard", {
+    configurable: true, value: { writeText: async (text: string) => { copied.push(text); } },
+  });
+  const { createRoot } = await import("react-dom/client");
+  const { ImageProvider } = await import("../src/workspace/images.tsx");
+  const { MessageMarkdown } = await import("../src/workspace/markdown.tsx");
+  const image: ImageRef = { id: "a".repeat(64), name: "截图 A.png", bytes: 70, mimeType: "image/png" };
+  const dataUrl = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+jRZkAAAAASUVORK5CYII=";
+  const calls: { method: string; params: unknown }[] = [];
+  let remoteFails = true;
+  const request = (async (method: string, params: { url?: string }) => {
+    calls.push({ method, params });
+    if (method === "image.read") return { image, dataUrl };
+    if (params.url && remoteFails) throw new Error("下载失败");
+    return image;
+  }) as Request;
+  const container = win.document.getElementById("root")!;
+  const root = createRoot(container);
+  const click = async (selector: string) => {
+    const button = win.document.querySelector<HTMLButtonElement>(selector);
+    assert.ok(button, selector);
+    await act(async () => button.click());
+  };
+  const reveal = async (name: string) => {
+    const element = container.querySelector(`[aria-label="预览图片 ${name}"]`)!;
+    const notify = observed.get(element);
+    assert.ok(notify, name);
+    await act(async () => notify());
+  };
+  const copyAddress = async (selector: string) => {
+    const element = win.document.querySelector(selector);
+    assert.ok(element, selector);
+    const event = new win.MouseEvent("contextmenu", { bubbles: true, cancelable: true, button: 2 });
+    await act(async () => element.dispatchEvent(event));
+    assert.equal(event.defaultPrevented, true);
+    await click('[data-slot="popover-content"] button');
+    await act(async () => win.document.dispatchEvent(new win.KeyboardEvent("keydown", { key: "Escape", bubbles: true })));
+  };
+  const text = [
+    "![本地截图](<C:/tmp/截图 A.png>)",
+    "![文件网址](file:///C:/tmp/%E6%88%AA%E5%9B%BE%20A.png)",
+    "![网页图片](https://example.test/a.png)",
+    "![禁止的地址](data:text/html,test)",
+    "[![链接图片](https://example.test/a.png)](https://example.test/page)",
+  ].join("\n\n");
+  try {
+    await act(async () => root.render(createElement(ImageProvider, { request, threadId: "thread", children: createElement(MessageMarkdown, { text }) })));
+    assert.equal(calls.length, 0);
+    assert.equal(container.querySelector("img"), null);
+    assert.match(container.textContent!, /\[图片：禁止的地址\]/);
+    assert.equal(container.querySelector("a button"), null);
+    await reveal("本地截图");
+    assert.deepEqual(calls, [
+      { method: "image.import", params: { path: "C:/tmp/截图 A.png" } },
+      { method: "image.read", params: { imageId: image.id } },
+    ]);
+    assert.equal(container.querySelector('img[alt="本地截图"]')?.getAttribute("src"), dataUrl);
+    assert.equal(win.document.querySelector('[role="dialog"]'), null);
+    await copyAddress('img[alt="本地截图"]');
+    assert.deepEqual(copied, ["C:/tmp/截图 A.png"]);
+    await click('[aria-label="预览图片 本地截图"]');
+    assert.equal(win.document.querySelector('[role="dialog"] img')?.getAttribute("src"), dataUrl);
+    assert.equal(calls.length, 2);
+    await click('[data-slot="dialog-close"]');
+    await reveal("文件网址");
+    assert.equal(container.querySelector('img[alt="文件网址"]')?.getAttribute("src"), dataUrl);
+    assert.equal(calls.length, 2);
+    await reveal("网页图片");
+    assert.match(container.textContent!, /网页图片 · 加载失败，点击重试/);
+    assert.deepEqual(calls.at(-1), { method: "image.import", params: { url: "https://example.test/a.png" } });
+    remoteFails = false;
+    await click('[aria-label="预览图片 网页图片"]');
+    assert.equal(win.document.querySelector('[role="dialog"] img')?.getAttribute("src"), dataUrl);
+    await copyAddress('[role="dialog"] img');
+    assert.deepEqual(copied, ["C:/tmp/截图 A.png", "https://example.test/a.png"]);
+    await click('[data-slot="dialog-close"]');
+    assert.equal(container.querySelector('img[alt="网页图片"]')?.getAttribute("src"), dataUrl);
+  } finally {
+    await act(async () => root.unmount());
+    Reflect.deleteProperty(globalThis, "IntersectionObserver");
+    Reflect.deleteProperty(navigator, "clipboard");
+    win.close();
+  }
+});
+
 test("输入框加号提供上传菜单，图片粘贴加入附件，普通网址粘贴保持文本，失败项可重试或移除", async () => {
   const dom = new JSDOM('<!doctype html><div id="root"></div>', { url: "http://localhost", pretendToBeVisual: true }); const win = dom.window;
   for (const key of ["window", "document", "HTMLElement", "Element", "Node", "NodeFilter", "HTMLInputElement", "HTMLTextAreaElement", "MutationObserver", "Event", "KeyboardEvent", "CustomEvent", "getComputedStyle"] as const) Object.defineProperty(globalThis, key, { value: key === "window" ? win : win[key], configurable: true });

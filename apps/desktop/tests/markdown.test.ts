@@ -16,8 +16,8 @@ test("Markdown 保留代码缩进并支持未闭合代码块、表格和任务�
   assert.match(html, /<table>/);
 });
 
-// 模型内容不得执行 HTML、加载远程图片或把文件/脚本链接交给系统打开。
-test("Markdown 拒绝可执行内容与非网页链接，不生成图片请求", () => {
+// 独立渲染 Markdown 时保留图片说明，图片加载由应用的预览组件负责。
+test("Markdown 拒绝可执行内容与非网页链接，独立渲染时保留图片说明", () => {
   const html = renderToStaticMarkup(createElement(MessageMarkdown, { text: '<script>alert(1)</script>\n\n[脚本](javascript:alert%281%29) [文件](file:///C:/secret) [网页](https://example.com)\n\n![说明](https://example.com/tracker.png)' }));
   assert.doesNotMatch(html, /<script|<img|src=|href="(?:javascript|file):/);
   assert.match(html, /href="https:\/\/example.com"/);

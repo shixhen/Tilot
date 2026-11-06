@@ -1,4 +1,4 @@
-import { memo, useEffect, useMemo, useRef, useState, type ComponentProps } from "react";
+import { createContext, memo, useContext, useEffect, useMemo, useRef, useState, type ComponentProps } from "react";
 import Markdown, { type Components } from "react-markdown";
 import remarkGfm from "remark-gfm";
 import remarkMath from "remark-math";
@@ -9,6 +9,10 @@ import { Check, Copy } from "lucide-react";
 import { Button } from "../components/ui/button";
 import { useCopyText } from "../hooks/use-copy-text";
 import { normalizeMathDelimiters } from "./math";
+import { ImageReference } from "./images";
+
+const InsideLink = createContext(false);
+const AutoLoadImages = createContext(true);
 
 /** 只允许完整网页地址，阻止模型生成的脚本和本地路径导航。 */
 export function webURL(url: string): string {
@@ -39,14 +43,21 @@ export function WebLink({ href, children, title, className }: ComponentProps<"a"
     catch { setFailed(true); }
   }
 
-  return <><a href={href} title={title ?? href} className={className} onClick={(event) => { event.preventDefault(); void open(); }}>{children}</a>{failed && <span role="status" className="text-destructive">（无法打开链接）</span>}</>;
+  return <><a href={href} title={title ?? href} className={className} onClick={(event) => { event.preventDefault(); void open(); }}><InsideLink.Provider value={true}>{children}</InsideLink.Provider></a>{failed && <span role="status" className="text-destructive">（无法打开链接）</span>}</>;
+}
+
+function MarkdownImage({ alt, src }: ComponentProps<"img">) {
+  const inLink = useContext(InsideLink);
+  const autoLoad = useContext(AutoLoadImages);
+  const reference = !inLink && typeof src === "string" ? src : undefined;
+  return <ImageReference key={reference} src={reference} alt={alt} autoLoad={autoLoad} />;
 }
 
 /** 组件类型保持稳定，流式更新时不重新挂载表格等已有内容。 */
 const components: Components = {
   pre: CodeBlock,
   a: WebLink,
-  img: ({ alt }) => <span className="text-muted-foreground">[图片：{alt || "未提供说明"}]</span>,
+  img: MarkdownImage,
   table: ({ children }) => <div className="my-4 overflow-x-auto rounded-lg border"><table>{children}</table></div>,
 };
 
@@ -100,8 +111,8 @@ function rehypeStreamTail() {
   };
 }
 
-/** 渲染 GFM 与数学公式，禁用 HTML 和自动图片请求；streaming 时普通新文字淡入。 */
-export const MessageMarkdown = memo(function MessageMarkdown({ text, streaming = false }: { text: string; streaming?: boolean }) {
+/** 渲染 GFM 与数学公式，正文图片交给本地图片服务，流式新文字淡入。 */
+export const MessageMarkdown = memo(function MessageMarkdown({ text, streaming = false, autoLoadImages = true }: { text: string; streaming?: boolean; autoLoadImages?: boolean }) {
   const [settledText, setSettledText] = useState<string | null>(null);
   const markdown = useMemo(() => normalizeMathDelimiters(text), [text]);
   // 输出暂停时显示完整末尾，避免等待网络或工具期间最后几个字一直透明。
@@ -110,6 +121,7 @@ export const MessageMarkdown = memo(function MessageMarkdown({ text, streaming =
     const timer = setTimeout(() => setSettledText(text), 240);
     return () => clearTimeout(timer);
   }, [text, streaming]);
-  return <div className="message-prose"><Markdown skipHtml remarkPlugins={[remarkGfm, remarkMath]}
-    rehypePlugins={[[rehypeKatex, { trust: false, strict: false }], ...(streaming && settledText !== text ? [rehypeStreamTail] : [])]} urlTransform={webURL} components={components}>{markdown}</Markdown></div>;
+  return <div className="message-prose"><AutoLoadImages.Provider value={autoLoadImages}><Markdown skipHtml remarkPlugins={[remarkGfm, remarkMath]}
+    rehypePlugins={[[rehypeKatex, { trust: false, strict: false }], ...(streaming && settledText !== text ? [rehypeStreamTail] : [])]}
+    urlTransform={(url, key, node) => key === "src" && node.tagName === "img" ? url : webURL(url)} components={components}>{markdown}</Markdown></AutoLoadImages.Provider></div>;
 });

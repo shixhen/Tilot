@@ -41,4 +41,6 @@ function PopoverContent({
   )
 }
 
-export { Popover, PopoverTrigger, PopoverContent }
+const PopoverAnchor = PopoverPrimitive.Anchor
+
+export { Popover, PopoverAnchor, PopoverTrigger, PopoverContent }
