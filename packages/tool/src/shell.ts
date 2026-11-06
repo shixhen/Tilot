@@ -12,6 +12,8 @@ import { resolveWorkspacePath, type Workspace } from "./workspace.ts";
 const DEFAULT_TIMEOUT_SECONDS = 300;
 const MAX_TIMEOUT_SECONDS = 600;
 const UPDATE_INTERVAL_MS = 100;
+const EXIT_DRAIN_IDLE_MS = 250;
+const EXIT_DRAIN_LIMIT_MS = 1000;
 
 export interface ShellInput { command: string; timeoutSeconds?: number }
 /** 可记录的命令终态；日志失败不抹掉已知退出信息，也不重新执行命令。 */
@@ -34,7 +36,7 @@ export function createShellTool(workspace: Workspace, host?: ToolHost): Tool {
     access: "shell",
     definition: {
       type: "function", name: "shell", strict: false,
-      description: `在项目根目录执行独立 Windows PowerShell 5.1 命令，不是 Bash。输入输出用 UTF-8，不支持交互或后台服务。默认 ${DEFAULT_TIMEOUT_SECONDS} 秒，最多 ${MAX_TIMEOUT_SECONDS} 秒。输出只返回末尾 ${MAX_OUTPUT_LINES} 行或 ${MAX_OUTPUT_BYTES / 1024} KiB，partialLine 表示末尾预览的首行不完整。outputId 可用 read 续读当前任务日志；日志最多保存 10 MiB，保留 7 天，总缓存 256 MiB，artifactTruncated 表示缓存不完整，logError 表示保存失败。取消和超时返回已取得的输出与退出信息。修改文件前先读取；非零退出、日志失败或取消不表示没有副作用，不要自动重跑命令。`,
+      description: `在项目根目录执行独立 Windows PowerShell 5.1 命令，不是 Bash。输入输出用 UTF-8，不支持交互输入。前台退出后收尾输出，命令启动的独立会话由对应工具关闭。默认 ${DEFAULT_TIMEOUT_SECONDS} 秒，最多 ${MAX_TIMEOUT_SECONDS} 秒。输出只返回末尾 ${MAX_OUTPUT_LINES} 行或 ${MAX_OUTPUT_BYTES / 1024} KiB，partialLine 表示末尾预览的首行不完整。outputId 可用 read 续读当前任务日志；日志最多保存 10 MiB，保留 7 天，总缓存 256 MiB，artifactTruncated 表示缓存不完整，logError 表示保存失败。取消和超时返回已取得的输出与退出信息。修改文件前先读取；非零退出、日志失败或取消不表示没有副作用，不要自动重跑命令。`,
       parameters: { type: "object", additionalProperties: false, required: ["command"], properties: {
         command: { type: "string", description: "PowerShell 命令文本，从项目根目录开始，每次独立执行。" },
         timeoutSeconds: { type: "integer", minimum: 1, maximum: MAX_TIMEOUT_SECONDS, description: `运行时限，单位秒；默认 ${DEFAULT_TIMEOUT_SECONDS}。` },
@@ -82,6 +84,8 @@ export async function runShell(workspace: Workspace, input: ShellInput, signal?:
     const output = new OutputAccumulator();
     const streams = [child.stdout, child.stderr];
     let closed = false;
+    let releasedOutput = false;
+    let exitedAt: number | undefined;
     let status: ShellResult["status"] = "completed";
     let stopping: Promise<void> | undefined;
     let processing = Promise.resolve();
@@ -90,28 +94,52 @@ export async function runShell(workspace: Workspace, input: ShellInput, signal?:
     let updateError: unknown;
     let lastUpdate = -Infinity;
     let updateTimer: ReturnType<typeof setTimeout> | undefined;
+    let drainTimer: ReturnType<typeof setTimeout> | undefined;
+    let timeout: ReturnType<typeof setTimeout> | undefined;
     let updateQueued = false;
     let rejectExit!: (error: unknown) => void;
 
     const exit = new Promise<number | null>((resolve, reject) => {
       rejectExit = reject;
       child.once("error", reject);
-      child.once("close", (code) => { closed = true; clearTimeout(updateTimer); resolve(code); });
+      child.once("exit", () => {
+        exitedAt = performance.now();
+        clearTimeout(timeout);
+        clearTimeout(updateTimer);
+        drainOutput();
+      });
+      child.once("close", (code) => {
+        closed = true;
+        clearTimeout(updateTimer);
+        clearTimeout(drainTimer);
+        resolve(code);
+      });
     });
     // 提前挂接拒绝处理；输出消费仍会在 finally 等待，不能留下未处理的 Promise。
     void exit.catch(() => {});
 
     function stop(reason: "cancelled" | "timed_out"): void {
-      if (closed || stopping || child.pid === undefined) return;
+      if (exitedAt !== undefined || closed || stopping || child.pid === undefined) return;
       status = reason;
       stopping = stopProcessTree(child.pid, systemDirectory).catch(() => {
-        if (!closed) throw new Error("终止命令进程树失败，无法确认所有进程已停止。");
+        if (!closed || releasedOutput) throw new Error("终止命令进程树失败，无法确认所有进程已停止。");
       });
       void stopping.catch(rejectExit);
     }
 
+    /** 前台进程退出后排空在途输出，再释放被独立子进程继承的管道。 */
+    function drainOutput(): void {
+      if (exitedAt === undefined || closed || pending !== 0) return;
+      const remaining = EXIT_DRAIN_LIMIT_MS - (performance.now() - exitedAt);
+      drainTimer = setTimeout(() => {
+        releasedOutput = true;
+        for (const stream of streams) stream.destroy();
+      }, Math.max(0, Math.min(EXIT_DRAIN_IDLE_MS, remaining)));
+    }
+
     /** 最多两路在途数据与一个进度任务；等待期间让操作系统管道提供背压。 */
     function enqueue(operation: () => Promise<void>): void {
+      clearTimeout(drainTimer);
       for (const stream of streams) stream.pause();
       pending++;
       processing = processing.then(async () => {
@@ -119,12 +147,15 @@ export async function runShell(workspace: Workspace, input: ShellInput, signal?:
         catch (error) { updateError ??= error; stop("cancelled"); }
       }).then(() => {
         pending--;
-        if (pending === 0) for (const stream of streams) stream.resume();
+        if (pending === 0) {
+          for (const stream of streams) stream.resume();
+          drainOutput();
+        }
       });
     }
 
     function scheduleUpdate(): void {
-      if (!execution?.onUpdate || updateError !== undefined || updateTimer !== undefined || updateQueued || closed) return;
+      if (!execution?.onUpdate || updateError !== undefined || updateTimer !== undefined || updateQueued || exitedAt !== undefined || closed) return;
       updateTimer = setTimeout(() => {
         updateTimer = undefined;
         if (closed || updateError !== undefined) return;
@@ -149,7 +180,7 @@ export async function runShell(workspace: Workspace, input: ShellInput, signal?:
     });
     const abort = () => stop("cancelled");
     signal?.addEventListener("abort", abort, { once: true });
-    const timeout = setTimeout(() => stop("timed_out"), timeoutSeconds * 1000);
+    timeout = setTimeout(() => stop("timed_out"), timeoutSeconds * 1000);
     if (signal?.aborted) abort();
     try {
       const exitCode = await exit;
@@ -165,7 +196,7 @@ export async function runShell(workspace: Workspace, input: ShellInput, signal?:
       return { status, exitCode, durationMs, ...output.snapshot(), outputId: artifact?.outputId ?? null,
         artifactTruncated: artifact?.artifactTruncated ?? false, ...(logError ? { logError } : {}) };
     } finally {
-      clearTimeout(timeout); clearTimeout(updateTimer);
+      clearTimeout(timeout); clearTimeout(updateTimer); clearTimeout(drainTimer);
       signal?.removeEventListener("abort", abort);
       await processing;
       for (const stream of streams) stream.destroy();

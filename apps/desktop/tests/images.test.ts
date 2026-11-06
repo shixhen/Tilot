@@ -5,6 +5,7 @@ import { JSDOM } from "jsdom";
 import type { ImageRef } from "@tilot/protocol";
 import type { Request } from "../src/client.ts";
 import type { WorkspaceState } from "../src/hooks/use-workspace.ts";
+import { ImageDrafts } from "../src/image-drafts.ts";
 
 test("缩略图只读取本地图片，点击打开应用内预览，可缩放、复位及拖动", async () => {
   const dom = new JSDOM('<!doctype html><div id="root"></div>', { url: "http://localhost", pretendToBeVisual: true }); const win = dom.window;
@@ -148,12 +149,15 @@ test("输入框加号提供上传菜单，图片粘贴加入附件，普通网�
   const dom = new JSDOM('<!doctype html><div id="root"></div>', { url: "http://localhost", pretendToBeVisual: true }); const win = dom.window;
   for (const key of ["window", "document", "HTMLElement", "Element", "Node", "NodeFilter", "HTMLInputElement", "HTMLTextAreaElement", "MutationObserver", "Event", "KeyboardEvent", "CustomEvent", "getComputedStyle"] as const) Object.defineProperty(globalThis, key, { value: key === "window" ? win : win[key], configurable: true });
   Object.defineProperty(globalThis, "IS_REACT_ACT_ENVIRONMENT", { value: true, configurable: true });
-  Object.defineProperty(globalThis, "ResizeObserver", { value: class { observe() {} disconnect() {} }, configurable: true });
   const { createRoot } = await import("react-dom/client"); const { Composer } = await import("../src/workspace/composer.tsx");
   const file = new win.File(["图片字节"], "clipboard.png", { type: "image/png" });
   let uploads = 0; let retries = 0; let removals = 0; const added: unknown[][] = [];
-  const state = { draft: "", attachments: [{ id: "failure", name: "失败.png", error: "读取失败" }], busy: false, running: null, canSend: false,
-    permissionMode: "read-only", projectPath: null, submit: () => {}, editDraft: () => {}, chooseImages: () => { uploads++; }, chooseProject: () => {}, select: () => {},
+  const draftKey = "new:";
+  win.localStorage.setItem("tilot.composer-drafts.v1", JSON.stringify({ [draftKey]: { text: "", attachments: [{ id: "failure", name: "失败.png", error: "读取失败" }] } }));
+  const request = (async () => { throw new Error("没有导入请求"); }) as Request;
+  const drafts = new ImageDrafts(request, win.localStorage);
+  const state = { drafts, draftKey, busy: false, running: null, canSubmit: true,
+    permissionMode: "read-only", projectPath: null, submit: () => {}, editDraft: (text: string) => drafts.edit(draftKey, text), chooseImages: () => { uploads++; }, chooseProject: () => {}, select: () => {},
     retryImage: () => { retries++; }, removeImage: () => { removals++; }, addImages: (files: unknown[]) => added.push(files),
     chat: { connected: true, selected: null, error: "", queue: { messages: [], paused: false, busy: false }, approvals: [], question: null } } as unknown as WorkspaceState;
   const root = createRoot(win.document.getElementById("root")!);
@@ -164,6 +168,15 @@ test("输入框加号提供上传菜单，图片粘贴加入附件，普通网�
     await click([...win.document.querySelectorAll("button")].find((button) => button.textContent === "上传图片")!);
     assert.equal(uploads, 1);
     const editor = win.document.querySelector("textarea")!;
+    const send = win.document.querySelector<HTMLButtonElement>('button[aria-label="发送消息"]')!;
+    assert.equal(send.disabled, true);
+    await act(async () => {
+      Object.getOwnPropertyDescriptor(win.HTMLTextAreaElement.prototype, "value")!.set!.call(editor, "中文草稿");
+      editor.dispatchEvent(new win.Event("input", { bubbles: true }));
+    });
+    assert.equal(drafts.view(draftKey).text, "中文草稿");
+    assert.equal(send.disabled, false);
+    assert.equal(new ImageDrafts(request, win.localStorage).view(draftKey).text, "中文草稿");
     const paste = (files: File[]) => { const event = new win.Event("paste", { bubbles: true, cancelable: true }); Object.defineProperty(event, "clipboardData", { value: { files } }); return event; };
     const imagePaste = paste([file]); await act(async () => { editor.dispatchEvent(imagePaste); });
     assert.equal(imagePaste.defaultPrevented, true); assert.deepEqual(added, [[file]]);

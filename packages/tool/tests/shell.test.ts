@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { readFile, readdir, writeFile } from "node:fs/promises";
 import { randomUUID } from "node:crypto";
+import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 import { test } from "node:test";
@@ -58,6 +59,39 @@ test("大量输出保留末尾并标记截断，不破坏 UTF-8 字符", { skip:
   assert.ok(Buffer.byteLength(result.output, "utf8") <= 50 * 1024);
   assert.ok(result.output.endsWith("END"));
   assert.ok(!result.output.includes("\ufffd"));
+});
+
+test("前台退出后释放独立进程继承的输出管道，保留退出码和日志", { skip: process.platform !== "win32", timeout: 15000 }, async (context) => {
+  const workspace = await openWorkspace(await temporaryDirectory(context));
+  const host = { outputs: new OutputCache(await temporaryDirectory(context)), threadId: "thread" };
+  const pidFile = join(workspace.rootPath, "detached.pid");
+  const launcher = join(workspace.rootPath, "launcher.cjs");
+  await writeFile(launcher, [
+    "const { spawn } = require('node:child_process');",
+    "const { writeFileSync } = require('node:fs');",
+    `const child = spawn(process.execPath, ['-e', 'setTimeout(() => {}, 15000)'], { cwd: ${JSON.stringify(tmpdir())}, detached: true, windowsHide: true, stdio: ['ignore', 'inherit', 'inherit'] });`,
+    `writeFileSync(${JSON.stringify(pidFile)}, String(child.pid));`,
+    "child.unref();",
+    "process.stdout.write('前台输出🙂');",
+    "process.stderr.write('前台错误🙂');",
+    "process.exitCode = 7;",
+  ].join("\n"), "utf8");
+
+  const running = runShell(workspace, { command: `& ${literal(process.execPath)} ${literal(launcher)}`, timeoutSeconds: 3 }, undefined, host);
+  void running.catch(() => {});
+  const pid = await waitForPid(pidFile);
+  try {
+    const result = await running;
+    assert.equal(result.status, "completed");
+    assert.equal(result.exitCode, 7);
+    assert.match(result.output, /前台输出🙂/);
+    assert.match(result.output, /前台错误🙂/);
+    assert.equal((await readOutputLog(host, { outputId: result.outputId! })).content, result.output);
+    assert.doesNotThrow(() => process.kill(pid, 0));
+  } finally {
+    try { process.kill(pid); }
+    catch (error) { if ((error as NodeJS.ErrnoException).code !== "ESRCH") throw error; }
+  }
 });
 
 test("超时和取消终止命令，取消同时终止仍在运行的子进程", { skip: process.platform !== "win32", timeout: 30000 }, async (context) => {

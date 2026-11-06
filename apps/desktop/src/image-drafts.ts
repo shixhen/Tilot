@@ -11,11 +11,12 @@ export class ImageDrafts {
   private readonly sources = new Map<string, ImageSource>();
   private readonly request: Request;
   private readonly storage: Pick<Storage, "getItem" | "setItem">;
-  private readonly changed: () => void;
+  private readonly listeners = new Set<() => void>();
+  private revision = 0;
   private unreadable = false;
   error = "";
-  constructor(request: Request, storage: Pick<Storage, "getItem" | "setItem">, changed: () => void) {
-    this.request = request; this.storage = storage; this.changed = changed;
+  constructor(request: Request, storage: Pick<Storage, "getItem" | "setItem">) {
+    this.request = request; this.storage = storage;
     try {
       const saved = JSON.parse(storage.getItem("tilot.composer-drafts.v1") ?? "{}");
       if (!saved || typeof saved !== "object" || Array.isArray(saved) || !Object.values(saved).every((value) => {
@@ -29,6 +30,13 @@ export class ImageDrafts {
       if (!attachment.image && !attachment.error) attachment.error = "上次图片导入未完成，请重试或重新添加。";
     }
   }
+  subscribe = (listener: () => void): (() => void) => {
+    this.listeners.add(listener);
+    return () => { this.listeners.delete(listener); };
+  };
+  getRevision = (): number => this.revision;
+  getError = (): string => this.error;
+
   view(key: string): ComposerDraft {
     const draft = this.drafts[key];
     return draft ? { ...draft, attachments: draft.attachments.map((attachment) => ({ ...attachment })) } : { text: "", attachments: [] };
@@ -98,10 +106,12 @@ export class ImageDrafts {
     }
   }
   private save(): void {
-    if (this.unreadable) { this.changed(); return; }
-    try { this.storage.setItem("tilot.composer-drafts.v1", JSON.stringify(this.drafts)); this.error = ""; }
-    catch { this.error = "草稿保存失败，请先保留尚未发送的内容。"; }
-    this.changed();
+    if (!this.unreadable) {
+      try { this.storage.setItem("tilot.composer-drafts.v1", JSON.stringify(this.drafts)); this.error = ""; }
+      catch { this.error = "草稿保存失败，请先保留尚未发送的内容。"; }
+    }
+    this.revision++;
+    for (const listener of this.listeners) listener();
   }
 }
 
