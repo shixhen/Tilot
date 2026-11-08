@@ -8,7 +8,7 @@ import { MetricsDetails } from "../src/workspace/message-actions.tsx";
 test("统计浮层显示本轮累计与整数缓存命中率，区分未知值和零值", () => {
   const counts = { requestCount: 3, finishedRequestCount: 3, missingUsageCount: 0 };
   const missing = renderToStaticMarkup(createElement(MetricsDetails, {}));
-  assert.equal((missing.match(/暂无数据/g) ?? []).length, 7);
+  assert.equal((missing.match(/暂无数据/g) ?? []).length, 8);
   const html = renderToStaticMarkup(createElement(MetricsDetails, { metrics: {
     firstTokenMs: 1250, tokensPerSecond: 24.56, inputTokens: 100, cachedTokens: 0, outputTokens: 50,
     ...counts,
@@ -46,4 +46,23 @@ test("统计浮层标明未结束请求和缺失用量，不将部分统计显�
   assert.match(html, /已汇总 2 次已结束请求/);
   assert.match(html, /1 次请求缺少部分用量/);
   assert.match(html, /输出 token<\/dt><dd[^>]*>暂无数据<\/dd>/);
+  assert.match(html, /本轮费用<\/dt><dd[^>]*>暂无数据<\/dd>/);
+});
+
+test("费用按固定人民币价格计算，区分缓存与普通输入，保留微小费用和真实零值", () => {
+  const cases = [
+    { inputTokens: 1_000_000, cachedTokens: 1_000_000, outputTokens: 0, expected: "¥0.0200" },
+    { inputTokens: 1_000_000, cachedTokens: 0, outputTokens: 0, expected: "¥1.0000" },
+    { inputTokens: 0, cachedTokens: 0, outputTokens: 1_000_000, expected: "¥4.0000" },
+    { inputTokens: 2_000_000, cachedTokens: 1_000_000, outputTokens: 1_000_000, expected: "¥5.0200" },
+    { inputTokens: 1, cachedTokens: 1, outputTokens: 0, expected: "¥0.00000002" },
+    { inputTokens: 0, cachedTokens: 0, outputTokens: 0, expected: "¥0.0000" },
+  ];
+  for (const { expected, ...tokens } of cases) {
+    const html = renderToStaticMarkup(createElement(MetricsDetails, { metrics: {
+      ...tokens, requestCount: 1, finishedRequestCount: 1, missingUsageCount: 0,
+      firstTokenMs: null, tokensPerSecond: null,
+    } }));
+    assert.ok(html.includes(`本轮费用</dt><dd class="text-right tabular-nums">${expected}</dd>`), expected);
+  }
 });

@@ -46,6 +46,7 @@ test("整轮累计全部模型请求，同一请求的思考、消息及工具�
   assert.match(html, /缓存命中率<\/dt><dd[^>]*>33%<\/dd>/);
   assert.match(html, /缓存未命中<\/dt><dd[^>]*>270<\/dd>/);
   assert.match(html, /输出 token<\/dt><dd[^>]*>150<\/dd>/);
+  assert.match(html, /本轮费用<\/dt><dd[^>]*>¥0\.0008726<\/dd>/);
   assert.match(html, /23\.1 token\/s/);
 });
 

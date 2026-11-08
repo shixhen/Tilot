@@ -195,8 +195,8 @@ function TurnProcess({ turn, blocks, answer, renderBlock }: {
       <ChevronRight className="disclosure-icon size-3.5 transition-transform group-data-[state=open]/work:rotate-90" />
     </CollapsibleTrigger>}
     {sections.map((section, index) => {
-      const spacing = foldable || index > 0 ? "pt-6" : undefined;
-      const children = <div className="grid min-w-0 grid-cols-1 gap-6">{section.blocks.map(renderBlock)}</div>;
+      const spacing = foldable || index > 0 ? "pt-5" : undefined;
+      const children = <div className="grid min-w-0 grid-cols-1 gap-5">{section.blocks.map(renderBlock)}</div>;
       return section.visible
         ? <div key={section.key} className={spacing}>{children}</div>
         : <CollapsibleContent key={section.key} id={`${contentId}-${index}`} className={spacing}>{children}</CollapsibleContent>;
@@ -213,7 +213,8 @@ export function TurnMessages({ record, time, onResume, resumeDisabled, onEdit, e
   const lastBlock = blocks.at(-1);
   const last = lastBlock?.kind === "process" ? lastBlock.entries.at(-1) : lastBlock;
   const answer = blocks.findLast((block) => block.kind === "message");
-  const render = (entry: Entry) => <EntryView key={entryKey(entry)} entry={entry} active={active} live={active && entry === last} showActions={entry === answer} metrics={metrics} onEdit={onEdit} editDisabled={editDisabled} />;
+  // 正文后还有运行中的过程时，它已经是中间消息，不再预留操作栏高度。
+  const render = (entry: Entry) => <EntryView key={entryKey(entry)} entry={entry} active={active} live={active && entry === last} showActions={entry === answer && (!active || entry === last)} metrics={metrics} onEdit={onEdit} editDisabled={editDisabled} />;
   const renderBlock = (block: TranscriptBlock) => block.kind === "process"
     ? <ProcessBlock key={block.key} block={block} live={active && block === lastBlock}>{block.entries.map(render)}</ProcessBlock>
     : render(block);
