@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState, type FormEvent } from "react";
-import type { AppConfig, ModelInfo, PermissionMode } from "@tilot/protocol";
+import { DEFAULT_CONTEXT_TOKENS, type AppConfig, type ModelInfo, type PermissionMode } from "@tilot/protocol";
 import type { Request } from "../client";
 
 /** 设置操作所需的服务入口与保存回调。 */
@@ -27,7 +27,8 @@ export interface ProviderDraft {
 /** 管理服务列表的编辑与保存，独立于弹窗布局；模型加载由每个服务卡片的 useModelLoader 负责。 */
 export function useSettings({ config, request, onSaved, onClose }: SettingsOptions) {
   const [defaultPermissionMode, setDefaultPermissionMode] = useState<PermissionMode>(config.defaultPermissionMode);
-  const [drafts, setDrafts] = useState<ProviderDraft[]>(() => config.providers.map((provider) => ({ ...provider, apiKey: "", loadedURL: provider.baseURL })));
+  const [drafts, setDrafts] = useState<ProviderDraft[]>(() => config.providers.map((provider) => ({ ...provider, apiKey: "", loadedURL: provider.baseURL,
+    models: provider.models.map((model) => ({ ...model, contextTokens: model.contextTokens ?? DEFAULT_CONTEXT_TOKENS })) })));
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   const ready = drafts.every((draft) => draft.loadedURL === draft.baseURL.trim() && draft.models.length > 0);
@@ -96,7 +97,10 @@ export function useModelLoader(draft: ProviderDraft, savedKey: boolean, request:
     try {
       const ids = await request("models.fetch", { providerId: draft.id, baseURL: url, apiKey: draft.apiKey.trim() });
       if (id !== latest.current) return;
-      update(draft.id, (current) => ({ ...current, loadedURL: url, models: ids.map((id) => ({ id })) }));
+      update(draft.id, (current) => ({ ...current, loadedURL: url, models: ids.map((id) => {
+        const saved = current.loadedURL === url ? current.models.find((model) => model.id === id) : undefined;
+        return saved ?? { id, contextTokens: DEFAULT_CONTEXT_TOKENS };
+      }) }));
     } catch (error) {
       if (id === latest.current) setError(String(error));
     } finally {

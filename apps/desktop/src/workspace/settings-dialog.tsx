@@ -5,7 +5,7 @@ import { Button } from "../components/ui/button";
 import { Input } from "../components/ui/input";
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "../components/ui/dialog";
 import { NativeSelect, NativeSelectOption } from "../components/ui/native-select";
-import { isPermissionMode } from "@tilot/protocol";
+import { DEFAULT_CONTEXT_TOKENS, isPermissionMode } from "@tilot/protocol";
 
 interface ProviderCardProps {
   draft: ProviderDraft;
@@ -50,8 +50,18 @@ function ProviderCard({ draft, savedKey, lockReason, request, update, remove }: 
       </Button>
     </div>
     {loaded && <ul className="max-h-48 divide-y overflow-y-auto rounded-lg border">
-      {draft.models.map((model) => <li key={model.id} className="flex items-center gap-3 px-3 py-1.5 text-sm">
+      {draft.models.map((model) => <li key={model.id} className="flex flex-wrap items-center gap-3 px-3 py-1.5 text-sm">
         <span className="min-w-0 flex-1 truncate" title={model.id}>{model.id}</span>
+        <label className="flex shrink-0 items-center gap-2 text-xs text-muted-foreground">
+          上下文容量
+          <Input type="number" min={1} max={Number.MAX_SAFE_INTEGER} step={1} placeholder={String(DEFAULT_CONTEXT_TOKENS)} className="h-8 w-32 text-xs"
+            aria-label={`${model.id} 上下文容量（Token）`} value={model.contextTokens ?? ""}
+            onChange={(event) => {
+              const value = event.target.value;
+              update(draft.id, (current) => ({ ...current, models: current.models.map((item) => item.id === model.id
+                ? { id: item.id, ...(value === "" ? {} : { contextTokens: Number(value) }) } : item) }));
+            }} />
+        </label>
       </li>)}
     </ul>}
   </section>;

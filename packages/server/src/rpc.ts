@@ -18,7 +18,7 @@ function isEffort(value: unknown): value is ReasoningEffort {
 
 /** 判断是否为模型列表中的一项。 */
 function isModel(value: unknown): value is ModelInfo {
-  return isObject(value) && typeof value.id === "string";
+  return isObject(value) && typeof value.id === "string" && (value.contextTokens === undefined || typeof value.contextTokens === "number");
 }
 
 /** 判断是否为服务配置。 */
@@ -189,7 +189,7 @@ function parseConfig(value: unknown): AppConfig {
   return {
     providerId: value.providerId, model: value.model, reasoningEffort: value.reasoningEffort,
     providers: value.providers.map((provider) => ({ id: provider.id, name: provider.name, baseURL: provider.baseURL,
-      models: provider.models.map((model) => ({ id: model.id })) })),
+      models: provider.models.map((model) => ({ id: model.id, ...(model.contextTokens === undefined ? {} : { contextTokens: model.contextTokens }) })) })),
     maxAutomaticRetries: value.maxAutomaticRetries,
     defaultPermissionMode: value.defaultPermissionMode,
   };

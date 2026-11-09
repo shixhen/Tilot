@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState, useSyncExternalStore, type FormEvent } from "react";
-import type { ReasoningEffort } from "@tilot/protocol";
+import { DEFAULT_CONTEXT_TOKENS, type ReasoningEffort } from "@tilot/protocol";
 import { open } from "@tauri-apps/plugin-dialog";
 import { useChat } from "../use-chat";
 import { ImageDrafts, type ImageSource } from "../image-drafts";
@@ -30,6 +30,8 @@ export function useWorkspace() {
   const permissionMode = thread?.permissionMode ?? chat.newPermissionMode ?? (projectPath ? chat.config?.defaultPermissionMode ?? "workspace-write" : "read-only");
   // 已有任务用它自己的服务，新对话用默认服务；该服务配置了密钥才能发送。
   const choice = thread ?? chat.config;
+  const contextCapacity = chat.config?.providers.find((provider) => provider.id === choice?.providerId)?.models
+    .find((model) => model.id === choice?.model)?.contextTokens ?? DEFAULT_CONTEXT_TOKENS;
   const configured = !!choice && chat.configured.includes(choice.providerId);
   const canSubmit = chat.connected && configured && !busy && !restoring && !chat.historyLoading;
 
@@ -87,7 +89,7 @@ export function useWorkspace() {
     } finally { sending.current = false; }
   }
 
-  return { chat, thread, choice, configured, projectPath, permissionMode, drafts, draftKey, running, busy, canSubmit, projectError: projectError || draftError, settingsOpen,
+  return { chat, thread, choice, contextCapacity, configured, projectPath, permissionMode, drafts, draftKey, running, busy, canSubmit, projectError: projectError || draftError, settingsOpen,
     addImages, chooseImages, retryImage: (id: string) => void drafts.retry(id), removeImage: (id: string) => drafts.remove(draftKey, id),
     setSettingsOpen, editDraft, select, chooseModel, chooseProject, submit };
 }

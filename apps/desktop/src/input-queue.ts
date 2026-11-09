@@ -3,7 +3,7 @@ import { isImageRef, type ImageRef, type Turn, type TurnInput } from "@tilot/pro
 /** 投递标识跨重启保持不变，进入模型前可移除或选择引导。 */
 export interface QueuedInput { id: string; content: string; images?: ImageRef[]; status: "waiting" | "sending" | "steering" }
 export interface QueueView { messages: QueuedInput[]; paused: boolean; busy: boolean }
-interface QueueState extends QueueView { turn: Turn | null; priority?: boolean; checking?: boolean; idle?: () => void }
+interface QueueState extends QueueView { turn: Turn | null; directId?: string; priority?: boolean; checking?: boolean; idle?: () => void }
 interface QueueActions {
   start: (threadId: string, input: string, images: ImageRef[], deliveryId: string) => Promise<Turn>;
   steer: (turnId: string, input: string, images: ImageRef[], deliveryId: string) => Promise<TurnInput | null>;
@@ -48,7 +48,9 @@ export class InputQueue {
   /** 返回独立快照，防止在途操作修改 React 已渲染的数据。 */
   view(threadId: string): QueueView {
     const state = this.state(threadId);
-    return { messages: state.messages.map((message) => ({ ...message })), paused: state.paused, busy: state.busy || !!state.checking };
+    // 空闲时直接投递的消息仍可靠存档，只有暂停或失败后才进入可见等待区。
+    return { messages: state.messages.filter((message) => message.id !== state.directId || state.paused)
+      .map((message) => ({ ...message })), paused: state.paused, busy: state.busy || !!state.checking };
   }
 
   /** 断连暂停等待消息；重新连接后仍需用户手动继续。 */
@@ -69,12 +71,18 @@ export class InputQueue {
     void this.drain(turn.threadId);
   }
 
-  /** 运行中或已有等待消息时，发送按钮只将输入加入当前任务的等待区。 */
+  /** 所有消息先可靠存档；空闲时立即投递，其余输入留在等待区。 */
   enqueue(threadId: string, content: string, images: ImageRef[] = [], id: string = crypto.randomUUID()): boolean {
     if (!content.trim() && !images.length) return false;
     const state = this.state(threadId);
+    if (this.connected && !state.paused && !state.busy && !state.checking && !state.priority && state.turn?.status !== "running" && !state.messages.length) state.directId = id;
     state.messages.push({ id, content, ...(images.length ? { images: [...images] } : {}), status: "waiting" });
-    if (!this.changed(threadId)) { state.messages.pop(); this.actions.changed(threadId, this.view(threadId)); return false; }
+    if (!this.changed(threadId)) {
+      state.messages.pop();
+      if (state.directId === id) delete state.directId;
+      this.actions.changed(threadId, this.view(threadId));
+      return false;
+    }
     void this.drain(threadId);
     return true;
   }
@@ -149,7 +157,11 @@ export class InputQueue {
     if (!this.connected || state.paused || state.busy || state.checking || state.priority || state.turn?.status === "running" || !message) return;
     state.busy = true;
     message.status = "sending";
-    if (!this.changed(threadId)) { message.status = "waiting"; state.busy = false; this.actions.changed(threadId, this.view(threadId)); return; }
+    if (!this.changed(threadId)) {
+      message.status = "waiting"; state.busy = false; delete state.directId;
+      this.actions.changed(threadId, this.view(threadId));
+      return;
+    }
     try {
       const turn = await this.actions.start(threadId, message.content, message.images ?? [], message.id);
       state.messages = state.messages.filter((item) => item.id !== message.id);
@@ -159,6 +171,7 @@ export class InputQueue {
       message.status = "waiting";
       state.busy = false;
       state.idle?.(); delete state.idle;
+      delete state.directId;
       this.changed(threadId);
       // 可能在启动应答前就收到完成事件，仍继续下一条而不会再次发送本条。
       void this.drain(threadId);

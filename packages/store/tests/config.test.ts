@@ -15,10 +15,11 @@ test("首次创建默认配置，保存后关闭重开可恢复", (context) => {
   const store = new Store(directory);
   const original = store.getConfig();
   assert.equal(original.providers[0]!.baseURL, "https://api.deepseek.com");
-  const updated = { ...withModels(original, [{ id: "other-model" }, { id: "custom-model" }], "http://localhost:1234/v1"),
+  const models = [{ id: "other-model" }, { id: "custom-model", contextTokens: 475000 }];
+  const updated = { ...withModels(original, models, "http://localhost:1234/v1"),
     model: "custom-model", providers: [
-      ...withModels(original, [{ id: "other-model" }, { id: "custom-model" }], "http://localhost:1234/v1").providers,
-      { id: "second", name: "第二个服务", baseURL: "https://second.test/v1", models: [{ id: "custom-model" }] },
+      ...withModels(original, models, "http://localhost:1234/v1").providers,
+      { id: "second", name: "第二个服务", baseURL: "https://second.test/v1", models: [{ id: "custom-model", contextTokens: 128000 }] },
     ] };
   try {
     store.saveConfig(updated);
@@ -45,6 +46,7 @@ test("无效地址、服务或模型列表不能覆盖已保存值", (context) =
       withModels(original, [model, model]), withModels(original, [model, { id: " " }]),
       { ...original, providers: [] }, { ...original, providers: [provider, provider] }, { ...original, providers: [{ ...provider, name: " " }] },
       { ...original, providerId: "missing" },
+      ...[0, -1, 1.5, NaN, Infinity, Number.MAX_SAFE_INTEGER + 1].map((contextTokens) => withModels(original, [{ ...model, contextTokens }])),
     ]) {
       assert.throws(() => store.saveConfig(config));
       assert.deepEqual(store.getConfig(), original);
@@ -52,6 +54,24 @@ test("无效地址、服务或模型列表不能覆盖已保存值", (context) =
   } finally {
     store.close();
   }
+});
+
+test("版本 15 升级增加可选上下文容量，旧模型与对话保持原样", (context) => {
+  const directory = temporaryDirectory(context);
+  const store = new Store(directory);
+  const config = store.getConfig();
+  const thread = store.createThread("原有对话");
+  store.close();
+  const legacy = new Database(join(directory, "tilot.sqlite"));
+  legacy.exec("ALTER TABLE provider_models DROP COLUMN contextTokens; PRAGMA user_version = 15;");
+  legacy.close();
+  const reopened = new Store(directory);
+  try {
+    assert.deepEqual(reopened.getConfig(), config);
+    assert.deepEqual(reopened.getThread(thread.id), thread);
+    reopened.saveConfig(withModels(config, [{ id: config.model, contextTokens: 475000 }]));
+    assert.equal(reopened.getConfig().providers[0]!.models[0]!.contextTokens, 475000);
+  } finally { reopened.close(); }
 });
 
 test("配置保存只写声明的字段，额外密钥字段不会被持久化", (context) => {
@@ -100,7 +120,7 @@ test("版本 7 升级移除请求次数配置，保留模型选择、用户输�
   } finally { migrated.close(); }
   const database = new Database(join(directory, "tilot.sqlite"));
   try {
-    assert.equal(database.pragma("user_version", { simple: true }), 15);
+    assert.equal(database.pragma("user_version", { simple: true }), 16);
     assert.equal(database.prepare<[], { name: string }>("PRAGMA table_info(app_config)").all().some((column) => column.name === "maxStepsPerRun"), false);
   } finally { database.close(); }
 });
@@ -129,10 +149,10 @@ test("版本 8 升级删除输入和输出 Token 限制，保留服务、任务�
   } finally { migrated.close(); }
   const database = new Database(join(directory, "tilot.sqlite"));
   try {
-    assert.equal(database.pragma("user_version", { simple: true }), 15);
+    assert.equal(database.pragma("user_version", { simple: true }), 16);
     const configColumns = database.prepare<[], { name: string }>("PRAGMA table_info(app_config)").all().map((column) => column.name);
     assert.ok(!configColumns.includes("maxOutputTokens") && !configColumns.includes("reserveTokens"));
-    assert.deepEqual(database.prepare<[], { name: string }>("PRAGMA table_info(provider_models)").all().map((column) => column.name), ["providerId", "id"]);
+    assert.deepEqual(database.prepare<[], { name: string }>("PRAGMA table_info(provider_models)").all().map((column) => column.name), ["providerId", "id", "contextTokens"]);
   } finally { database.close(); }
 });
 

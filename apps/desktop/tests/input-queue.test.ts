@@ -3,7 +3,7 @@ import { test } from "node:test";
 import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import type { Turn, TurnInput } from "@tilot/protocol";
-import { InputQueue } from "../src/input-queue.ts";
+import { InputQueue, type QueueView } from "../src/input-queue.ts";
 import { PendingInputs } from "../src/workspace/pending-inputs.tsx";
 import type { ImageRef } from "@tilot/protocol";
 
@@ -16,7 +16,7 @@ test("整个图文队列跨重启恢复为暂停，核对已接收回执后只�
     steer: async () => null, changed: () => {}, error: (error) => { throw error; } }, storage);
   first.setConnected(true);
   first.enqueue("thread", "服务收到但没来得及确认"); first.enqueue("thread", "", [image]);
-  const waiting = first.view("thread").messages[1]!;
+  const waiting = first.view("thread").messages[0]!;
   const delivered: { content: string; images: ImageRef[]; id: string }[] = [];
   const restored = new InputQueue({ receipts: async (_thread, ids) => { assert.deepEqual(ids, [initial[0], waiting.id]); return [initial[0]!]; },
     start: async (_thread, content, images, id) => { delivered.push({ content, images, id }); return turn(2); },
@@ -58,6 +58,42 @@ function harness() {
 
 /** 让请求确认及后续队列发送的微任务执行完，不引入真实等待。 */
 async function flush(): Promise<void> { await new Promise<void>((resolve) => setImmediate(resolve)); }
+
+test("空闲发送在确认前可靠存档但等待区始终为空，在途期间新增的消息正常排队", async () => {
+  let saved: string | null = null;
+  const changes: QueueView[] = [];
+  const reply = Promise.withResolvers<Turn>();
+  const queue = new InputQueue({ start: () => reply.promise, steer: async () => null,
+    changed: (_threadId, view) => changes.push(view), error: (error) => { throw error; },
+  }, { getItem: () => saved, setItem: (_key, value) => { saved = value; } });
+  queue.setConnected(true);
+  assert.equal(queue.enqueue("thread", "立即发送", [], "direct"), true);
+  assert.ok(changes.every((view) => view.messages.length === 0));
+  assert.deepEqual(queue.pendingDeliveryIds(), ["direct"]);
+  assert.equal(JSON.parse(saved!).thread[0].id, "direct");
+  queue.enqueue("thread", "后续消息");
+  assert.deepEqual(queue.view("thread").messages.map((message) => message.content), ["后续消息"]);
+  reply.resolve(turn());
+  await flush();
+  assert.deepEqual(queue.view("thread").messages.map((message) => message.content), ["后续消息"]);
+  assert.ok(changes.every((view) => view.messages.every((message) => message.id !== "direct")));
+});
+
+test("空闲投递失败后在等待区保留消息，暂停并允许手动继续", async () => {
+  const { queue, starts, errors } = harness();
+  queue.enqueue("thread", "需要重试");
+  assert.equal(queue.view("thread").messages.length, 0);
+  starts[0]!.reply.reject(new Error("服务未确认接收"));
+  await flush();
+  assert.equal(errors.length, 1);
+  assert.equal(queue.view("thread").paused, true);
+  assert.equal(queue.view("thread").messages[0]!.content, "需要重试");
+  queue.resume("thread");
+  assert.equal(queue.view("thread").messages[0]!.status, "sending");
+  starts[1]!.reply.resolve(turn());
+  await flush();
+  assert.equal(queue.view("thread").messages.length, 0);
+});
 
 test("答案等待在途启动后优先于下一条普通消息，提交不会恢复暂停队列", async () => {
   const { queue, starts } = harness();

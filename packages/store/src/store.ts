@@ -4,7 +4,7 @@ import { isAbsolute, join } from "node:path";
 import Database from "better-sqlite3";
 import type { AppConfig } from "./config.ts";
 import { migrateDatabase } from "./database.ts";
-import { isPermissionMode, type ModelInfo, type PermissionMode, type Provider, type ReasoningEffort, type Thread } from "@tilot/protocol";
+import { isPermissionMode, type PermissionMode, type Provider, type ReasoningEffort, type Thread } from "@tilot/protocol";
 import type { Turn, TurnFinalStatus, TurnInput } from "@tilot/protocol";
 import { ModelHistoryStore } from "./history.ts";
 import { QuestionStore } from "./questions.ts";
@@ -72,9 +72,10 @@ export class Store {
     if (!config) {
       throw new Error("数据库缺少应用配置记录。");
     }
-    const models = this.database.prepare<[], ModelInfo & { providerId: string }>("SELECT providerId, id FROM provider_models ORDER BY rowid").all();
+    const models = this.database.prepare<[], { providerId: string; id: string; contextTokens: number | null }>("SELECT providerId, id, contextTokens FROM provider_models ORDER BY rowid").all();
     const providers = this.database.prepare<[], Omit<Provider, "models">>("SELECT id, name, baseURL FROM providers ORDER BY rowid").all()
-      .map((provider) => ({ ...provider, models: models.filter((model) => model.providerId === provider.id).map(({ id }) => ({ id })) }));
+      .map((provider) => ({ ...provider, models: models.filter((model) => model.providerId === provider.id)
+        .map(({ id, contextTokens }) => ({ id, ...(contextTokens === null ? {} : { contextTokens }) })) }));
     return { ...config, providers };
   }
 
@@ -89,6 +90,9 @@ export class Store {
       if (!provider.name.trim()) throw new Error("服务名称不能为空。");
       if (new Set(provider.models.map((model) => model.id)).size !== provider.models.length) {
         throw new Error(`${provider.name} 中有重复的模型。`);
+      }
+      if (provider.models.some((model) => model.contextTokens !== undefined && (!Number.isSafeInteger(model.contextTokens) || model.contextTokens <= 0))) {
+        throw new Error("上下文容量必须是正整数。");
       }
     }
     if (!config.providers.find((provider) => provider.id === config.providerId)?.models.some((model) => model.id === config.model)) {
@@ -114,10 +118,10 @@ export class Store {
       this.database.prepare("DELETE FROM provider_models").run();
       this.database.prepare("DELETE FROM providers").run();
       const insertProvider = this.database.prepare("INSERT INTO providers (id, name, baseURL) VALUES (?, ?, ?)");
-      const insertModel = this.database.prepare("INSERT INTO provider_models (providerId, id) VALUES (?, ?)");
+      const insertModel = this.database.prepare("INSERT INTO provider_models (providerId, id, contextTokens) VALUES (?, ?, ?)");
       for (const provider of config.providers) {
         insertProvider.run(provider.id, provider.name.trim(), provider.baseURL);
-        for (const model of provider.models) insertModel.run(provider.id, model.id);
+        for (const model of provider.models) insertModel.run(provider.id, model.id, model.contextTokens ?? null);
       }
     })();
   }

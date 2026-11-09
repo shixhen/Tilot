@@ -98,7 +98,7 @@ test("版本 11 迁移只为成功历史补齐完整输出清单，不把失败�
   store.history.finishAttempt(second.id, { status: "cancelled", response: response([call("diagnostic")]) });
   store.close();
   const legacy = new Database(join(directory, "tilot.sqlite"));
-  legacy.exec("DROP TABLE user_questions; ALTER TABLE turn_inputs DROP COLUMN imagesJson; DROP INDEX inputs_delivery; ALTER TABLE turn_inputs DROP COLUMN deliveryId; ALTER TABLE model_attempts DROP COLUMN completedOutputsJson; PRAGMA user_version = 11;");
+  legacy.exec("ALTER TABLE provider_models DROP COLUMN contextTokens; DROP TABLE user_questions; ALTER TABLE turn_inputs DROP COLUMN imagesJson; DROP INDEX inputs_delivery; ALTER TABLE turn_inputs DROP COLUMN deliveryId; ALTER TABLE model_attempts DROP COLUMN completedOutputsJson; PRAGMA user_version = 11;");
   legacy.close();
   const reopened = new Store(directory);
   try {

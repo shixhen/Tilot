@@ -38,9 +38,14 @@ export interface ToolApproval {
   resolvedPath?: string;
 }
 
+/** 未单独填写模型容量时，用于上下文占用显示的默认值。 */
+export const DEFAULT_CONTEXT_TOKENS = 666_000;
+
 /** 服务提供的一个模型；输入和输出限制由模型服务决定。 */
 export interface ModelInfo {
   id: string;
+  /** 用户填写的上下文容量，仅用于显示；省略时使用 DEFAULT_CONTEXT_TOKENS。 */
+  contextTokens?: number;
 }
 
 /** 一个模型服务：一组地址和密钥，以及从这个服务加载的模型；密钥单独保存，不在这里。 */

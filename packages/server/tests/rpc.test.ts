@@ -165,7 +165,7 @@ test("配置与凭据 RPC 保存并恢复多个服务，地址切换隔离密钥
   const directory = temporaryDirectory(context);
   const store = new Store(directory);
   const original = store.getConfig();
-  const provider = { ...original.providers[0]!, baseURL: "https://example.test/", models: [{ id: "saved-model" }] };
+  const provider = { ...original.providers[0]!, baseURL: "https://example.test/", models: [{ id: "saved-model", contextTokens: 475000 }] };
   const second = { id: "second", name: "second.test", baseURL: "https://second.test/", models: [{ id: "other-model" }] };
   const config = { ...original, model: "saved-model", providers: [provider, second] };
   store.close();

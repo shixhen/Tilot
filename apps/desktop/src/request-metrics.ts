@@ -11,6 +11,18 @@ export interface RequestMetrics extends Omit<ResponseMetrics, "durationMs" | "fi
 
 export interface TurnMetrics extends RequestMetrics { firstTokenMs: number | null }
 
+/** 上下文按最近一次返回的输入与输出估算；请求间的历史重复输入不累加。 */
+export function getContextTokens(records: TurnRecord[]): number | null {
+  for (let index = records.length - 1; index >= 0; index--) {
+    const attempts = records[index]!.attempts;
+    for (let attemptIndex = attempts.length - 1; attemptIndex >= 0; attemptIndex--) {
+      const metrics = attempts[attemptIndex]!.metrics;
+      if (metrics?.inputTokens != null && metrics.outputTokens != null) return metrics.inputTokens + metrics.outputTokens;
+    }
+  }
+  return null;
+}
+
 /** 每个请求只计一次，包含已结束的失败/取消请求；运行中的请求等最终用量返回后再计入。 */
 export function getRequestMetrics(attempts: AttemptView[]): RequestMetrics {
   const finished = attempts.filter((attempt) => attempt.status !== "running");

@@ -5,7 +5,7 @@ import { renderToStaticMarkup } from "react-dom/server";
 import type { AttemptView, ResponseMetrics } from "@tilot/protocol";
 import type { Request } from "../src/client.ts";
 import { applyEvent, loadConversation, mergeHistory, type TurnRecord } from "../src/conversation.ts";
-import { getRequestMetrics, getTurnMetrics } from "../src/request-metrics.ts";
+import { getContextTokens, getRequestMetrics, getTurnMetrics } from "../src/request-metrics.ts";
 import { MetricsDetails } from "../src/workspace/message-actions.tsx";
 import { TurnMessages } from "../src/workspace/transcript.tsx";
 import { TooltipProvider } from "../src/components/ui/tooltip.tsx";
@@ -26,6 +26,21 @@ function record(attempts: AttemptView[]): TurnRecord {
     inputs: [{ id: 1, turnId: "turn", content: "任务", createdAt: 1000 }], attempts, previews: [],
   };
 }
+
+test("上下文使用最近一次请求的输入加输出，运行中沿用已返回用量，缺失历史保持未知", () => {
+  const previous = record([attempt(1, { inputTokens: 1000, cachedTokens: 600, outputTokens: 100 })]);
+  const current = record([attempt(1, { inputTokens: 2000, outputTokens: 200 })]);
+  assert.equal(getContextTokens([previous, current]), 2200);
+  const running = { ...attempt(2), status: "running" as const };
+  delete running.metrics;
+  current.attempts.push(running);
+  assert.equal(getContextTokens([previous, current]), 2200);
+  current.attempts[1] = attempt(2, { inputTokens: 3000, outputTokens: 300 });
+  assert.equal(getContextTokens([previous, current]), 3300);
+  assert.equal(getContextTokens([record([attempt(1, { inputTokens: 0, outputTokens: 0 })])]), 0);
+  assert.equal(getContextTokens([record([running])]), null);
+  assert.equal(getContextTokens([]), null);
+});
 
 test("整轮累计全部模型请求，同一请求的思考、消息及工具不会重复计数，比例按合计计算", () => {
   const first = attempt(1, { inputTokens: 100, cachedTokens: 100, outputTokens: 50, firstTokenMs: 500, durationMs: 2000 });
