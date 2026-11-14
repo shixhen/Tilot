@@ -81,11 +81,15 @@ test("真实服务按 UTF-8 行协议处理任务请求，坏请求不影响后�
   const second = await runServer(directory, [
     JSON.stringify({ id: "rename", method: "thread.rename", params: { threadId: created.id, title: "新标题" } }),
     JSON.stringify({ id: "read", method: "thread.read", params: { threadId: created.id } }),
+    JSON.stringify({ id: "delete", method: "thread.delete", params: { threadId: created.id } }),
+    JSON.stringify({ id: "read-deleted", method: "thread.read", params: { threadId: created.id } }),
   ]);
   const readResponse = second[1]!;
   assert.ok(readResponse.success);
   assert.ok(readResponse.result && !Array.isArray(readResponse.result) && "title" in readResponse.result);
   assert.equal(readResponse.result.title, "新标题");
+  assert.deepEqual(second[2], { id: "delete", success: true, result: [] });
+  assert.deepEqual(second[3], { id: "read-deleted", success: true, result: null });
 });
 
 test("RPC 校验参数与项目目录，未知方法和无效操作不会创建任务", async (context) => {

@@ -148,6 +148,7 @@ function parseRequest(value: unknown): RpcRequest {
       }
       break;
     case "thread.read":
+    case "thread.delete":
       if (typeof params.threadId === "string") {
         return { id: value.id, method: value.method, params: { threadId: params.threadId } };
       }
@@ -299,6 +300,9 @@ export async function handleRpcLine(store: Store, line: string, turns: TurnManag
         break;
       case "thread.rename":
         result = store.renameThread(request.params.threadId, request.params.title);
+        break;
+      case "thread.delete":
+        result = turns.deleteThread(request.params.threadId);
         break;
       case "thread.update":
         result = store.updateThreadModel(request.params.threadId, request.params.providerId, request.params.model, request.params.reasoningEffort);

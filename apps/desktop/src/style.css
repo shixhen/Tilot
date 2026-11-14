@@ -117,9 +117,6 @@
 }
 @keyframes shimmer { from { background-position: 100% 0; } to { background-position: 0 0; } }
 
-/* 透明度由距离输出末尾的字符数决定，不使用固定时长淡入。 */
-.stream-tail { opacity: var(--stream-opacity); }
-
 /* 正文沿用侧栏 text-sm 字号，标题和代码适当缩小，保留阅读层级。 */
 .message-prose { font-size: var(--text-sm); line-height: 1.5; overflow-wrap: anywhere; min-width: 0; }
 .message-prose > :first-child { margin-top: 0; }
@@ -154,6 +151,5 @@
 .message-prose .katex-display > .katex { width: max-content; min-width: 100%; }
 
 @media (prefers-reduced-motion: reduce) {
-  .stream-tail { opacity: 1; }
   *, *::before, *::after { animation: none !important; transition: none !important; }
 }

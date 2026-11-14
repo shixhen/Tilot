@@ -117,6 +117,17 @@ test("等待、流式思考、持久化和后续工具共用稳定过程标识�
   assert.deepEqual(saved.entries.map((entry) => entry.kind), ["reasoning", "tool", "tool"]);
 });
 
+test("流式思考在紧凑预览中也渲染 Markdown 和公式", () => {
+  const current = record();
+  const text = "较早的思考\n\n**最后一段** $x^2$";
+  current.previews = [{ itemId: "reasoning", parts: [{ kind: "reasoning", text }], complete: false }];
+  const html = render(current);
+  assert.match(html, /max-h-36 overflow-hidden/);
+  assert.match(html, /<strong>最后一段<\/strong>/);
+  assert.match(html, /class="katex"/);
+  assert.equal(current.previews[0]!.parts[0]!.text, text);
+});
+
 test("标题按单块运行状态切换，所有工具即使尚未执行也算命令", () => {
   for (const name of ["read", "write", "edit", "shell", "ls", "find", "grep", "web_fetch"]) {
     const current = record();

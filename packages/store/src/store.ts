@@ -192,6 +192,24 @@ export class Store {
     return thread;
   }
 
+  /** 按外键依赖删除对话历史，返回问题标识以清理桌面草稿。 */
+  deleteThread(id: string): string[] {
+    return this.database.transaction(() => {
+      if (this.getRunningTurn(id)) throw new Error("对话正在运行，请先停止或等本轮结束后再删除。");
+      const questions = this.database.prepare<[string], { id: string }>("DELETE FROM user_questions WHERE threadId = ? RETURNING id").all(id);
+      this.database.prepare(`
+        DELETE FROM tool_calls WHERE attemptId IN (
+          SELECT model_attempts.id FROM model_attempts JOIN turns ON turns.id = model_attempts.turnId WHERE turns.threadId = ?
+        )
+      `).run(id);
+      this.database.prepare("DELETE FROM model_attempts WHERE turnId IN (SELECT id FROM turns WHERE threadId = ?)").run(id);
+      this.database.prepare("DELETE FROM turn_inputs WHERE turnId IN (SELECT id FROM turns WHERE threadId = ?)").run(id);
+      this.database.prepare("DELETE FROM turns WHERE threadId = ?").run(id);
+      this.database.prepare("DELETE FROM threads WHERE id = ?").run(id);
+      return questions.map((question) => question.id);
+    }).immediate();
+  }
+
   /** 修改任务使用的服务、模型和思考强度；模型必须在该服务的模型列表中。不更新最近时间，避免改设置打乱任务顺序。 */
   updateThreadModel(id: string, providerId: string, model: string, reasoningEffort: ReasoningEffort): Thread {
     if (!this.database.prepare("SELECT 1 FROM provider_models WHERE providerId = ? AND id = ?").get(providerId, model)) {

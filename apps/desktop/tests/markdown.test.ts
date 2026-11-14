@@ -3,7 +3,7 @@ import { test } from "node:test";
 import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { MessageMarkdown, webURL } from "../src/workspace/markdown.tsx";
-import { normalizeMathDelimiters } from "../src/workspace/math.ts";
+import { markdownBlockStarts, normalizeMathDelimiters } from "../src/workspace/math.ts";
 
 // 检查流式未闭合围栏及完整代码、表格和任务列表的真实组件输出。
 test("Markdown 保留代码缩进并支持未闭合代码块、表格和任务列表", () => {
@@ -25,29 +25,24 @@ test("Markdown 拒绝可执行内容与非网页链接，独立渲染时保留�
   for (const url of ["/relative", "//example.com", "mailto:user@example.com", "data:text/html,test"]) assert.equal(webURL(url), "");
 });
 
-// 尾部窗口跨 Markdown 节点共用，不影响表格结构，结束后完整显示。
-test("流式 Markdown 仅末尾八个字符渐变，推进后旧字恢复不透明", () => {
-  const text = "你好 world\n\n| 名称 | 状态 |\n| --- | --- |\n| Tilot | 已连接 |";
+test("流式 Markdown 整行淡入沿用原有结构，保留表格与组合字符", () => {
+  const text = "你好 world\n\n| 名称 | 状态 |\n| --- | --- |\n| Tilot | 已连接 e\u0301 👩‍💻 |";
   const streaming = renderToStaticMarkup(createElement(MessageMarkdown, { text, streaming: true }));
-  assert.equal((streaming.match(/class="stream-tail"/g) ?? []).length, 8);
-  assert.match(streaming, /你好 world/);
-  assert.doesNotMatch(streaming, /<(?:table|thead|tbody|tr)>\s*<span/);
-  assert.doesNotMatch(renderToStaticMarkup(createElement(MessageMarkdown, { text })), /stream-tail/);
-  const initial = renderToStaticMarkup(createElement(MessageMarkdown, { text: "甲乙丙丁戊己庚辛", streaming: true }));
-  assert.match(initial, /style="--stream-opacity:0">辛<\/span>/);
-  const advanced = renderToStaticMarkup(createElement(MessageMarkdown, { text: "甲乙丙丁戊己庚辛壬癸子丑寅卯辰巳", streaming: true }));
-  assert.match(advanced, /甲乙丙丁戊己庚辛<span/);
-  const emoji = renderToStaticMarkup(createElement(MessageMarkdown, { text: "👨‍👩‍👧‍👦", streaming: true }));
-  assert.equal((emoji.match(/class="stream-tail"/g) ?? []).length, 1);
+  assert.match(streaming, /<td>已连接 e\u0301 👩‍💻<\/td>/);
+  assert.equal(streaming, renderToStaticMarkup(createElement(MessageMarkdown, { text })));
 });
 
-test("长段落只为末尾八个完整字符生成渐变，组合音标和 emoji 不拆开", () => {
-  const tail = ["e\u0301", "👩‍💻", "🇨🇳", "👍🏽", "👨‍👩‍👧‍👦", "甲", "乙", "丙"];
-  const prefix = "较长的推理内容".repeat(3000);
-  const html = renderToStaticMarkup(createElement(MessageMarkdown, { text: prefix + tail.join(""), streaming: true }));
-  assert.equal((html.match(/class="stream-tail"/g) ?? []).length, 8);
-  assert.ok(html.includes(prefix));
-  for (const character of tail) assert.ok(html.includes(`>${character}</span>`));
+test("流式分块保留列表、未闭合代码和跨段公式的上下文", () => {
+  assert.deepEqual(markdownBlockStarts("第一段\n\n第二段"), []);
+  const code = "已完成\n\n```ts\nconst x = 1;\n\nconst y = 2;";
+  assert.deepEqual(markdownBlockStarts(code), [code.indexOf("```")]);
+  const list = "- 一\n\n- 二\n\n  后续段落\n\n外部段落\n";
+  assert.deepEqual(markdownBlockStarts(list), [list.indexOf("外部段落")]);
+  const formula = "已完成\n\n\\[\nx^2 + y^2\n\nz^2\n\\]\n\n继续\n";
+  assert.deepEqual(markdownBlockStarts(formula), [formula.indexOf("\\["), formula.indexOf("继续")]);
+  const reference = "前面的 [链接][ref]\n\n第二段\n\n[ref]: https://example.com\n";
+  const html = renderToStaticMarkup(createElement(MessageMarkdown, { text: reference, streaming: true }));
+  assert.match(html, /href="https:\/\/example\.com"[^>]*>链接<\/a>/);
 });
 
 // 截图中的反斜杠分隔符必须在 Markdown 吞掉转义前识别，求和上下标交给 KaTeX。

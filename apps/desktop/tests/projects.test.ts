@@ -14,7 +14,7 @@ test("侧栏区分同名目录和普通对话，保留项目内任务顺序", ()
   assert.deepEqual(groups.map((group) => group.threads.map((thread) => thread.id)), [["0", "3"], ["1"], ["2"]]);
   assert.equal(projectName("D:\\"), "D:\\");
   assert.equal(projectName("D:\\one\\demo\\"), "demo");
-  const html = renderToStaticMarkup(createElement(SidebarProvider, {}, createElement(TaskNavigation, { threads, selected: "2", disabled: false, onSelect: () => {}, onNew: () => {}, onOpenProject: () => {} })));
+  const html = renderToStaticMarkup(createElement(SidebarProvider, {}, createElement(TaskNavigation, { threads, selected: "2", disabled: false, onSelect: () => {}, onNew: () => {}, onOpenProject: () => {}, onDelete: async () => {} })));
   assert.ok(html.includes("D:\\one\\demo"));
   assert.ok(html.includes("D:\\two\\demo"));
   assert.match(html, /最近/);

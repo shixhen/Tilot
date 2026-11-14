@@ -109,6 +109,10 @@ export class QuestionSession {
     else if (failed === "close") void this.close(threadId);
     else void this.save(threadId);
   }
+  discardThread(threadId: string, questionIds: string[]): void {
+    this.receive(threadId, null);
+    for (const id of questionIds) this.storage.removeItem(this.key(id));
+  }
   dispose(): void { this.connected = false; for (const state of this.states.values()) clearTimeout(state.timer); }
   private key(id: string): string { return `tilot.question.${id}`; }
   private removeLocal(state: Session): void {

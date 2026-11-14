@@ -1,4 +1,4 @@
-import { useEffect, useLayoutEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 import { ArrowDown, LoaderCircle, SquarePen } from "lucide-react";
 import { useWorkspace } from "../hooks/use-workspace";
 import { projectName } from "../projects";
@@ -27,8 +27,14 @@ export function WorkspacePage() {
   const follow = useRef(true);
   const scrollFrame = useRef<number | null>(null);
   const dock = useRef<HTMLDivElement>(null);
+  const transcript = useRef<HTMLDivElement>(null);
   const [atBottom, setAtBottom] = useState(true);
   const records = state.chat.records;
+  const { editDraft } = state;
+  const editMessage = useCallback((text: string) => {
+    editDraft(text);
+    dock.current?.querySelector("textarea")?.focus();
+  }, [editDraft]);
   /** 同一帧的增量及尺寸变化只滚动一次，上翻或选中文字后不抢位置。 */
   function followBottom(): void {
     if (!follow.current || scrollFrame.current !== null) return;
@@ -40,18 +46,18 @@ export function WorkspacePage() {
       if (bottom - node.scrollTop > 1) node.scrollTop = bottom;
     });
   }
-  // 输入框变高（多行输入、出现提示）时，同样保持最新内容在输入框上方可见。
+  // Markdown 和输入框分别提交，以实际布局变化触发滚动。
   useLayoutEffect(() => {
     const observer = new ResizeObserver(followBottom);
     observer.observe(dock.current!);
+    observer.observe(transcript.current!);
     return () => {
       observer.disconnect();
       if (scrollFrame.current !== null) cancelAnimationFrame(scrollFrame.current);
       scrollFrame.current = null;
     };
   }, []);
-  useEffect(() => { follow.current = true; }, [state.chat.selected]);
-  useEffect(followBottom, [records, state.chat.selected]);
+  useEffect(() => { follow.current = true; followBottom(); }, [state.chat.selected]);
 
   return <ImageProvider request={state.chat.request} threadId={state.chat.selected}><SidebarProvider className="h-dvh min-h-0 flex-col overflow-hidden">
     <WorkspaceTitlebar />
@@ -80,7 +86,7 @@ export function WorkspacePage() {
           follow.current = distance < 80;
           setAtBottom(distance < 80);
         }}>
-          <div className={`${column} grid flex-1 grid-cols-1 content-start gap-8 pt-4 pb-8`}>
+          <div ref={transcript} className={`${column} grid flex-1 grid-cols-1 content-start gap-8 pt-4 pb-8`}>
             {!state.chat.selected && <div className="flex min-h-[50vh] flex-col items-center justify-center gap-2 text-center">
               <h2 className="text-[28px] font-semibold tracking-tight">{state.projectPath ? `要在 ${projectName(state.projectPath)} 中做什么？` : "有什么可以帮忙的？"}</h2>
               <p className="text-sm text-muted-foreground">{state.projectPath ? "讨论、探索并直接修改项目代码。" : "提出问题，或在左侧打开项目一起编写代码。"}</p>
@@ -91,8 +97,8 @@ export function WorkspacePage() {
               const previous = records[index - 1];
               const showTime = !previous || record.turn.createdAt - previous.turn.createdAt > TIME_GAP;
               return <TurnMessages key={record.turn.id} record={record} time={showTime ? record.turn.createdAt : undefined}
-                onResume={index === records.length - 1 ? () => void state.chat.resume(record.turn.id) : undefined}
-                onEdit={(text) => { state.editDraft(text); dock.current?.querySelector("textarea")?.focus(); }} editDisabled={state.busy}
+                onResume={index === records.length - 1 && record.turn.status === "interrupted" ? () => void state.chat.resume(record.turn.id) : undefined}
+                onEdit={editMessage} editDisabled={state.busy}
                 resumeDisabled={state.busy || !state.chat.connected} />;
             })}
           </div>

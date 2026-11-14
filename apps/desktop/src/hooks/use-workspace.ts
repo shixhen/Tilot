@@ -1,5 +1,5 @@
-import { useEffect, useRef, useState, useSyncExternalStore, type FormEvent } from "react";
-import { DEFAULT_CONTEXT_TOKENS, type ReasoningEffort } from "@tilot/protocol";
+import { useCallback, useEffect, useRef, useState, useSyncExternalStore, type FormEvent } from "react";
+import { DEFAULT_CONTEXT_TOKENS, type ReasoningEffort, type Thread } from "@tilot/protocol";
 import { open } from "@tauri-apps/plugin-dialog";
 import { useChat } from "../use-chat";
 import { ImageDrafts, type ImageSource } from "../image-drafts";
@@ -36,14 +36,19 @@ export function useWorkspace() {
   const canSubmit = chat.connected && configured && !busy && !restoring && !chat.historyLoading;
 
   /** 更新当前任务草稿，其他任务草稿保持独立。 */
-  function editDraft(value: string): void {
+  const editDraft = useCallback((value: string): void => {
     drafts.edit(draftKey, value);
-  }
+  }, [drafts, draftKey]);
 
   /** 切换任务或待选项目，首次发送前不创建空任务。 */
   function select(id: string | null, path: string | null = null): void {
     setProjectError("");
     chat.select(id, path);
+  }
+
+  async function deleteThread(target: Thread): Promise<void> {
+    await chat.deleteThread(target);
+    drafts.discard(target.id);
   }
 
   /** 已有任务只修改该任务；尚未发送的新对话修改默认值，发送时创建的任务会沿用。 */
@@ -91,7 +96,7 @@ export function useWorkspace() {
 
   return { chat, thread, choice, contextCapacity, configured, projectPath, permissionMode, drafts, draftKey, running, busy, canSubmit, projectError: projectError || draftError, settingsOpen,
     addImages, chooseImages, retryImage: (id: string) => void drafts.retry(id), removeImage: (id: string) => drafts.remove(draftKey, id),
-    setSettingsOpen, editDraft, select, chooseModel, chooseProject, submit };
+    setSettingsOpen, editDraft, select, deleteThread, chooseModel, chooseProject, submit };
 }
 
 /** 页面与子组件共用的工作区状态。 */

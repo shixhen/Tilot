@@ -1,14 +1,14 @@
-import { createContext, memo, useContext, useEffect, useMemo, useRef, useState, type ComponentProps } from "react";
+import { createContext, memo, useContext, useDeferredValue, useMemo, useRef, useState, type ComponentProps } from "react";
 import Markdown, { type Components } from "react-markdown";
 import remarkGfm from "remark-gfm";
 import remarkMath from "remark-math";
 import rehypeKatex from "rehype-katex";
-import type { Element, Root } from "hast";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { Check, Copy } from "lucide-react";
 import { Button } from "../components/ui/button";
 import { useCopyText } from "../hooks/use-copy-text";
-import { normalizeMathDelimiters } from "./math";
+import { useStreamLineFade } from "../hooks/use-stream-line-fade";
+import { markdownBlockStarts, normalizeMathDelimiters } from "./math";
 import { ImageReference } from "./images";
 
 const InsideLink = createContext(false);
@@ -61,67 +61,42 @@ const components: Components = {
   table: ({ children }) => <div className="my-4 overflow-x-auto rounded-lg border"><table>{children}</table></div>,
 };
 
-/** 按可见字符切分，不拆开组合字符或 emoji。 */
-const segmenter = new Intl.Segmenter("zh", { granularity: "grapheme" });
-
-/** 仅末尾 8 个非空白字符参与渐变，透明度随后续文字推进。 */
-const STREAM_TAIL_LENGTH = 8;
-
-/**
- * 从 Markdown 末尾向前分配渐变，跨段落共用一个尾部窗口。
- * 旧文字保持普通文本，最多生成 8 个 span；结构间空白不包装，保留合法表格结构。
- */
-function rehypeStreamTail() {
-  return (tree: Root) => {
-    let remaining = STREAM_TAIL_LENGTH;
-    /** 逆序处理子节点，再按原顺序放回字符，不改变正文及复制内容。 */
-    const split = (node: Root | Element): void => {
-      for (let index = node.children.length - 1; index >= 0 && remaining > 0; index--) {
-        const child = node.children[index]!;
-        if (child.type === "element") {
-          // 公式作为完整内容显示，不能在 KaTeX 的字形或 MathML 内插入渐变 span。
-          if (Array.isArray(child.properties.className) && child.properties.className.includes("katex")) {
-            remaining = 0;
-            continue;
-          }
-          split(child);
-        }
-        if (child.type !== "text" || !child.value.trim()) continue;
-        const characters = segmenter.segment(child.value);
-        const tail: Element["children"] = [];
-        let start = child.value.length;
-        // 从末尾按字符边界回退，只处理渐变窗口，不枚举整段文字。
-        while (start > 0 && remaining > 0) {
-          const { segment, index: offset } = characters.containing(start - 1)!;
-          start = offset;
-          if (!segment.trim()) {
-            tail.unshift({ type: "text", value: segment });
-            continue;
-          }
-          tail.unshift({ type: "element", tagName: "span", properties: {
-            className: ["stream-tail"], style: `--stream-opacity:${(STREAM_TAIL_LENGTH - remaining) / STREAM_TAIL_LENGTH}`,
-          }, children: [{ type: "text", value: segment }] });
-          remaining--;
-        }
-        if (start > 0) tail.unshift({ type: "text", value: child.value.slice(0, start) });
-        node.children.splice(index, 1, ...tail);
-      }
-    };
-    split(tree);
-  };
-}
-
-/** 渲染 GFM 与数学公式，正文图片交给本地图片服务，流式新文字淡入。 */
-export const MessageMarkdown = memo(function MessageMarkdown({ text, streaming = false, autoLoadImages = true }: { text: string; streaming?: boolean; autoLoadImages?: boolean }) {
-  const [settledText, setSettledText] = useState<string | null>(null);
+const MarkdownBlock = memo(function MarkdownBlock({ text, separated }: { text: string; separated: boolean }) {
   const markdown = useMemo(() => normalizeMathDelimiters(text), [text]);
-  // 输出暂停时显示完整末尾，避免等待网络或工具期间最后几个字一直透明。
-  useEffect(() => {
-    if (!streaming) return;
-    const timer = setTimeout(() => setSettledText(text), 240);
-    return () => clearTimeout(timer);
-  }, [text, streaming]);
-  return <div className="message-prose"><AutoLoadImages.Provider value={autoLoadImages}><Markdown skipHtml remarkPlugins={[remarkGfm, remarkMath]}
-    rehypePlugins={[[rehypeKatex, { trust: false, strict: false }], ...(streaming && settledText !== text ? [rehypeStreamTail] : [])]}
-    urlTransform={(url, key, node) => key === "src" && node.tagName === "img" ? url : webURL(url)} components={components}>{markdown}</Markdown></AutoLoadImages.Provider></div>;
+  return <>{separated && "\n"}<Markdown skipHtml remarkPlugins={[remarkGfm, remarkMath]}
+    rehypePlugins={[[rehypeKatex, { trust: false, strict: false }]]}
+    urlTransform={(url, key, node) => key === "src" && node.tagName === "img" ? url : webURL(url)} components={components}>{markdown}</Markdown></>;
+});
+
+type MarkdownPrefix = { source: string; blocks: { start: number; text: string }[] };
+const emptyPrefix: MarkdownPrefix = { source: "", blocks: [] };
+
+/** 渲染 GFM 和公式。流式追加时，已解析的 Markdown 块由 React 复用。 */
+export const MessageMarkdown = memo(function MessageMarkdown({ text, streaming = false, autoLoadImages = true }: { text: string; streaming?: boolean; autoLoadImages?: boolean }) {
+  const deferredText = useDeferredValue(text);
+  const displayed = streaming ? deferredText : text;
+  const content = useStreamLineFade(displayed, streaming);
+  const [prefix, setPrefix] = useState(emptyPrefix);
+  // 引用和脚注定义可能改写前面的块，存在定义时按全文解析。
+  const stable = useMemo(() => {
+    if (displayed.includes("]:")) return emptyPrefix;
+    const previous = displayed.startsWith(prefix.source) ? prefix : emptyPrefix;
+    const base = previous.source.length;
+    const starts = streaming ? markdownBlockStarts(displayed.slice(base)) : [];
+    if (!starts.length) return previous;
+    let offset = base;
+    const blocks = starts.map((start) => {
+      const next = base + start;
+      const block = { start: offset, text: displayed.slice(offset, next) };
+      offset = next;
+      return block;
+    });
+    return { source: displayed.slice(0, offset), blocks: [...previous.blocks, ...blocks] };
+  }, [displayed, prefix, streaming]);
+  if (stable !== prefix) setPrefix(stable);
+  const tailStart = stable.source.length;
+  return <div ref={content} className="message-prose"><AutoLoadImages.Provider value={autoLoadImages}>
+    {[...stable.blocks, { start: tailStart, text: displayed.slice(tailStart) }].map((block) =>
+      <MarkdownBlock key={block.start} text={block.text} separated={block.start > 0} />)}
+  </AutoLoadImages.Provider></div>;
 });

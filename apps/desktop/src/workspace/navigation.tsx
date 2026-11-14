@@ -1,10 +1,12 @@
-import type { ReactNode } from "react";
-import { ChevronDown, Folder, FolderOpen, Plus, Settings, SquarePen } from "lucide-react";
+import { useState, type ReactNode } from "react";
+import { ChevronDown, Ellipsis, Folder, FolderOpen, Plus, Settings, SquarePen, Trash2 } from "lucide-react";
 import type { Thread } from "@tilot/protocol";
 import type { WorkspaceState } from "../hooks/use-workspace";
 import { groupThreads, projectName } from "../projects";
 import { Button } from "../components/ui/button";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "../components/ui/collapsible";
+import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "../components/ui/dialog";
+import { Popover, PopoverContent, PopoverTrigger } from "../components/ui/popover";
 import { Sidebar, SidebarContent, SidebarFooter, SidebarGroup, SidebarHeader, SidebarMenu, SidebarMenuAction, SidebarMenuButton, SidebarMenuItem } from "../components/ui/sidebar";
 
 /** 按项目组织的真实任务导航。 */
@@ -15,6 +17,7 @@ interface TaskNavigationProps {
   onSelect: (id: string) => void;
   onNew: (path: string | null) => void;
   onOpenProject: () => void;
+  onDelete: (thread: Thread) => Promise<void>;
 }
 
 /** 可折叠的分组标题：灰色小字，悬停时显示折叠箭头和右侧操作。 */
@@ -39,21 +42,49 @@ function HeaderAction({ label, disabled, onClick }: { label: string; disabled: b
 }
 
 /** 单条任务；选中项用浅色底突出，标题过长时截断。 */
-function ThreadItem({ thread, selected, disabled, indent, onSelect }: { thread: Thread; selected: boolean; disabled: boolean; indent: boolean; onSelect: (id: string) => void }) {
-  return <SidebarMenuItem>
+function ThreadItem({ thread, selected, disabled, indent, onSelect, onDelete }: { thread: Thread; selected: boolean; disabled: boolean; indent: boolean; onSelect: (id: string) => void; onDelete: (thread: Thread) => void }) {
+  const [open, setOpen] = useState(false);
+  return <SidebarMenuItem className="group/thread">
     <SidebarMenuButton asChild isActive={selected} className={indent ? "pl-8" : undefined}>
       <button title={thread.title} aria-current={selected ? "page" : undefined} disabled={disabled} onClick={() => onSelect(thread.id)}>
         <span className="min-w-0 flex-1 truncate">{thread.title}</span>
       </button>
     </SidebarMenuButton>
+    <Popover open={open} onOpenChange={setOpen}>
+      <PopoverTrigger asChild><SidebarMenuAction type="button" disabled={disabled} aria-label={`对话操作：${thread.title}`} title="对话操作"
+        className="text-sidebar-foreground/60 opacity-0 transition-[color,opacity]
+          peer-hover/menu-button:text-sidebar-foreground/60 group-hover/thread:opacity-100 focus-visible:opacity-100
+          hover:bg-transparent data-[state=open]:text-sidebar-accent-foreground data-[state=open]:opacity-100"><Ellipsis /></SidebarMenuAction></PopoverTrigger>
+      <PopoverContent align="start" side="right" className="w-36 p-1">
+        <Button type="button" variant="ghost" size="sm" className="w-full justify-start text-destructive hover:text-destructive"
+          onClick={() => { setOpen(false); onDelete(thread); }}><Trash2 />删除对话</Button>
+      </PopoverContent>
+    </Popover>
   </SidebarMenuItem>;
 }
 
 /** 项目在前、普通对话在后；项目内任务缩进显示在文件夹下方。 */
-export function TaskNavigation({ threads, selected, disabled, onSelect, onNew, onOpenProject }: TaskNavigationProps) {
+export function TaskNavigation({ threads, selected, disabled, onSelect, onNew, onOpenProject, onDelete }: TaskNavigationProps) {
+  const [target, setTarget] = useState<Thread | null>(null);
+  const [deleting, setDeleting] = useState(false);
+  const [error, setError] = useState("");
   const groups = groupThreads(threads);
   const projectGroups = groups.filter((group) => group.path !== null);
   const chatGroup = groups.find((group) => group.path === null);
+
+  function askDelete(thread: Thread): void {
+    setError("");
+    setTarget(thread);
+  }
+
+  async function confirmDelete(): Promise<void> {
+    if (!target || deleting) return;
+    setDeleting(true);
+    setError("");
+    try { await onDelete(target); setTarget(null); }
+    catch (failure) { setError(failure instanceof Error ? failure.message : "删除对话失败，请重试。"); }
+    finally { setDeleting(false); }
+  }
 
   return <>
     <GroupSection label="项目" action={<HeaderAction label="打开项目" disabled={disabled} onClick={onOpenProject} />}>
@@ -68,7 +99,7 @@ export function TaskNavigation({ threads, selected, disabled, onSelect, onNew, o
             </CollapsibleTrigger>
             <SidebarMenuAction showOnHover disabled={disabled} aria-label={`在${projectName(group.path)}中新建对话`} title="新建对话" onClick={() => onNew(group.path)}><SquarePen className="size-3.5!" /></SidebarMenuAction>
             <CollapsibleContent><SidebarMenu>
-              {group.threads.map((thread) => <ThreadItem key={thread.id} thread={thread} selected={thread.id === selected} disabled={disabled} indent onSelect={onSelect} />)}
+              {group.threads.map((thread) => <ThreadItem key={thread.id} thread={thread} selected={thread.id === selected} disabled={disabled} indent onSelect={onSelect} onDelete={askDelete} />)}
             </SidebarMenu></CollapsibleContent>
           </SidebarMenuItem>
         </Collapsible>)}
@@ -80,10 +111,22 @@ export function TaskNavigation({ threads, selected, disabled, onSelect, onNew, o
 
     <GroupSection label="最近" action={<HeaderAction label="新建对话" disabled={disabled} onClick={() => onNew(null)} />}>
       <SidebarMenu>
-        {chatGroup?.threads.map((thread) => <ThreadItem key={thread.id} thread={thread} selected={thread.id === selected} disabled={disabled} indent={false} onSelect={onSelect} />)}
+        {chatGroup?.threads.map((thread) => <ThreadItem key={thread.id} thread={thread} selected={thread.id === selected} disabled={disabled} indent={false} onSelect={onSelect} onDelete={askDelete} />)}
       </SidebarMenu>
       {!chatGroup && <p className="px-2 py-1.5 text-xs leading-relaxed text-sidebar-foreground/45">未绑定项目的对话会出现在这里。</p>}
     </GroupSection>
+    <Dialog open={target !== null} onOpenChange={(open) => { if (!open && !deleting) setTarget(null); }}>
+      <DialogContent showCloseButton={false} className="sm:max-w-sm">
+        <DialogHeader><DialogTitle>删除对话？</DialogTitle>
+          <DialogDescription className="wrap-anywhere">「{target?.title}」的对话记录、草稿和待发送消息将永久删除。</DialogDescription>
+        </DialogHeader>
+        {error && <p role="alert" className="text-sm text-destructive">{error}</p>}
+        <div className="flex justify-end gap-2">
+          <Button type="button" variant="outline" disabled={deleting} onClick={() => setTarget(null)}>取消</Button>
+          <Button type="button" variant="destructive" disabled={deleting} onClick={() => void confirmDelete()}>{deleting ? "删除中…" : "删除对话"}</Button>
+        </div>
+      </DialogContent>
+    </Dialog>
   </>;
 }
 
@@ -98,7 +141,7 @@ export function WorkspaceNavigation({ state }: { state: WorkspaceState }) {
     </SidebarHeader>
     <SidebarContent className="gap-0 px-0"><TaskNavigation threads={state.chat.threads} selected={state.chat.selected} disabled={state.busy}
       onSelect={(id) => state.select(id)} onNew={(path) => state.select(null, path)}
-      onOpenProject={() => void state.chooseProject()} /></SidebarContent>
+      onOpenProject={() => void state.chooseProject()} onDelete={state.deleteThread} /></SidebarContent>
     <SidebarFooter className="p-2">
       <SidebarMenu><SidebarMenuItem>
         <SidebarMenuButton disabled={!state.chat.config} onClick={() => state.setSettingsOpen(true)}>

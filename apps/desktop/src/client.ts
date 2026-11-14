@@ -7,7 +7,7 @@ interface Results {
   "image.import": ImageRef; "image.read": ImageData;
   "input.receipts": string[];
   "question.pending": QuestionGroup | null; "question.draft": QuestionGroup; "question.close": QuestionGroup; "question.submit": QuestionDelivery;
-  "thread.create": Thread; "thread.read": Thread | null; "thread.list": Thread[]; "thread.rename": Thread;
+  "thread.create": Thread; "thread.read": Thread | null; "thread.list": Thread[]; "thread.rename": Thread; "thread.delete": string[];
   "turn.start": Turn; "turn.resume": Turn; "turn.interrupt": { interrupted: boolean }; "turn.read": Turn | null;
   "turn.steer": TurnInput | null;
   "turn.list": Turn[]; "turn.inputs": TurnInput[]; "turn.attempts": AttemptView[];

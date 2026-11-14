@@ -5,6 +5,26 @@ import remarkMath from "remark-math";
 import type { Root, RootContent } from "mdast";
 
 const parser = unified().use(remarkParse).use(remarkGfm).use(remarkMath);
+const blockGap = /\n[^\S\r\n]*\r?\n/;
+
+/** 只切分被空行隔开的顶层块。最后一个块可能仍会被后续文字改写。 */
+export function markdownBlockStarts(text: string): number[] {
+  if (!blockGap.test(text)) return [];
+  const blocks = parser.parse(text).children;
+  // 括号公式可能横跨多个 Markdown 块，包括暂时没有结束符的公式。
+  const formulaRanges = [...text.matchAll(/\\\([\s\S]*?(?:\\\)|$)|\\\[[\s\S]*?(?:\\\]|$)/g)];
+  let formula = 0;
+  return blocks.slice(1).flatMap((block, index) => {
+    const end = blocks[index]!.position!.end.offset!;
+    const start = text.lastIndexOf("\n", block.position!.start.offset! - 1) + 1;
+    // 下一块的首行还在增长时，它仍可能变成前一个列表的续项。
+    if (text.indexOf("\n", block.position!.start.offset!) < 0) return [];
+    while (formula < formulaRanges.length && formulaRanges[formula]!.index + formulaRanges[formula]![0].length <= start) formula++;
+    const nextFormula = formulaRanges[formula];
+    const crossesFormula = nextFormula && nextFormula.index < start;
+    return !crossesFormula && blockGap.test(text.slice(end, start)) ? [start] : [];
+  });
+}
 
 /** 将 LaTeX 的括号分隔符转为 Markdown 数学语法，代码、链接和已有公式保持原文。 */
 export function normalizeMathDelimiters(text: string): string {

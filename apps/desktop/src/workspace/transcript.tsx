@@ -1,4 +1,4 @@
-import { useId, useLayoutEffect, useRef, useState, type ReactNode } from "react";
+import { memo, useId, useLayoutEffect, useRef, useState, type ReactNode } from "react";
 import { ChevronRight, CircleAlert, Square } from "lucide-react";
 import { Button } from "../components/ui/button";
 import type { MessagePart, TextTiming, ToolView, Turn, TurnInput } from "@tilot/protocol";
@@ -42,16 +42,23 @@ function Reasoning({ text, live, timing }: { text: string; live: boolean; timing
   const box = useRef<HTMLDivElement>(null);
   const follow = useRef(true);
   useLayoutEffect(() => {
-    if (!live || !open || !follow.current) return;
-    const frame = requestAnimationFrame(() => {
-      const node = box.current;
-      if (!node || !follow.current || hasSelection(node)) return;
+    const node = box.current;
+    const prose = node?.firstElementChild;
+    if (!live || !open || !node || !prose) return;
+    // Markdown 可能延后一帧提交，只在实际高度变化时跟随。
+    const observer = new ResizeObserver(() => {
+      if (!follow.current || hasSelection(node)) return;
       const bottom = node.scrollHeight - node.clientHeight;
       if (bottom - node.scrollTop > 1) node.scrollTop = bottom;
     });
-    return () => cancelAnimationFrame(frame);
-  }, [live, text, compact, open]);
-  return <Collapsible open={open} onOpenChange={(value) => { onOpenChange(value); if (value) setCompact(false); }} className="text-sm text-muted-foreground">
+    observer.observe(prose);
+    observer.observe(node);
+    return () => observer.disconnect();
+  }, [live, open]);
+  return <Collapsible open={open} onOpenChange={(value) => {
+    onOpenChange(value);
+    if (value) setCompact(false);
+  }} className="text-sm text-muted-foreground">
     <CollapsibleTrigger className="group flex items-center gap-1 rounded-sm outline-none transition-colors hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring">
       <span className={live ? "shimmer-text" : undefined}>{live ? "正在思考" : "思考"}</span>
       <ElapsedTime startedAt={timing?.startedAt} durationMs={timing?.durationMs} running={live} />
@@ -62,7 +69,9 @@ function Reasoning({ text, live, timing }: { text: string; live: boolean; timing
       <div ref={box} onScroll={(event) => {
         const node = event.currentTarget;
         follow.current = node.scrollHeight - node.scrollTop - node.clientHeight < 16;
-      }} className={`mt-2 border-l-2 pl-4 ${compact ? "max-h-36 overflow-hidden mask-t-from-75%" : "max-h-72 overflow-auto"}`}><MessageMarkdown text={text} streaming={live} autoLoadImages={false} /></div>
+      }} className={`mt-2 border-l-2 pl-4 ${compact ? "max-h-36 overflow-hidden mask-t-from-75%" : "max-h-72 overflow-auto"}`}>
+        <MessageMarkdown text={text} streaming={live && open} autoLoadImages={false} />
+      </div>
     </CollapsibleContent>
   </Collapsible>;
 }
@@ -205,7 +214,7 @@ function TurnProcess({ turn, blocks, answer, renderBlock }: {
 }
 
 /** 一轮对话：整轮总开关包住中间正文及过程块，最终正文始终独立显示。 */
-export function TurnMessages({ record, time, onResume, resumeDisabled, onEdit, editDisabled = false }: { record: TurnRecord; time?: number | undefined; onResume?: (() => void) | undefined; resumeDisabled?: boolean; onEdit?: ((text: string) => void) | undefined; editDisabled?: boolean }) {
+export const TurnMessages = memo(function TurnMessages({ record, time, onResume, resumeDisabled, onEdit, editDisabled = false }: { record: TurnRecord; time?: number | undefined; onResume?: (() => void) | undefined; resumeDisabled?: boolean; onEdit?: ((text: string) => void) | undefined; editDisabled?: boolean }) {
   const { turn } = record;
   const active = turn.status === "running";
   const blocks = listTranscriptBlocks(record);
@@ -239,4 +248,4 @@ export function TurnMessages({ record, time, onResume, resumeDisabled, onEdit, e
       <span className="text-muted-foreground">将先核实已有结果，再继续任务。</span>
     </div>}
   </section>;
-}
+});

@@ -95,6 +95,12 @@ export class InputQueue {
 
   pendingDeliveryIds(): string[] { return [...this.states.values()].flatMap((state) => state.messages.map((message) => message.id)); }
 
+  /** 删除对话确认后，清除该对话的待投递消息。 */
+  discardThread(threadId: string): void {
+    this.state(threadId).messages = [];
+    this.changed(threadId);
+  }
+
   /** 只允许删除尚未发送的消息，不能撤回已提交的引导或输入。 */
   remove(threadId: string, id: string): void {
     const state = this.state(threadId);

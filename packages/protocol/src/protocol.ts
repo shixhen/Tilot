@@ -85,6 +85,7 @@ export type RpcRequest =
   | { id: string; method: "thread.read"; params: { threadId: string } }
   | { id: string; method: "thread.list"; params: { limit?: number; offset?: number } }
   | { id: string; method: "thread.rename"; params: { threadId: string; title: string } }
+  | { id: string; method: "thread.delete"; params: { threadId: string } }
   | { id: string; method: "thread.update"; params: { threadId: string; providerId: string; model: string; reasoningEffort: ReasoningEffort } };
 
 /** RPC 错误分类；消息仅描述失败，不回传原始请求。 */

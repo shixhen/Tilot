@@ -15,6 +15,7 @@ export interface TurnManagerOptions {
 
 /** 当前进程持有的执行句柄，关闭连接时取消并等待 Core 完成落库。 */
 interface ActiveTurn {
+  threadId: string;
   controller: AbortController;
   done: Promise<void>;
 }
@@ -62,7 +63,7 @@ export class TurnManager {
 
   private launch(threadId: string, input: string, client: ReturnType<typeof createResponsesClient>, turn?: Turn, images: ImageRef[] = [], deliveryId?: string): Promise<Turn> {
     const started = Promise.withResolvers<Turn>();
-    const execution: ActiveTurn = { controller: new AbortController(), done: Promise.resolve() };
+    const execution: ActiveTurn = { threadId, controller: new AbortController(), done: Promise.resolve() };
     let current: Turn | undefined;
     execution.done = runTurn(this.store, client, {
       threadId, input, images, signal: execution.controller.signal, mcp: this.mcp,
@@ -163,6 +164,14 @@ export class TurnManager {
     if (!execution || this.store.getTurn(turnId)?.status !== "running") return false;
     execution.controller.abort();
     return true;
+  }
+
+  /** 等执行及终态通知完全收尾后，才能删除对话历史。 */
+  deleteThread(threadId: string): string[] {
+    if ([...this.active.values()].some((execution) => execution.threadId === threadId)) {
+      throw new Error("对话正在运行或收尾，请稍后再删除。");
+    }
+    return this.store.deleteThread(threadId);
   }
 
   /** 停止接收新执行，取消所有活动轮次并等待保存终态，之后才能关闭数据库。 */

@@ -83,3 +83,30 @@ test("问题至少一题且不限制题数，选项限四个，空白、非法�
   const draft = emptyQuestionDraft(questions); draft.answers[0]!.mode = "text";
   assert.throws(() => parseQuestionDraft(draft, questions), /不能为空/);
 });
+
+test("删除对话清除轮次、模型请求和提问，运行中拒绝删除且其他对话保留", (context) => {
+  const store = new Store(temporaryDirectory(context));
+  try {
+    const thread = store.createThread("待删除");
+    const other = store.createThread("其他对话");
+    const otherTurn = store.startTurn(other.id, "保留这条输入");
+    const { group, turn } = propose(store, thread.id);
+    const attempt = store.history.listAttempts(turn.id)[0]!;
+    assert.throws(() => store.deleteThread(thread.id), /对话正在运行/);
+    assert.equal(store.questions.get(group.id)?.id, group.id);
+    const draft = emptyQuestionDraft(group.questions);
+    draft.answers.forEach((answer) => { answer.mode = "skipped"; });
+    const answered = store.answerQuestion(group.id, draft, turn.id);
+    store.finishTurn(turn.id, "completed");
+    assert.deepEqual(store.deleteThread(thread.id), [group.id]);
+    assert.equal(store.getThread(thread.id), undefined);
+    assert.equal(store.getTurn(turn.id), undefined);
+    assert.equal(store.history.getAttempt(attempt.id), undefined);
+    assert.deepEqual(store.history.listToolCalls(attempt.id), []);
+    assert.deepEqual(store.listTurnInputs(answered.input.turnId), []);
+    assert.equal(store.questions.get(group.id), undefined);
+    assert.deepEqual(store.deleteThread(thread.id), []);
+    assert.deepEqual(store.listThreads().map((item) => item.id), [other.id]);
+    assert.equal(store.listTurnInputs(otherTurn.id)[0]?.content, "保留这条输入");
+  } finally { store.close(); }
+});

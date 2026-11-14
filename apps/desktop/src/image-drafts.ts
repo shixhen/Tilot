@@ -42,6 +42,13 @@ export class ImageDrafts {
     return draft ? { ...draft, attachments: draft.attachments.map((attachment) => ({ ...attachment })) } : { text: "", attachments: [] };
   }
   edit(key: string, text: string): void { this.drafts[key] = { ...this.view(key), text }; this.save(); }
+  discard(key: string): void {
+    const draft = this.drafts[key];
+    if (!draft) return;
+    for (const attachment of draft.attachments) this.sources.delete(attachment.id);
+    delete this.drafts[key];
+    this.save();
+  }
   add(key: string, sources: ImageSource[]): void {
     const attachments = sources.map((source) => {
       const id = crypto.randomUUID(); this.sources.set(id, source);
@@ -81,6 +88,7 @@ export class ImageDrafts {
     const received = new Set(await known(pending.map(([, draft]) => draft.submission!.id)));
     for (const [key, draft] of pending) {
       const marker = draft.submission!;
+      if (this.drafts[key]?.submission?.id !== marker.id) continue;
       const current = this.view(key);
       if (received.has(marker.id)) {
         if (current.text === marker.text) current.text = "";

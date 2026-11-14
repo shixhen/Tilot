@@ -13,6 +13,7 @@ export function useChat() {
   const client = useRef<Request | null>(null);
   const mounted = useRef(false);
   const loading = useRef(new Map<string, number>());
+  const deletedThreads = useRef(new Set<string>());
   const submitting = useRef(false);
   const [connected, setConnected] = useState(false);
   const [threads, setThreads] = useState<Thread[]>([]);
@@ -57,11 +58,11 @@ export function useChat() {
     },
     steer: (turnId, input, images, deliveryId) => request("turn.steer", { turnId, input, images, deliveryId }),
     receipts: (threadId, deliveryIds) => request("input.receipts", { threadId, deliveryIds }),
-    changed: (threadId, view) => { if (mounted.current) setQueues((state) => ({ ...state, [threadId]: view })); },
+    changed: (threadId, view) => { if (mounted.current && !deletedThreads.current.has(threadId)) setQueues((state) => ({ ...state, [threadId]: view })); },
     error: report,
   }, localStorage);
   if (!questionSession.current) questionSession.current = new QuestionSession(request, localStorage,
-    (threadId, state) => { if (mounted.current) setQuestions((current) => ({ ...current, [threadId]: state })); },
+    (threadId, state) => { if (mounted.current && !deletedThreads.current.has(threadId)) setQuestions((current) => ({ ...current, [threadId]: state })); },
     async (threadId, action) => {
       await queue.current!.withPriority(threadId, async () => {
         const delivery = await action();
@@ -78,7 +79,7 @@ export function useChat() {
       result.push(...page);
       if (page.length < 100) break;
     }
-    if (mounted.current) setThreads(result);
+    if (mounted.current) setThreads(result.filter((thread) => !deletedThreads.current.has(thread.id)));
   }
 
   /** 最新查询才可提交结果；历史与期间收到的事件合并，避免刷新覆盖流式内容。 */
@@ -93,6 +94,8 @@ export function useChat() {
         const latest = history.at(-1)?.turn;
         if (latest) queue.current!.observe(latest);
       }
+    } catch (error) {
+      if (!deletedThreads.current.has(threadId)) throw error;
     } finally {
       if (mounted.current && loading.current.get(threadId) === version) setHistoryLoading((state) => ({ ...state, [threadId]: false }));
     }
@@ -102,14 +105,18 @@ export function useChat() {
   async function refreshApprovals(threadId: string): Promise<void> {
     const revision = approvalRevisions.current.get(threadId) ?? 0;
     const pending = await request("approval.list", { threadId });
-    if (mounted.current && (approvalRevisions.current.get(threadId) ?? 0) === revision) {
+    if (mounted.current && !deletedThreads.current.has(threadId) && (approvalRevisions.current.get(threadId) ?? 0) === revision) {
       setApprovals((current) => [...current.filter((item) => item.threadId !== threadId), ...pending]);
     }
   }
 
   /** 一批增量只更新一次会话状态，审批及轮次事件仍立即处理。 */
-  function receive(events: ServerEvent[]): void {
+  function receive(incoming: ServerEvent[]): void {
     if (!mounted.current) return;
+    const events = incoming.filter((event) => {
+      const threadId = "turn" in event ? event.turn.threadId : "approval" in event ? event.approval.threadId : event.threadId;
+      return !deletedThreads.current.has(threadId);
+    });
     const updates = events.filter((event) => event.event !== "approval.requested" && event.event !== "approval.resolved" && event.event !== "question.updated");
     if (updates.length) setConversations((state) => {
       const next = { ...state };
@@ -175,6 +182,27 @@ export function useChat() {
     if (threadId === null) { setNewProjectPath(projectPath); setNewPermissionMode(null); }
     setError("");
     if (threadId) void Promise.all([refreshHistory(threadId), refreshApprovals(threadId)]).catch(report);
+  }
+
+  /** 和在途投递串行，服务确认删除后再移除界面记录与本地等待消息。 */
+  async function deleteThread(thread: Thread): Promise<void> {
+    const threadId = thread.id;
+    await queue.current!.withPriority(threadId, async () => {
+      const questionIds = await request("thread.delete", { threadId });
+      deletedThreads.current.add(threadId);
+      loading.current.delete(threadId);
+      approvalRevisions.current.delete(threadId);
+      setThreads((current) => current.filter((item) => item.id !== threadId));
+      setConversations(({ [threadId]: removed, ...current }) => current);
+      setHistoryLoading(({ [threadId]: removed, ...current }) => current);
+      setQueues(({ [threadId]: removed, ...current }) => current);
+      setQuestions(({ [threadId]: removed, ...current }) => current);
+      setApprovals((current) => current.filter((approval) => approval.threadId !== threadId));
+      if (selected === threadId) select(null, thread.projectPath);
+      queue.current!.discardThread(threadId);
+      try { questionSession.current!.discardThread(threadId, questionIds); }
+      catch { report(new Error("对话已删除，本机答题草稿清理失败。")); }
+    });
   }
 
   /** 首次发送时创建任务；所有消息先可靠入队，再由相同投递身份提交服务。 */
@@ -282,5 +310,5 @@ export function useChat() {
     resumeQueue: () => { if (selected) queue.current!.resume(selected); },
     error, busy, historyLoading: selected ? historyLoading[selected] ?? false : false,
     knownDeliveries: async (deliveryIds: string[]) => [...queue.current!.pendingDeliveryIds(), ...await request("input.receipts", { deliveryIds })],
-    request, select, send, resume, stop, updateThread, updateDefaults, refreshConfig };
+    request, select, deleteThread, send, resume, stop, updateThread, updateDefaults, refreshConfig };
 }
