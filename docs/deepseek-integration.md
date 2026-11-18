@@ -49,7 +49,7 @@ Responses 模块位于 `packages/responses`，使用 OpenAI SDK 的 `client.resp
 
 DeepSeek 的实现无服务端会话存储，不支持 previous_response_id、conversation 或 background。每次请求从本地记录重建所需 input；responseId 仅用于追踪，不能作为服务端恢复凭据。[无状态约束][A1]
 
-桌面新建对话时，先显示首条输入的片段或图片名。使用 DeepSeek 官方服务及思考模式时，仅在首轮的第一次模型请求附加 `title: { enabled: true }`。成功终态中的 `response.title` 会替换临时标题，由桌面刷新对话列表。服务未返回标题时沿用临时标题，手动改名优先。DeepSeek 仅在思考模式下允许客户端工具和自动标题同时启用，快速模式沿用首条输入标题。发送给 DeepSeek 的文件查找工具名称为 `find_files`，避开服务的保留名称 `find`。已有标题和原始工具历史照常保存。数据库版本 17 保存临时标题的标记。[DeepSeek 会话标题](https://api-docs.deepseek.com/zh-cn/guides/conversation_title/)
+桌面新建对话时，先显示首条输入的片段或图片名。使用 DeepSeek 官方服务及思考模式时，首轮仍有临时标题就随正常模型请求附加 `title: { enabled: true }`。首个响应若只有工具调用，标题可随首轮后续响应返回。成功终态中的 `response.title` 会替换临时标题，由桌面刷新对话列表。保存自动标题或手动改名后停止请求标题。首轮结束时仍无标题则沿用临时标题。DeepSeek 仅在思考模式下允许客户端工具和自动标题同时启用，快速模式沿用首条输入标题。发送给 DeepSeek 的文件查找工具名称为 `find_files`，避开服务的保留名称 `find`。已有标题和原始工具历史照常保存。数据库版本 17 保存临时标题的标记。[DeepSeek 会话标题](https://api-docs.deepseek.com/zh-cn/guides/conversation_title/)
 
 parallel_tool_calls 和 max_tool_calls 被服务忽略，调用数量及串行策略由 Agent Core 控制，通过 Tool 执行。instructions 用于系统策略；该实现将 developer 角色作为 user 处理，不能靠它承载更高优先级指令。[兼容表][A4]
 
@@ -164,7 +164,7 @@ Responses 的 function 字段位于工具对象顶层。以下仅示意读取工
 - 未命中输入：输入总量减缓存命中量。
 - 输出总量：output_tokens；其中 reasoning_tokens 是子项，不重复计费。
 
-按整轮累计服务返回的用量。联网计费次数取 `usage.server_tool_use` 中 `tool_search`、`tool_fetch`、`tool_image_search` 之和，按 ¥0.005/次加进本轮费用。Token 费用继续按每百万缓存命中输入 ¥0.02、未命中输入 ¥1、输出 ¥4 计算。有 usage 而省略 `server_tool_use` 时，计费次数为零。
+按整轮累计服务返回的用量。联网次数取 `usage.server_tool_use` 中 `tool_search`、`tool_fetch`、`tool_image_search` 之和，有 usage 而省略 `server_tool_use` 时显示零次。本轮费用仅按 Token 用量估算，每百万缓存命中输入 ¥0.02、未命中输入 ¥1、输出 ¥4。
 
 失败、截断及取消请求带 usage 时原样保存并参与累计。缺失字段影响的合计显示未知。缓存命中率按累计缓存命中除以累计输入计算。TPS 按累计输出除以各次模型生成时间之和计算，排除工具执行与首 Token 等待。原始用量和计时仍按请求保存，可用于历史重算及未来的对话范围汇总。
 

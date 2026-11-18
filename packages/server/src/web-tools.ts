@@ -33,7 +33,7 @@ export function projectWebTool(item: ResponseFunctionWebSearch, outputIndex: num
   };
 }
 
-/** 无计费操作时 DeepSeek 省略整个字段；没有 usage 时计费次数未知。 */
+/** 有用量时，省略联网统计字段表示次数为零；缺少用量时次数未知。 */
 export function webToolCalls(usage: Response["usage"]): number | null {
   if (!usage) return null;
   if (!("server_tool_use" in usage) || usage.server_tool_use == null) return 0;

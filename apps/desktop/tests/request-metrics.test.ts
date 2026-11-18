@@ -61,8 +61,8 @@ test("整轮累计全部模型请求，同一请求的思考、消息及工具�
   assert.match(html, /缓存命中率<\/dt><dd[^>]*>33%<\/dd>/);
   assert.match(html, /缓存未命中<\/dt><dd[^>]*>270<\/dd>/);
   assert.match(html, /输出 token<\/dt><dd[^>]*>150<\/dd>/);
-  assert.match(html, /联网计费次数<\/dt><dd[^>]*>3<\/dd>/);
-  assert.match(html, /本轮费用<\/dt><dd[^>]*>¥0\.0158726<\/dd>/);
+  assert.match(html, /联网次数<\/dt><dd[^>]*>3<\/dd>/);
+  assert.match(html, /本轮费用<\/dt><dd[^>]*>¥0\.0008726<\/dd>/);
   assert.match(html, /23\.1 token\/s/);
 });
 
@@ -121,6 +121,9 @@ test("缺失用量只使对应合计未知，不误用部分和；旧计时缺�
   const missingWebUsage = getTurnMetrics(record([attempt(1, { webToolCalls: 2 }), attempt(2, { webToolCalls: null })]));
   assert.equal(missingWebUsage.webToolCalls, null);
   assert.equal(missingWebUsage.missingUsageCount, 1);
+  const html = renderToStaticMarkup(createElement(MetricsDetails, { metrics: missingWebUsage }));
+  assert.match(html, /联网次数<\/dt><dd[^>]*>暂无数据<\/dd>/);
+  assert.match(html, /本轮费用<\/dt><dd[^>]*>¥0\.0002424<\/dd>/);
   const missing = attempt(2);
   delete missing.metrics;
   const unknown = getTurnMetrics(record([attempt(1), missing]));

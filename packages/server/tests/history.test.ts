@@ -91,7 +91,7 @@ function sampleResponse(): Response {
   };
 }
 
-test("联网历史按顺序投影搜索、打开网页、失败状态及正文来源，并按服务端用量计费", (context) => {
+test("联网历史按顺序投影搜索、打开网页、失败状态及正文来源，并汇总联网次数", (context) => {
   const { store } = openHistory(context);
   const turn = store.startTurn(store.createThread("联网历史").id, "查询");
   const attempt = store.history.startAttempt(turn.id, store.listTurnInputs(turn.id)[0]!.id);

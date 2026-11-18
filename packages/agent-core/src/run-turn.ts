@@ -71,7 +71,7 @@ export async function runTurn(store: Store, client: OpenAI, options: RunTurnOpti
   const deepSeek = new URL(client.baseURL).origin === "https://api.deepseek.com";
   // DeepSeek 仅允许在思考模式下混用服务端能力和客户端工具。
   let useNativeWeb = deepSeek && thread.reasoningEffort !== "none";
-  let generateTitle = turn.sequence === 1 && useNativeWeb;
+  const canGenerateTitle = turn.sequence === 1 && useNativeWeb;
   // 使用任务自己选择的服务、模型和思考强度，其余配置取全局值。
   const config = { ...store.getConfig(), providerId: thread.providerId, model: thread.model, reasoningEffort: thread.reasoningEffort };
   let workspace: Workspace;
@@ -176,8 +176,8 @@ export async function runTurn(store: Store, client: OpenAI, options: RunTurnOpti
   async function requestWithRecovery(inputThroughId: number, tools: ToolSet): Promise<AttemptResult> {
     const attempt = (generateTitle: boolean) => requestAttempt(store, client, turn, inputThroughId, config, workspace, tools,
       requestOptions, imageState, mcp?.warnings, { deepSeek, generateTitle, useNativeWeb });
-    let title = generateTitle && store.hasPendingTitle(thread.id);
-    generateTitle = false;
+    // 首个响应可能只调用工具，标题可随首轮后续响应一起返回。
+    let title = canGenerateTitle && store.hasPendingTitle(thread.id);
     let retriedImage = false;
     while (true) {
       const result = await attempt(title);
