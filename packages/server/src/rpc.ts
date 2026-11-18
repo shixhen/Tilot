@@ -139,11 +139,13 @@ function parseRequest(value: unknown): RpcRequest {
       break;
     case "thread.create":
       if (typeof params.title === "string" &&
+          (params.autoTitle === undefined || typeof params.autoTitle === "boolean") &&
           (params.permissionMode === undefined || isPermissionMode(params.permissionMode)) &&
           (params.projectPath === undefined || params.projectPath === null || typeof params.projectPath === "string")) {
         return { id: value.id, method: value.method, params: {
           title: params.title, ...(params.projectPath === undefined ? {} : { projectPath: params.projectPath }),
           ...(params.permissionMode === undefined ? {} : { permissionMode: params.permissionMode }),
+          ...(params.autoTitle === undefined ? {} : { autoTitle: params.autoTitle }),
         } };
       }
       break;
@@ -289,7 +291,7 @@ export async function handleRpcLine(store: Store, line: string, turns: TurnManag
       case "thread.create": {
         const path = request.params.projectPath;
         const projectPath = path == null ? null : (await openWorkspace(path)).rootPath;
-        result = store.createThread(request.params.title, projectPath, request.params.permissionMode);
+        result = store.createThread(request.params.title, projectPath, request.params.permissionMode, request.params.autoTitle);
         break;
       }
       case "thread.read":

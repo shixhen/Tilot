@@ -1,12 +1,13 @@
 import { runTurn, type TurnEvent } from "@tilot/agent-core";
 import { createResponsesClient } from "@tilot/responses";
 import type { Store, Turn, TurnInput } from "@tilot/store";
-import type { ImageRef, ServerEvent, TurnNotification } from "@tilot/protocol";
+import type { ImageRef, ServerEvent, ToolView, TurnNotification } from "@tilot/protocol";
 import type { QuestionDelivery, QuestionDraft } from "@tilot/protocol";
 import { listAttemptViews, projectMessages } from "./history.ts";
 import { readPrompt } from "@tilot/context";
 import { ApprovalManager } from "./approvals.ts";
 import { McpManager } from "@tilot/tool";
+import { projectWebTool } from "./web-tools.ts";
 
 export interface TurnManagerOptions {
   mcp?: McpManager;
@@ -65,6 +66,7 @@ export class TurnManager {
     const started = Promise.withResolvers<Turn>();
     const execution: ActiveTurn = { threadId, controller: new AbortController(), done: Promise.resolve() };
     let current: Turn | undefined;
+    const pendingWeb = new Map<string, ToolView>();
     execution.done = runTurn(this.store, client, {
       threadId, input, images, signal: execution.controller.signal, mcp: this.mcp,
       ...(this.globalSkillsDirectory ? { globalSkillsDirectory: this.globalSkillsDirectory } : {}),
@@ -92,9 +94,18 @@ export class TurnManager {
           for (const tool of attempt.tools) tool.running = tool.id === event.runningToolId;
           await this.emit({ event: "attempt.updated", threadId, turnId: event.turnId, attempt });
         } else {
-          if (["response.created", "response.output_item.done", "response.completed", "response.failed", "response.incomplete"].includes(event.event.type)) {
+          const response = event.event;
+          const webStarted = response.type === "response.output_item.added" && response.item.type === "web_search_call"
+            ? projectWebTool(response.item, response.output_index) : undefined;
+          if (response.type === "response.created" || response.type === "response.completed" ||
+              response.type === "response.failed" || response.type === "response.incomplete") pendingWeb.clear();
+          else if (webStarted) pendingWeb.set(webStarted.id, webStarted);
+          else if (response.type === "response.output_item.done") pendingWeb.delete(response.item.id!);
+          if (event.titleUpdated) await this.emit({ event: "thread.title", threadId });
+          if (webStarted || ["response.created", "response.output_item.done", "response.completed", "response.failed", "response.incomplete"].includes(response.type)) {
             const saved = this.store.history.getAttempt(event.attemptId)!;
             const attempt = listAttemptViews(this.store, event.turnId, saved.sequence - 1, 1)[0]!;
+            attempt.tools.push(...pendingWeb.values());
             await this.emit({ event: "attempt.updated", threadId, turnId: event.turnId, attempt });
           }
           for (const notification of projectResponseEvent(threadId, event)) await this.emit(notification);

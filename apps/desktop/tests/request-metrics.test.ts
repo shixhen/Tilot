@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
-import type { AttemptView, ResponseMetrics } from "@tilot/protocol";
+import type { AttemptView, ResponseMetrics, ToolView } from "@tilot/protocol";
 import type { Request } from "../src/client.ts";
 import { applyEvent, loadConversation, mergeHistory, type TurnRecord } from "../src/conversation.ts";
 import { getContextTokens, getRequestMetrics, getTurnMetrics } from "../src/request-metrics.ts";
@@ -43,13 +43,13 @@ test("上下文使用最近一次请求的输入加输出，运行中沿用已�
 });
 
 test("整轮累计全部模型请求，同一请求的思考、消息及工具不会重复计数，比例按合计计算", () => {
-  const first = attempt(1, { inputTokens: 100, cachedTokens: 100, outputTokens: 50, firstTokenMs: 500, durationMs: 2000 });
+  const first = attempt(1, { inputTokens: 100, cachedTokens: 100, outputTokens: 50, firstTokenMs: 500, durationMs: 2000, webToolCalls: 2 });
   first.messages = [
     { itemId: "reasoning", outputIndex: 0, parts: [{ kind: "reasoning", text: "思考" }] },
     { itemId: "message", outputIndex: 1, parts: [{ kind: "text", text: "先读文件" }] },
   ];
   first.tools = [{ id: "tool", outputIndex: 2, name: "read", arguments: "{}", output: "文件内容", running: false }];
-  const second = attempt(2, { inputTokens: 300, cachedTokens: 30, outputTokens: 100, firstTokenMs: 3000, durationMs: 8000 });
+  const second = attempt(2, { inputTokens: 300, cachedTokens: 30, outputTokens: 100, firstTokenMs: 3000, durationMs: 8000, webToolCalls: 1 });
   const metrics = getTurnMetrics(record([first, second]));
   assert.equal(metrics.requestCount, 2);
   assert.equal(metrics.inputTokens, 400);
@@ -61,7 +61,8 @@ test("整轮累计全部模型请求，同一请求的思考、消息及工具�
   assert.match(html, /缓存命中率<\/dt><dd[^>]*>33%<\/dd>/);
   assert.match(html, /缓存未命中<\/dt><dd[^>]*>270<\/dd>/);
   assert.match(html, /输出 token<\/dt><dd[^>]*>150<\/dd>/);
-  assert.match(html, /本轮费用<\/dt><dd[^>]*>¥0\.0008726<\/dd>/);
+  assert.match(html, /联网计费次数<\/dt><dd[^>]*>3<\/dd>/);
+  assert.match(html, /本轮费用<\/dt><dd[^>]*>¥0\.0158726<\/dd>/);
   assert.match(html, /23\.1 token\/s/);
 });
 
@@ -71,7 +72,7 @@ test("失败、截断、取消和中断的已返回用量均计入，汇总函�
   }));
   assert.deepEqual(getRequestMetrics(attempts), {
     requestCount: 5, finishedRequestCount: 5, missingUsageCount: 0,
-    inputTokens: 500, cachedTokens: 300, outputTokens: 100, tokensPerSecond: 20,
+    inputTokens: 500, cachedTokens: 300, outputTokens: 100, webToolCalls: 0, tokensPerSecond: 20,
   });
 });
 
@@ -91,12 +92,35 @@ test("运行中的请求不补零，终态快照替换原记录，重复事件�
   assert.equal(getTurnMetrics(records[0]!).requestCount, 2);
 });
 
+test("运行中刷新保留临时联网卡片，结束后以正式历史为准并显示正文来源", () => {
+  const tool: ToolView = { id: "web-tool", outputIndex: 0, name: "web_search", arguments: '{"queries":["测试"]}', output: null, running: true, hosted: true };
+  const running = { ...attempt(1), status: "running" as const, tools: [tool] };
+  const current = record([running]);
+  current.turn.status = "running";
+  const refresh = record([{ ...running, tools: [] }]);
+  refresh.turn.status = "running";
+  const [merged] = mergeHistory([current], [refresh]);
+  assert.deepEqual(merged!.attempts[0]!.tools, [tool]);
+  const source = { url: "https://example.com/report", title: "报告来源" };
+  const finished = record([{
+    ...attempt(1),
+    messages: [{ itemId: "answer", outputIndex: 1, parts: [{ kind: "text", text: "有引用的答案", sources: [source, source] }] }],
+  }]);
+  const [settled] = mergeHistory([merged!], [finished]);
+  assert.deepEqual(settled!.attempts[0]!.tools, []);
+  const html = renderToStaticMarkup(createElement(TooltipProvider, null, createElement(TurnMessages, { record: settled! })));
+  assert.equal((html.match(/href="https:\/\/example\.com\/report"/g) ?? []).length, 1);
+});
+
 test("缺失用量只使对应合计未知，不误用部分和；旧计时缺失时不估算 TPS", () => {
   const partial = getTurnMetrics(record([attempt(1), attempt(2, { cachedTokens: null })]));
   assert.equal(partial.missingUsageCount, 1);
   assert.equal(partial.inputTokens, 200);
   assert.equal(partial.outputTokens, 40);
   assert.equal(partial.cachedTokens, null);
+  const missingWebUsage = getTurnMetrics(record([attempt(1, { webToolCalls: 2 }), attempt(2, { webToolCalls: null })]));
+  assert.equal(missingWebUsage.webToolCalls, null);
+  assert.equal(missingWebUsage.missingUsageCount, 1);
   const missing = attempt(2);
   delete missing.metrics;
   const unknown = getTurnMetrics(record([attempt(1), missing]));

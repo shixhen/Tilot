@@ -50,7 +50,11 @@ export class ModelHistoryStore {
   /** 完整输出先于界面通知落库；工具仅登记意图，成功终态前不能执行。 */
   saveCompletedOutput(id: string, output: CompletedOutput, diagnostics: Pick<AttemptCompletion, "response" | "firstTokenMs" | "reasoningTimings"> = {}): void {
     if (!Number.isSafeInteger(output.outputIndex) || output.outputIndex < 0 || !output.item.id) throw new Error("完整输出缺少有效位置或标识。");
-    if ("status" in output.item && output.item.status !== undefined && output.item.status !== "completed") throw new Error("不能保存未完成的输出项。");
+    const { item } = output;
+    const failedWebCall = item.type === "web_search_call" && item.status === "failed";
+    if ("status" in item && item.status !== undefined && item.status !== "completed" && !failedWebCall) {
+      throw new Error("不能保存未完成的输出项。");
+    }
     this.database.transaction(() => {
       const attempt = this.getAttempt(id);
       if (!attempt || attempt.status !== "running") throw new Error("请求尝试不存在或已结束。");

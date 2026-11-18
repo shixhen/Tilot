@@ -19,6 +19,93 @@ import { type ImageRef, type ImageData, type Turn, type AttemptView } from "@til
 import { png } from "../../tool/tests/image-fixture.ts";
 import { httpFixture } from "../../tool/tests/http-fixture.ts";
 
+test("DeepSeek 自动标题兼容查找文件，后续请求和手动标题不被覆盖", { timeout: 10000 }, async (context) => {
+  const model = await mockModel(context);
+  const fetch = globalThis.fetch;
+  context.mock.method(globalThis, "fetch", (url: URL | Request | string, options?: RequestInit) => {
+    const localURL = `${model.baseURL}/responses`;
+    assert.ok([localURL, "https://api.deepseek.com/responses"].includes(String(url)));
+    return fetch(localURL, options);
+  });
+  const session = openSession(context, "https://api.deepseek.com");
+  async function createAndStart(id: string) {
+    const created = await session.request({ id, method: "thread.create", params: { title: "首条消息", autoTitle: true } });
+    assert.ok(created.success && created.result && !Array.isArray(created.result) && "title" in created.result);
+    return { thread: created.result, turnId: await session.start(created.result.id, `${id}-start`) };
+  }
+  const waitStarted = (turnId: string, sequence: number) => session.waitFor((message) => "event" in message &&
+    message.event === "attempt.updated" && message.turnId === turnId && message.attempt.sequence === sequence);
+  const waitFinished = (turnId: string) => session.waitFor((message) => "event" in message && message.event === "turn.finished" && message.turn.id === turnId);
+
+  const generated = await createAndStart("generated");
+  await waitStarted(generated.turnId, 1);
+  assert.deepEqual(model.requests[0]!.title, { enabled: true });
+  const toolNames = (request: Record<string, unknown>) => (request.tools as { name: string }[]).map((tool) => tool.name);
+  assert.ok(toolNames(model.requests[0]!).includes("find_files"));
+  assert.ok(!toolNames(model.requests[0]!).includes("find"));
+  assert.equal(session.store.getThread(generated.thread.id)?.title, "首条消息");
+  writeFileSync(join(session.store.dataDirectory, "workspaces", generated.thread.id, "title-test.txt"), "", "utf8");
+  model.finish(0, false, [{ name: "find_files", arguments: '{"pattern":"title-test.txt"}' }], undefined, "  自动\n标题  ");
+  await session.waitFor((message) => "event" in message && message.event === "thread.title" && message.threadId === generated.thread.id);
+  await waitStarted(generated.turnId, 2);
+  assert.equal(model.requests[1]!.title, undefined);
+  assert.deepEqual(toolNames(model.requests[1]!), toolNames(model.requests[0]!));
+  const replayed = model.requests[1]!.input as { type?: string; name?: string; call_id?: string; output?: string }[];
+  const call = replayed.find((item) => item.type === "function_call");
+  assert.equal(call?.name, "find_files");
+  const result = replayed.find((item) => item.type === "function_call_output" && item.call_id === call?.call_id);
+  assert.deepEqual(JSON.parse(result!.output!).data.files, ["title-test.txt"]);
+  const shown = await session.waitFor((message) => "event" in message && message.event === "attempt.updated" &&
+    message.turnId === generated.turnId && message.attempt.tools.some((tool) => tool.output !== null));
+  assert.ok("event" in shown && shown.event === "attempt.updated");
+  assert.equal(shown.attempt.tools[0]!.name, "find");
+  model.finish(1, false, [], undefined, "后续标题");
+  await waitFinished(generated.turnId);
+  const read = await session.request({ id: "read-title", method: "thread.read", params: { threadId: generated.thread.id } });
+  assert.ok(read.success && read.result && !Array.isArray(read.result) && "title" in read.result);
+  assert.equal(read.result.title, "自动 标题");
+
+  const renamed = await createAndStart("renamed");
+  await waitStarted(renamed.turnId, 1);
+  assert.ok((await session.request({ id: "rename", method: "thread.rename", params: { threadId: renamed.thread.id, title: "我改的标题" } })).success);
+  model.finish(2, false, [], undefined, "迟到的标题");
+  await waitFinished(renamed.turnId);
+  assert.equal(session.store.getThread(renamed.thread.id)?.title, "我改的标题");
+
+  const fallback = await createAndStart("fallback");
+  await waitStarted(fallback.turnId, 1);
+  model.finish(3);
+  await waitFinished(fallback.turnId);
+  assert.equal(session.store.getThread(fallback.thread.id)?.title, "首条消息");
+  const nextTurn = await session.start(fallback.thread.id, "fallback-next");
+  await waitStarted(nextTurn, 1);
+  assert.equal(model.requests[4]!.title, undefined);
+  model.finish(4);
+  await waitFinished(nextTurn);
+  assert.equal(session.received.filter((message) => "event" in message && message.event === "thread.title").length, 1);
+
+  const custom = openSession(context, model.baseURL);
+  const customThread = custom.store.createThread("自定义服务", null, undefined, true);
+  const customTurn = await custom.start(customThread.id, "custom");
+  await custom.waitFor((message) => "event" in message && message.event === "message.delta" && message.turnId === customTurn);
+  assert.equal(model.requests[5]!.title, undefined);
+  assert.ok(toolNames(model.requests[5]!).includes("find"));
+  assert.ok(!toolNames(model.requests[5]!).includes("find_files"));
+  model.finish(5, false, [], undefined, "未请求的标题");
+  await custom.waitFor((message) => "event" in message && message.event === "turn.finished" && message.turn.id === customTurn);
+  assert.equal(custom.store.getThread(customThread.id)?.title, "自定义服务");
+
+  const fast = session.store.createThread("快速模式", null, undefined, true);
+  session.store.updateThreadModel(fast.id, fast.providerId, fast.model, "none");
+  const fastTurn = await session.start(fast.id, "fast");
+  await waitStarted(fastTurn, 1);
+  assert.equal(model.requests[6]!.title, undefined);
+  assert.ok(toolNames(model.requests[6]!).includes("find_files"));
+  model.finish(6);
+  await waitFinished(fastTurn);
+  assert.equal(session.store.getThread(fast.id)?.title, "快速模式");
+});
+
 test("普通对话按需读取全局技能，后续请求刷新索引且坏文件每轮只提示一次", { timeout: 10000 }, async (context) => {
   const model = await mockModel(context);
   const session = openSession(context, model.baseURL);
@@ -210,7 +297,7 @@ async function mockModel(context: TestContext) {
   const address = server.address();
   assert.ok(address && typeof address !== "string");
   /** 为指定请求发送成功或失败终态，完整正文特意比增量长，以验证替换行为。 */
-  function finish(index: number, failed = false, calls: { name: string; arguments: string }[] = [], usage?: ResponseUsage): void {
+  function finish(index: number, failed = false, calls: { name: string; arguments: string }[] = [], usage?: ResponseUsage, title?: string): void {
     const { response, id } = pending[index]!;
     if (failed) {
       response.end(sse({ type: "response.failed", sequence_number: 5, response: { id, status: "failed", output: [], error: { message: "模拟模型失败" }, ...(usage ? { usage } : {}) } }));
@@ -226,7 +313,7 @@ async function mockModel(context: TestContext) {
       if (output_index >= 2) response.write(sse({ type: "response.output_item.added", sequence_number: sequence_number++, output_index, item }));
       response.write(sse({ type: "response.output_item.done", sequence_number: sequence_number++, output_index, item }));
     }
-    response.end(sse({ type: "response.completed", sequence_number, response: { id, status: "completed", output, ...(usage ? { usage } : {}) } }));
+    response.end(sse({ type: "response.completed", sequence_number, response: { id, status: "completed", output, ...(usage ? { usage } : {}), ...(title === undefined ? {} : { title }) } }));
   }
   return { baseURL: `http://127.0.0.1:${address.port}`, finish, requests };
 }

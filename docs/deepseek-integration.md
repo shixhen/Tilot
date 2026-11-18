@@ -28,7 +28,7 @@ Responses 模块位于 `packages/responses`，使用 OpenAI SDK 的 `client.resp
 | 系统策略 | instructions，每次请求都发送 |
 | 本次所需历史 | input，按顺序排列消息、推理、调用及结果 |
 | reasoningEffort | reasoning.effort |
-| 工具声明 | tools 中的平铺 function 对象 |
+| 工具声明 | tools 中的平铺 function 对象及 DeepSeek 服务端工具 |
 | 流式开关 | stream: true |
 
 “快速”对应 effort=none，“标准”对应 high；高级设置提供 low/max。请求省略可选的 max_output_tokens，由服务决定默认输出上限；应用也不设置输入预算或预留量。模型 ID、能力和核查日期使用版本化配置，记录实际响应 model，不自动改换用户选择。[请求参数][A2]、[模型说明][A3]
@@ -49,9 +49,13 @@ Responses 模块位于 `packages/responses`，使用 OpenAI SDK 的 `client.resp
 
 DeepSeek 的实现无服务端会话存储，不支持 previous_response_id、conversation 或 background。每次请求从本地记录重建所需 input；responseId 仅用于追踪，不能作为服务端恢复凭据。[无状态约束][A1]
 
+桌面新建对话时，先显示首条输入的片段或图片名。使用 DeepSeek 官方服务及思考模式时，仅在首轮的第一次模型请求附加 `title: { enabled: true }`。成功终态中的 `response.title` 会替换临时标题，由桌面刷新对话列表。服务未返回标题时沿用临时标题，手动改名优先。DeepSeek 仅在思考模式下允许客户端工具和自动标题同时启用，快速模式沿用首条输入标题。发送给 DeepSeek 的文件查找工具名称为 `find_files`，避开服务的保留名称 `find`。已有标题和原始工具历史照常保存。数据库版本 17 保存临时标题的标记。[DeepSeek 会话标题](https://api-docs.deepseek.com/zh-cn/guides/conversation_title/)
+
 parallel_tool_calls 和 max_tool_calls 被服务忽略，调用数量及串行策略由 Agent Core 控制，通过 Tool 执行。instructions 用于系统策略；该实现将 developer 角色作为 user 处理，不能靠它承载更高优先级指令。[兼容表][A4]
 
-项目任务声明 read、write、edit、shell、ls、find、grep、web_fetch 八个 function 工具；普通任务只声明 web_fetch。shell 在 Windows 上使用 PowerShell。不使用 custom apply_patch 或服务端内置工具。工具描述与参数直接写在工具声明中。对未支持的参数主动拒绝或省略，不以“服务端未报错”判断功能生效。
+本地工具按对话权限声明，工具描述与参数直接写在声明中。使用官方 DeepSeek 地址且开启思考时，额外声明 `deepseek_web_search` 和 `deepseek_read_url`，是否使用由模型决定。思考模式同时声明两者时，打开网页由深度搜索处理。快速模式保留本地工具及 `web_fetch`。请求在开始生成前被服务明确拒绝使用官方联网工具时，保留失败记录，提示原因并移除这两个声明重试一次。
+
+服务端联网步骤直接在过程块显示查询词、页面、可用结果或错误，回复末尾集中显示正文引用。`web_fetch` 由 Tilot 执行，读取指定 URL 并返回可续读的网页正文。官方联网由 DeepSeek 执行，读取结果可通过加密 `signature` 回放。[DeepSeek 联网工具][A9]
 
 ## 3. 输出项与工具回放
 
@@ -65,6 +69,8 @@ parallel_tool_calls 和 max_tool_calls 被服务忽略，调用数量及串行�
 不得将所有输出项压成一条 assistant 文本，也不能把 itemId 当作 call_id。UI 仅从保存记录生成展示投影。
 
 发起下一步请求时，Context 将已提交输出组织为 input，保留消息、reasoning.content、调用及结果的顺序。当前实现使用 OpenAI SDK 7.18.0 的 `openai/lib/responses/ResponseInputItems` 导出的 `toResponseInputItems`；已通过本地源码和测试核对推理正文保留行为。demo 中过滤 reasoning 仅用于测试，正式实现直接保留 reasoning 项及其正文。输出专用状态字段不用于控制权限。原始输出保留用于诊断，投影不能覆盖原记录。
+
+服务端联网的 `web_search_call` 在收到 `response.output_item.done` 后保存。后续请求发送到官方服务时，按原顺序回放完整项及其 `kind` 和 `signature`。服务端已经返回执行结果，因此无需配对本地 `function_call_output`。
 
 ### 工具声明与结果
 
@@ -128,9 +134,9 @@ Responses 的 function 字段位于工具对象顶层。以下仅示意读取工
 - sequence_number 在每个 Attempt 内递增，可有间隔；不充当任务事件 seq。重复号仅在内容完全相同时去重，冲突或倒序视为协议错误。
 - 正文、推理和工具参数独立累积；多个工具交错时按 itemId/output_index 区分。
 - done 与最终 output 是完整值，核对或替换对应缓冲，不能再次追加造成重复。
-- 只有最终状态 completed、输出结构完整且调用 ID 合法，才提交完整响应和工具意图；随后校验工具参数。参数失败产生结构化错误结果，不派发实际操作。
+- 完整的工具意图随输出项保存。只有响应最终状态为 completed、输出结构完整且调用 ID 合法，才校验参数和执行本地工具。参数失败时保存结构化错误结果。
 - completed 仍可能携带 function_call。此时进入工具执行和下一次模型请求，不结束 Run。
-- incomplete、failed、断流及本地取消的部分 output 只保存为 Attempt 诊断，不进入可执行历史。
+- incomplete、failed、断流及本地取消时，已确认完整的项可以回放，未确认的片段留作诊断。尚未执行的本地工具配对未执行结果。
 - usage 缺失标为未知。未知且影响执行的输出类型按协议错误处理，不静默丢弃后继续。
 
 每次重试建立新 attemptId、清空临时缓冲，复用冻结请求；不把新流接在旧流尾部。SDK 设置 `maxRetries: 0`，重试由应用统一管理，避免两层重试叠加。结束、失败和取消时结束事件消费；主动中断时取消 SDK 请求，由 SDK 释放底层连接资源。
@@ -141,7 +147,7 @@ Responses 的 function 字段位于工具对象顶层。以下仅示意读取工
 
 2026-10-04 起，按开发者要求取消应用的输入预算、输出上限和安全预留量，不再以 UTF-8 字节数估算并提前拒绝请求。输入包含 instructions、工具 schema、消息、推理和工具结果，Context 完整回放历史并检查配对。
 
-不启用摘要或历史裁剪。服务返回 HTTP 错误、response.failed 或 response.incomplete 时，Core 保存失败尝试及已收到的响应对象，结束本轮并展示原因；不自动重试，不回放失败响应。工具自身的分页及输出限制仍由工具声明和执行器负责。
+不启用摘要或历史裁剪。服务返回 HTTP 错误、response.failed 或 response.incomplete 时，Core 保存失败尝试及已收到的响应对象。生成前明确拒绝官方联网工具时，按上文降级重试。请求体过大时的图片处理见 [图片输入](images.md)。其余错误结束本轮并展示原因。工具自身的分页及输出限制由工具声明和执行器负责。
 
 原始历史与当前输入保留。项目上下文仅加载根目录 AGENTS.md 及项目 .tilot/skills 中的技能元数据，正文按需读取；详见 [上下文与项目技能](context-and-skills.md)。
 
@@ -158,7 +164,9 @@ Responses 的 function 字段位于工具对象顶层。以下仅示意读取工
 - 未命中输入：输入总量减缓存命中量。
 - 输出总量：output_tokens；其中 reasoning_tokens 是子项，不重复计费。
 
-当前按整轮累计服务返回的用量，不估算请求成本或设置 Run 费用限制。失败、截断及取消请求带 usage 时原样保存并参与累计；缺失字段影响的合计显示未知，不按零补齐或展示部分和。缓存命中率按累计缓存命中除以累计输入计算；TPS 按累计输出除以各次模型生成时间之和计算，不含工具执行与首 token 等待，不平均单次比例或速度。原始请求用量和计时仍按请求保存，便于历史重算及未来的对话范围汇总；目前仅接入轮次统计。
+按整轮累计服务返回的用量。联网计费次数取 `usage.server_tool_use` 中 `tool_search`、`tool_fetch`、`tool_image_search` 之和，按 ¥0.005/次加进本轮费用。Token 费用继续按每百万缓存命中输入 ¥0.02、未命中输入 ¥1、输出 ¥4 计算。有 usage 而省略 `server_tool_use` 时，计费次数为零。
+
+失败、截断及取消请求带 usage 时原样保存并参与累计。缺失字段影响的合计显示未知。缓存命中率按累计缓存命中除以累计输入计算。TPS 按累计输出除以各次模型生成时间之和计算，排除工具执行与首 Token 等待。原始用量和计时仍按请求保存，可用于历史重算及未来的对话范围汇总。
 
 [A1]: https://api-docs.deepseek.com/zh-cn/guides/responses_api/
 [A2]: https://api-docs.deepseek.com/api/create-response/
@@ -167,3 +175,4 @@ Responses 的 function 字段位于工具对象顶层。以下仅示意读取工
 [A5]: https://api-docs.deepseek.com/zh-cn/guides/responses_api/
 [A6]: https://developers.openai.com/api/docs/guides/streaming-responses
 [A8]: https://api-docs.deepseek.com/guides/kv_cache
+[A9]: https://api-docs.deepseek.com/zh-cn/guides/web_tools/

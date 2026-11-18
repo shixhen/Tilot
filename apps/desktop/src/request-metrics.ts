@@ -26,17 +26,19 @@ export function getContextTokens(records: TurnRecord[]): number | null {
 /** 每个请求只计一次，包含已结束的失败/取消请求；运行中的请求等最终用量返回后再计入。 */
 export function getRequestMetrics(attempts: AttemptView[]): RequestMetrics {
   const finished = attempts.filter((attempt) => attempt.status !== "running");
-  const sumTokens = (field: "inputTokens" | "cachedTokens" | "outputTokens") => {
+  const sumUsage = (field: "inputTokens" | "cachedTokens" | "outputTokens" | "webToolCalls") => {
     let total = 0;
     if (finished.length === 0) return null;
     for (const attempt of finished) {
       const value = attempt.metrics?.[field];
+      if (field === "webToolCalls" && value === undefined && attempt.metrics?.inputTokens != null) continue;
       if (value == null) return null;
       total += value;
     }
     return total;
   };
-  const outputTokens = sumTokens("outputTokens");
+  const outputTokens = sumUsage("outputTokens");
+  const webToolCalls = sumUsage("webToolCalls");
   let generationMs = 0;
   let timingComplete = true;
   for (const attempt of finished) {
@@ -52,11 +54,13 @@ export function getRequestMetrics(attempts: AttemptView[]): RequestMetrics {
     requestCount: attempts.length,
     finishedRequestCount: finished.length,
     missingUsageCount: finished.filter((attempt) => !attempt.metrics ||
-      attempt.metrics.inputTokens == null || attempt.metrics.cachedTokens == null || attempt.metrics.outputTokens == null).length,
+      attempt.metrics.inputTokens == null || attempt.metrics.cachedTokens == null || attempt.metrics.outputTokens == null ||
+      attempt.metrics.webToolCalls === null).length,
     tokensPerSecond: outputTokens !== null && timingComplete && generationMs > 0 ? outputTokens / (generationMs / 1000) : null,
-    inputTokens: sumTokens("inputTokens"),
-    cachedTokens: sumTokens("cachedTokens"),
+    inputTokens: sumUsage("inputTokens"),
+    cachedTokens: sumUsage("cachedTokens"),
     outputTokens,
+    webToolCalls,
   };
 }
 

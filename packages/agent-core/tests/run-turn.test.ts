@@ -14,6 +14,75 @@ import { fileURLToPath } from "node:url";
 import { emptyQuestionDraft } from "@tilot/protocol";
 import { png } from "../../tool/tests/image-fixture.ts";
 
+test("官方联网被明确拒绝时只重试一次，快速模式和普通错误不触发降级", async (context) => {
+  const store = openTestStore(context);
+  for (const [effort, reason, expected] of [
+    ["high", "deepseek_web_search is not supported by this model", 2],
+    ["high", "Invalid request body", 1],
+    ["none", "deepseek_web_search is not supported by this model", 1],
+  ] as const) {
+    const thread = store.createThread("联网请求");
+    store.updateThreadModel(thread.id, thread.providerId, thread.model, effort);
+    const requests: { tools: { type: string; name?: string }[] }[] = [];
+    const notices: string[] = [];
+    const client = createResponsesClient({ apiKey: "local-test-placeholder" }).withOptions({
+      fetch: async (_url, options) => {
+        requests.push(JSON.parse(String(options?.body)));
+        if (requests.length > 1) return sse(sampleEvents());
+        return Response.json({ error: { message: reason } }, { status: 400 });
+      },
+    });
+    const turn = await runTurn(store, client, { threadId: thread.id, input: "搜索", onEvent(event) {
+      if (event.type === "turn.notice") notices.push(event.message);
+    } });
+    assert.equal(turn.status, expected === 2 ? "completed" : "failed");
+    assert.equal(requests.length, expected);
+    const webTypes = ({ tools }: typeof requests[number]) => tools.filter((tool) => tool.type !== "function").map((tool) => tool.type);
+    assert.deepEqual(webTypes(requests[0]!), effort === "none" ? [] : ["deepseek_web_search", "deepseek_read_url"]);
+    if (requests[1]) assert.deepEqual(webTypes(requests[1]), []);
+    assert.ok(requests.every(({ tools }) => tools.some((tool) => tool.name === "web_fetch")));
+    assert.deepEqual(store.history.listAttempts(turn.id).map((attempt) => attempt.status), expected === 2 ? ["failed", "completed"] : ["failed"]);
+    assert.equal(notices.filter((notice) => notice.includes(reason)).length, expected - 1);
+  }
+});
+
+test("取消后只回放已完成的服务端联网项并保留签名，不创建本地工具调用", async (context) => {
+  const store = openTestStore(context);
+  const thread = store.createThread("取消联网");
+  store.updateThreadModel(thread.id, thread.providerId, thread.model, "high");
+  const finalized = {
+    type: "web_search_call", id: "read_link_1", status: "completed", kind: "read_link", signature: "saved-page-signature",
+    action: { type: "open_page", url: "https://example.com/" }, page: { url: "https://example.com/", title: "网页" },
+  };
+  const events = [
+    { type: "response.created", response: { id: "response-web", status: "in_progress", output: [] } },
+    { type: "response.output_item.added", output_index: 0, item: { ...finalized, status: "in_progress", signature: undefined } },
+    { type: "response.web_search_call.in_progress", output_index: 0, item_id: finalized.id },
+    { type: "response.output_item.added", output_index: 1, item: { ...finalized, id: "pending_link", status: "in_progress", signature: undefined } },
+    { type: "response.web_search_call.completed", output_index: 0, item_id: finalized.id },
+    { type: "response.output_item.done", output_index: 0, item: finalized },
+  ].map((event, sequence_number) => ({ ...event, sequence_number }));
+  const signal = new AbortController();
+  const requests: { input: { type?: string }[] }[] = [];
+  const client = createResponsesClient({ apiKey: "local-test-placeholder" }).withOptions({
+    fetch: async (_url, options) => {
+      requests.push(JSON.parse(String(options?.body)));
+      return sse(requests.length === 1 ? events : sampleEvents());
+    },
+  });
+  const stopped = await runTurn(store, client, { threadId: thread.id, input: "读取链接", signal: signal.signal, onEvent(event) {
+    if (event.type === "response.event" && event.event.type === "response.output_item.done") signal.abort();
+  } });
+  assert.equal(stopped.status, "cancelled");
+  const saved = store.history.listAttempts(stopped.id)[0]!;
+  assert.equal(saved.status, "cancelled");
+  assert.deepEqual(saved.completedOutputs, [{ outputIndex: 0, item: finalized }]);
+  assert.deepEqual(store.history.listToolCalls(saved.id), []);
+  const next = await runTurn(store, client, { threadId: thread.id, input: "复述已读网页" });
+  assert.equal(next.status, "completed");
+  assert.deepEqual(requests[1]!.input.filter((item) => item.type === "web_search_call"), [finalized]);
+});
+
 test("服务拒绝图片时保留原用户图片和失败记录，不切换模型或自动重试", async (context) => {
   const store = openTestStore(context); const thread = store.createThread("视觉不支持");
   const image = await store.images.save(png, "保留.png"); let requests = 0;
@@ -63,6 +132,97 @@ test("图片副本损坏时明确失败且无 API 请求，不遗留 running 轮
   const turn = await runTurn(store, client, { threadId: thread.id, input: "", images: [image] });
   assert.equal(turn.status, "failed"); assert.match(turn.error!, /副本损坏/);
   assert.equal(requests.length, 0); assert.equal(store.history.listAttempts(turn.id).length, 0);
+});
+
+test("DeepSeek 请求接近字节上限时优先省略旧工具图，可从同一对话回读原图", async (context) => {
+  const store = openTestStore(context);
+  const directory = projectDirectory(context);
+  const firstPath = join(directory, "first.png");
+  const latestPath = join(directory, "latest.png");
+  const firstBytes = Buffer.concat([png, Buffer.alloc(18 * 1024 * 1024)]);
+  const latestBytes = Buffer.concat([png, Buffer.alloc(18 * 1024 * 1024, 1)]);
+  writeFileSync(firstPath, firstBytes);
+  writeFileSync(latestPath, latestBytes);
+  const attachment = await store.images.save(png, "用户附件.png");
+  const first = await store.images.importFile(firstPath);
+  const latest = await store.images.importFile(latestPath);
+  const thread = store.createThread("图片预算", directory);
+  let requests = 0;
+  const client = createResponsesClient({ apiKey: "local-test-placeholder" }).withOptions({
+    fetch: async (_url, options) => {
+      const body = String(options?.body);
+      assert.ok(Buffer.byteLength(body) < 48 * 1024 * 1024);
+      const input = JSON.parse(body).input;
+      if (++requests === 1) {
+        assert.equal(input[0].content[1].image_url, `data:image/png;base64,${png.toString("base64")}`);
+        return sse(toolEvents([firstPath, latestPath].map((path) => ({ name: "view_image", arguments: JSON.stringify({ path }) }))));
+      }
+      const outputs = input.filter((item: { type: string }) => item.type === "function_call_output");
+      assert.equal(input[0].content[1].type, "input_image");
+      assert.match(outputs[0].output[0].text, /"status":"ok"/);
+      assert.match(outputs[0].output[1].text, new RegExp(first.id));
+      assert.ok(input.some((item: { type: string; call_id: string }) => item.type === "function_call" && item.call_id === outputs[0].call_id));
+      if (requests === 2) {
+        assert.equal(outputs[1].output[1].image_url, `data:image/png;base64,${latestBytes.toString("base64")}`);
+        writeFileSync(firstPath, "源文件变动", "utf8");
+        return sse(toolEvents([{ name: "view_image", arguments: JSON.stringify({ imageId: first.id }) }]));
+      }
+      assert.match(outputs[1].output[1].text, new RegExp(latest.id));
+      assert.equal(outputs[2].output[1].image_url, `data:image/png;base64,${firstBytes.toString("base64")}`);
+      return sse(sampleEvents());
+    },
+  });
+  const notices: string[] = [];
+  const turn = await runTurn(store, client, {
+    threadId: thread.id, input: "比较图片", images: [attachment],
+    onEvent: (event) => { if (event.type === "turn.notice") notices.push(event.message); },
+  });
+  assert.equal(turn.error, null);
+  assert.equal(turn.status, "completed");
+  assert.equal(requests, 3);
+  assert.equal(notices.filter((message) => message.includes("可回读")).length, 1);
+  const [attempt] = store.history.listAttempts(turn.id);
+  const [firstCall, latestCall] = store.history.listToolCalls(attempt!.id);
+  assert.match(JSON.stringify(firstCall!.result), new RegExp(`tilot-image:${first.id}`));
+  assert.match(JSON.stringify(latestCall!.result), new RegExp(`tilot-image:${latest.id}`));
+});
+
+test("服务返回 413 后只重试一次更小的请求，保留失败记录和真实工具结果", async (context) => {
+  const store = openTestStore(context);
+  const directory = projectDirectory(context);
+  const paths = ["a.png", "b.png"].map((name, index) => {
+    const path = join(directory, name);
+    writeFileSync(path, Buffer.concat([png, Buffer.alloc(2048, index)]));
+    return path;
+  });
+  const thread = store.createThread("请求过大", directory);
+  let requests = 0;
+  let rejectedBytes = 0;
+  const client = createResponsesClient({ apiKey: "local-test-placeholder", baseURL: "http://localhost:1234" }).withOptions({
+    fetch: async (_url, options) => {
+      if (++requests === 1) return sse(toolEvents(paths.map((path) => ({ name: "view_image", arguments: JSON.stringify({ path }) }))));
+      const body = String(options?.body);
+      const outputs = JSON.parse(body).input.filter((item: { type: string }) => item.type === "function_call_output");
+      if (requests === 2) {
+        assert.equal(outputs[0].output[1].type, "input_image");
+        rejectedBytes = Buffer.byteLength(body);
+        for (const path of paths) writeFileSync(path, "禁止重新读取源文件", "utf8");
+      } else {
+        assert.equal(outputs[0].output[1].type, "input_text");
+        assert.equal(outputs[1].output[1].type, "input_image");
+        assert.ok(Buffer.byteLength(body) < rejectedBytes);
+      }
+      return new Response(`request body too large (request_id: too-big-${requests})`, { status: 413 });
+    },
+  });
+  const turn = await runTurn(store, client, { threadId: thread.id, input: "读图" });
+  assert.equal(requests, 3);
+  assert.equal(turn.status, "failed");
+  assert.match(turn.error!, /413.*too-big-3/);
+  const attempts = store.history.listAttempts(turn.id);
+  assert.deepEqual(attempts.map(({ status }) => status), ["completed", "failed", "failed"]);
+  assert.match(attempts[1]!.error!, /413.*too-big-2/);
+  assert.equal(store.history.listToolCalls(attempts[0]!.id).length, 2);
 });
 
 test("异步提问立即返回，重复提问不覆盖，整组答案按引导进入后续上下文", async (context) => {
@@ -318,11 +478,15 @@ function mockClient(events: () => Record<string, unknown>[] = sampleEvents, gate
     fetch: async (_url, options) => {
       requests.push(options ?? {});
       await gate;
-      const body = events().map((event) => `event: ${event.type}\ndata: ${JSON.stringify(event)}\n\n`).join("");
-      return new Response(body, { headers: { "content-type": "text/event-stream" } });
+      return sse(events());
     },
   });
   return { client, requests };
+}
+
+function sse(events: Record<string, unknown>[]): Response {
+  const body = events.map((event) => `event: ${event.type}\ndata: ${JSON.stringify(event)}\n\n`).join("");
+  return new Response(body, { headers: { "content-type": "text/event-stream" } });
 }
 
 test("思考计时随流交付并落库，成功和失败工具均记录实际执行耗时，取消后未执行工具没有耗时", async (context) => {

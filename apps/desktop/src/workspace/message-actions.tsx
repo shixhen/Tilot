@@ -20,8 +20,9 @@ export function MetricsDetails({ metrics }: { metrics?: TurnMetrics | undefined 
   const cacheHitRate = metrics?.inputTokens != null && metrics.inputTokens > 0 && metrics.cachedTokens != null
     ? `${Math.round(metrics.cachedTokens / metrics.inputTokens * 100)}%` : "暂无数据";
   // 所有模型统一按人民币/百万 token 计算，缓存命中不重复计入普通输入。
-  const cost = metrics?.inputTokens == null || metrics.cachedTokens == null || metrics.outputTokens == null
-    ? null : (metrics.cachedTokens * 0.02 + (metrics.inputTokens - metrics.cachedTokens) + metrics.outputTokens * 4) / 1_000_000;
+  const webToolCalls = metrics?.webToolCalls === undefined && metrics?.inputTokens != null ? 0 : metrics?.webToolCalls;
+  const cost = metrics?.inputTokens == null || metrics.cachedTokens == null || metrics.outputTokens == null || webToolCalls == null
+    ? null : (metrics.cachedTokens * 0.02 + (metrics.inputTokens - metrics.cachedTokens) + metrics.outputTokens * 4) / 1_000_000 + webToolCalls * 0.005;
   const rows = [
     ["模型请求次数", metrics?.requestCount.toLocaleString() ?? "暂无数据"],
     ["首 token 耗时", metrics?.firstTokenMs == null ? "暂无数据" : `${(metrics.firstTokenMs / 1000).toFixed(2)} s`],
@@ -30,6 +31,7 @@ export function MetricsDetails({ metrics }: { metrics?: TurnMetrics | undefined 
     ["缓存命中", metrics?.cachedTokens?.toLocaleString() ?? "暂无数据"],
     ["缓存未命中", metrics?.inputTokens == null || metrics.cachedTokens == null ? "暂无数据" : (metrics.inputTokens - metrics.cachedTokens).toLocaleString()],
     ["输出 token", metrics?.outputTokens?.toLocaleString() ?? "暂无数据"],
+    ["联网计费次数", webToolCalls?.toLocaleString() ?? "暂无数据"],
     ["本轮费用", cost == null ? "暂无数据" : cost.toLocaleString("zh-CN", { style: "currency", currency: "CNY", minimumFractionDigits: 4, maximumFractionDigits: 8 })],
   ];
   return <div className="w-60 text-sm">

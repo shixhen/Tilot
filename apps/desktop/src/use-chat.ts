@@ -13,6 +13,7 @@ export function useChat() {
   const client = useRef<Request | null>(null);
   const mounted = useRef(false);
   const loading = useRef(new Map<string, number>());
+  const threadsRevision = useRef(0);
   const deletedThreads = useRef(new Set<string>());
   const submitting = useRef(false);
   const [connected, setConnected] = useState(false);
@@ -73,13 +74,14 @@ export function useChat() {
 
   /** 读完任务列表；固定分页大小，不遗漏第 100 条以后的任务。 */
   async function refreshThreads(): Promise<void> {
+    const revision = ++threadsRevision.current;
     const result: Thread[] = [];
     while (true) {
       const page = await request("thread.list", { offset: result.length, limit: 100 });
       result.push(...page);
       if (page.length < 100) break;
     }
-    if (mounted.current) setThreads(result.filter((thread) => !deletedThreads.current.has(thread.id)));
+    if (mounted.current && revision === threadsRevision.current) setThreads(result.filter((thread) => !deletedThreads.current.has(thread.id)));
   }
 
   /** 最新查询才可提交结果；历史与期间收到的事件合并，避免刷新覆盖流式内容。 */
@@ -117,7 +119,7 @@ export function useChat() {
       const threadId = "turn" in event ? event.turn.threadId : "approval" in event ? event.approval.threadId : event.threadId;
       return !deletedThreads.current.has(threadId);
     });
-    const updates = events.filter((event) => event.event !== "approval.requested" && event.event !== "approval.resolved" && event.event !== "question.updated");
+    const updates = events.filter((event) => event.event !== "approval.requested" && event.event !== "approval.resolved" && event.event !== "question.updated" && event.event !== "thread.title");
     if (updates.length) setConversations((state) => {
       const next = { ...state };
       for (const event of updates) {
@@ -140,7 +142,7 @@ export function useChat() {
         continue;
       }
       if ("turn" in event) queue.current!.observe(event.turn);
-      if (event.event === "turn.started") void refreshThreads().catch(report);
+      if (event.event === "turn.started" || event.event === "thread.title") void refreshThreads().catch(report);
       if (event.event === "turn.finished") {
         void Promise.all([refreshHistory(event.turn.threadId), refreshThreads()]).catch(report);
       }
@@ -217,7 +219,7 @@ export function useChat() {
     setError("");
     try {
       if (!threadId) {
-        const thread = await request("thread.create", { title: input.trim().slice(0, 36) || images[0]?.name || "图片对话", projectPath: newProjectPath,
+        const thread = await request("thread.create", { title: input.trim().slice(0, 36) || images[0]?.name || "图片对话", projectPath: newProjectPath, autoTitle: true,
           ...(newPermissionMode === null ? {} : { permissionMode: newPermissionMode }) });
         threadId = thread.id;
         setThreads((threads) => [thread, ...threads]);

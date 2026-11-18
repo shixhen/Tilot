@@ -73,7 +73,7 @@ export class ResponseStreamValidator {
       if (this.outputs.has(index) || this.itemIds.has(item.id)) {
         throw new Error("输出位置或输出项 id 重复注册。");
       }
-      if (item.type !== "message" && item.type !== "reasoning" && item.type !== "function_call") {
+      if (item.type !== "message" && item.type !== "reasoning" && item.type !== "function_call" && item.type !== "web_search_call") {
         throw new Error(`不支持的模型输出类型：${item.type}。`);
       }
       this.outputs.set(index, { added: structuredClone(item) });
@@ -127,6 +127,9 @@ export class ResponseStreamValidator {
     }
     if (event.type.startsWith("response.output_text.") && tracked.added.type !== "message") {
       throw new Error("正文事件必须关联 message 输出项。");
+    }
+    if (event.type.startsWith("response.web_search_call.") && tracked.added.type !== "web_search_call") {
+      throw new Error("联网事件必须关联 web_search_call 输出项。");
     }
   }
 

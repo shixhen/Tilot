@@ -23,14 +23,24 @@ export function createViewImageTool(workspace: Workspace, host: ToolHost): Tool 
     access: "read",
     definition: {
       type: "function", name: "view_image", strict: false,
-      description: "读取本地或 HTTP(S) 图片，将真实图片内容返回给模型。path 与 url 恰好指定一个。本地支持相对路径和绝对路径，相对路径从对话工作目录开始，可读取项目外文件。仅支持 PNG、JPEG、WebP，按实际字节识别。保存原图副本，不压缩、不缩放；后续历史使用该副本，来源变动不改变已经读取的图片。图片太大或模型不支持时按 API 错误处理。",
-      parameters: { type: "object", additionalProperties: false, oneOf: [{ required: ["path"] }, { required: ["url"] }], properties: {
+      description: "读取本地、HTTP(S) 或当前对话保存的图片，将真实图片内容返回给模型。path、url、imageId 恰好指定一个。本地支持相对路径和绝对路径，相对路径从对话工作目录开始，可读取项目外文件。仅支持 PNG、JPEG、WebP，按实际字节识别。保留原图副本，不压缩、不缩放。历史图片因请求大小暂未发送时，可按提示用 imageId 回读副本。",
+      parameters: { type: "object", additionalProperties: false, oneOf: [{ required: ["path"] }, { required: ["url"] }, { required: ["imageId"] }], properties: {
         path: { type: "string", description: "本地图片相对路径或绝对路径，与 url 互斥。" },
         url: { type: "string", description: "完整 HTTP(S) 图片网址，与 path 互斥。" },
+        imageId: { type: "string", description: "当前对话中已保存的图片标识，与 path、url 互斥。" },
       } },
     },
     async execute(args, signal) {
-      validateKeys(args, ["path", "url"]);
+      validateKeys(args, ["path", "url", "imageId"]);
+      if (args.imageId !== undefined) {
+        if (typeof args.imageId !== "string" || args.path !== undefined || args.url !== undefined) {
+          throw new Error("指定 imageId 时只能提供一个图片标识。");
+        }
+        signal?.throwIfAborted();
+        const image = host.recallImage?.(args.imageId);
+        if (!image) throw new Error("找不到当前对话中可回读的图片。");
+        return new ImageToolResult({}, [image]);
+      }
       if ((args.path !== undefined && typeof args.path !== "string") || (args.url !== undefined && typeof args.url !== "string")) throw new Error("图片路径和网址必须是字符串。");
       const image = await importImage(host, args as { path?: string; url?: string }, signal, workspace);
       return new ImageToolResult({}, [image]);

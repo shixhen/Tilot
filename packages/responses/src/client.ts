@@ -3,6 +3,7 @@ import { ResponseStreamValidator } from "./stream-validator.ts";
 import type {
   ResponseCreateParamsStreaming,
   ResponseStreamEvent,
+  Tool,
 } from "openai/resources/responses/responses";
 
 /** 模型服务的连接配置；省略 baseURL 时使用 DeepSeek 官方地址。 */
@@ -11,8 +12,20 @@ export interface ResponsesClientOptions {
   baseURL?: string;
 }
 
-/** 复用 SDK 的请求参数；stream 由请求函数统一设为 true，调用方无需填写。 */
-export type ResponsesRequest = Omit<ResponseCreateParamsStreaming, "stream">;
+type DeepSeekWebTool = { type: "deepseek_web_search" | "deepseek_read_url" };
+
+/** 复用 SDK 的请求参数，并补充 DeepSeek 的扩展字段。 */
+export type ResponsesRequest = Omit<ResponseCreateParamsStreaming, "stream" | "tools"> & {
+  title?: { enabled: true };
+  tools?: (Tool | DeepSeekWebTool)[];
+};
+
+export const deepSeekWebTools: readonly DeepSeekWebTool[] = [
+  { type: "deepseek_web_search" }, { type: "deepseek_read_url" },
+];
+
+/** DeepSeek 在启用会话标题时保留 find 给服务端工具。 */
+export const DEEPSEEK_FIND_NAME = "find_files";
 
 /** 根据用户配置创建 Responses 客户端；只检查连接配置，不发送请求。 */
 export function createResponsesClient(options: ResponsesClientOptions): OpenAI {
@@ -57,7 +70,8 @@ export async function* streamResponse(
   signal?: AbortSignal,
 ): AsyncGenerator<ResponseStreamEvent> {
   signal?.throwIfAborted();
-  const stream = await client.responses.create({ ...request, stream: true }, { signal });
+  // SDK 原样序列化请求体，工具类型声明尚未包含 DeepSeek 官方扩展。
+  const stream = await client.responses.create({ ...request, stream: true } as ResponseCreateParamsStreaming, { signal });
   const validator = new ResponseStreamValidator();
 
   try {

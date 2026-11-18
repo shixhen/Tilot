@@ -8,7 +8,7 @@ import { MetricsDetails } from "../src/workspace/message-actions.tsx";
 test("统计浮层显示本轮累计与整数缓存命中率，区分未知值和零值", () => {
   const counts = { requestCount: 3, finishedRequestCount: 3, missingUsageCount: 0 };
   const missing = renderToStaticMarkup(createElement(MetricsDetails, {}));
-  assert.equal((missing.match(/暂无数据/g) ?? []).length, 8);
+  assert.equal((missing.match(/暂无数据/g) ?? []).length, 9);
   const html = renderToStaticMarkup(createElement(MetricsDetails, { metrics: {
     firstTokenMs: 1250, tokensPerSecond: 24.56, inputTokens: 100, cachedTokens: 0, outputTokens: 50,
     ...counts,

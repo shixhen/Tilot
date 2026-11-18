@@ -22,7 +22,7 @@ export const ToolCall = memo(function ToolCall({ tool, active }: { tool: ToolVie
   const result = readObject(tool.output);
   const data = result.data && typeof result.data === "object" ? result.data as Record<string, unknown> : {};
   const running = active && tool.running && tool.output === null;
-  const unstarted = tool.startedAt === null && tool.durationMs === null;
+  const unstarted = !tool.hosted && tool.startedAt === null && tool.durationMs === null;
   const { open, onOpenChange, content } = useAutoDisclosure(running);
   const [compact, setCompact] = useState(running);
   let status = running ? "执行中" : active ? "等待结果" : "执行结果未知";
@@ -36,11 +36,13 @@ export const ToolCall = memo(function ToolCall({ tool, active }: { tool: ToolVie
     else status = "已完成";
   }
   const fileTool = ["read", "write", "edit", "view_image"].includes(tool.name);
-  const searchTool = ["find", "grep"].includes(tool.name);
-  const webTool = tool.name === "web_fetch";
+  const searchTool = ["find", "grep", "web_search", "web_find"].includes(tool.name);
+  const webTool = tool.name === "web_fetch" || tool.name === "web_read";
   const questionTool = tool.name === "request_user_input_async";
-  const labels: Record<string, string> = { read: "读取文件", write: "写入文件", edit: "编辑文件", shell: "执行命令", ls: "列出目录", find: "查找文件", grep: "搜索代码", web_fetch: "读取网页", request_user_input_async: "向用户提问", view_image: "查看图片" };
-  const summary = fileTool ? args.path ?? args.url ?? (typeof args.outputId === "string" ? "命令日志" : undefined)
+  const labels: Record<string, string> = { read: "读取文件", write: "写入文件", edit: "编辑文件", shell: "执行命令", ls: "列出目录", find: "查找文件", grep: "搜索代码", web_fetch: "读取网页", request_user_input_async: "向用户提问", view_image: "查看图片",
+    web_search: "联网搜索", web_read: "打开网页", web_find: "页内查找" };
+  const summary = tool.hosted ? Array.isArray(args.queries) ? args.queries.join(" · ") : args.pattern ?? args.url
+    : fileTool ? args.path ?? args.url ?? (typeof args.outputId === "string" ? "命令日志" : undefined)
     : tool.name === "shell" ? args.command : tool.name === "ls" ? args.path || "项目根目录" : searchTool ? args.pattern : webTool ? args.url ?? "网页缓存" : questionTool ? `${Array.isArray(args.questions) ? args.questions.length : 0} 个问题` : tool.name.startsWith("mcp__") ? "MCP" : tool.name;
   // 执行中只预览开头几行，超出部分以省略号结尾；手动展开时显示全文并可滚动。
   const box = compact ? "line-clamp-4 overflow-hidden" : "max-h-40 overflow-auto";
@@ -52,7 +54,7 @@ export const ToolCall = memo(function ToolCall({ tool, active }: { tool: ToolVie
       <code className="min-w-0 truncate font-mono text-[13px]" title={typeof summary === "string" ? summary : undefined}>{typeof summary === "string" ? summary : "参数无效"}</code>
       {failed ? <span className="flex shrink-0 items-center gap-1 text-xs text-destructive"><CircleAlert className="size-3" />{status}</span>
         : !running && <span className="flex shrink-0 items-center gap-1 text-xs">{status === "已完成" && <Check className="size-3" />}{status}</span>}
-      {result.status !== "not_executed" && !unstarted && <ElapsedTime startedAt={tool.startedAt} durationMs={tool.durationMs} running={running} />}
+      {result.status !== "not_executed" && !tool.hosted && !unstarted && <ElapsedTime startedAt={tool.startedAt} durationMs={tool.durationMs} running={running} />}
       <ChevronRight className="disclosure-icon size-3.5 opacity-0 transition-[opacity,rotate] group-hover/tool:opacity-100 group-data-[state=open]/tool:rotate-90 group-data-[state=open]/tool:opacity-100" />
     </CollapsibleTrigger>
     <CollapsibleContent ref={content} className="mt-2 min-w-0 overflow-hidden rounded-lg border bg-black/20">

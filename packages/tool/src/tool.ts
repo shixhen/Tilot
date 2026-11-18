@@ -6,7 +6,13 @@ import type { UserQuestion } from "@tilot/protocol";
 import { imageContent, type ImageRef } from "@tilot/protocol";
 
 /** 宿主提供输出缓存和任务归属，模型不能修改这些值。 */
-export interface ToolHost { outputs: OutputCache; threadId: string; images?: ImageHost; ask?: (questions: UserQuestion[], toolId: string) => Promise<string> }
+export interface ToolHost {
+  outputs: OutputCache;
+  threadId: string;
+  images?: ImageHost;
+  recallImage?: (imageId: string) => ImageRef | undefined;
+  ask?: (questions: UserQuestion[], toolId: string) => Promise<string>;
+}
 export interface ImageHost {
   importFile: (path: string, signal?: AbortSignal) => Promise<ImageRef>;
   importBase64: (data: string, name: string, signal?: AbortSignal) => Promise<ImageRef>;

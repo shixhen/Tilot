@@ -127,18 +127,18 @@ export class Store {
   }
 
   /** 创建任务，服务、模型和思考强度取当前默认值；项目路径应由 Server 验证并解析为真实绝对路径，无项目时传 null。 */
-  createThread(title: string, projectPath: string | null = null, permissionMode?: PermissionMode): Thread {
+  createThread(title: string, projectPath: string | null = null, permissionMode?: PermissionMode, autoTitle = false): Thread {
     if (projectPath !== null && !isAbsolute(projectPath)) {
       throw new Error("任务的项目路径必须是绝对路径。");
     }
     const now = Date.now();
     const mode = permissionMode ?? (projectPath === null ? "read-only" : this.getConfig().defaultPermissionMode);
     if (!isPermissionMode(mode) || (projectPath === null && mode === "workspace-write")) throw new Error("此对话不能使用该权限模式。");
-    return this.database.prepare<{ id: string; title: string; projectPath: string | null; mode: PermissionMode; now: number }, Thread>(`
-      INSERT INTO threads (id, title, projectPath, providerId, model, reasoningEffort, permissionMode, createdAt, updatedAt)
-      SELECT @id, @title, @projectPath, providerId, model, reasoningEffort, @mode, @now, @now FROM app_config WHERE id = 1
+    return this.database.prepare<{ id: string; title: string; projectPath: string | null; mode: PermissionMode; now: number; autoTitle: number }, Thread>(`
+      INSERT INTO threads (id, title, projectPath, providerId, model, reasoningEffort, permissionMode, createdAt, updatedAt, autoTitle)
+      SELECT @id, @title, @projectPath, providerId, model, reasoningEffort, @mode, @now, @now, @autoTitle FROM app_config WHERE id = 1
       RETURNING ${THREAD_COLUMNS}
-    `).get({ id: randomUUID(), title: title.trim(), projectPath, mode, now })!;
+    `).get({ id: randomUUID(), title: title.trim(), projectPath, mode, now, autoTitle: Number(autoTitle) })!;
   }
 
   /** 首次有效发送即锁定工具声明；预检查失败或取消也不会解锁。 */
@@ -183,13 +183,24 @@ export class Store {
   /** 修改任务标题并返回更新后的记录；不会修改项目绑定，不存在的任务报错。 */
   renameThread(id: string, title: string): Thread {
     const thread = this.database.prepare<[string, number, string], Thread>(`
-      UPDATE threads SET title = ?, updatedAt = ? WHERE id = ?
+      UPDATE threads SET title = ?, updatedAt = ?, autoTitle = 0 WHERE id = ?
       RETURNING ${THREAD_COLUMNS}
     `).get(title.trim(), Date.now(), id);
     if (!thread) {
       throw new Error("任务不存在。");
     }
     return thread;
+  }
+
+  /** 仅桌面新建的临时标题可由模型替换。 */
+  hasPendingTitle(threadId: string): boolean {
+    return this.database.prepare("SELECT 1 FROM threads WHERE id = ? AND autoTitle = 1").get(threadId) !== undefined;
+  }
+
+  /** 手动改名后，迟到的生成标题不能覆盖用户的选择。 */
+  saveGeneratedTitle(threadId: string, title: string): boolean {
+    return this.database.prepare("UPDATE threads SET title = ?, autoTitle = 0 WHERE id = ? AND autoTitle = 1")
+      .run(title, threadId).changes === 1;
   }
 
   /** 按外键依赖删除对话历史，返回问题标识以清理桌面草稿。 */

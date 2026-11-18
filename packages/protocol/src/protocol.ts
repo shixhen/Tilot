@@ -80,7 +80,7 @@ export type RpcRequest =
   | { id: string; method: "credentials.status"; params: Record<string, never> }
   | { id: string; method: "credentials.set"; params: { providerId: string; apiKey: string } }
   | { id: string; method: "models.fetch"; params: { providerId: string; baseURL: string; apiKey: string } }
-  | { id: string; method: "thread.create"; params: { title: string; projectPath?: string | null; permissionMode?: PermissionMode } }
+  | { id: string; method: "thread.create"; params: { title: string; projectPath?: string | null; permissionMode?: PermissionMode; autoTitle?: boolean } }
   | { id: string; method: "thread.permission"; params: { threadId: string; permissionMode: PermissionMode } }
   | { id: string; method: "thread.read"; params: { threadId: string } }
   | { id: string; method: "thread.list"; params: { limit?: number; offset?: number } }
@@ -124,11 +124,14 @@ export interface Turn {
 /** 用于显示的文本种类，正文、推理与拒绝信息分别展示。 */
 export type TextKind = "text" | "reasoning" | "refusal";
 
+export interface WebSource { url: string; title: string; snippet?: string }
+
 /** 界面文本块；完整内容用于替换增量预览，不再次追加。 */
 export interface MessagePart {
   kind: TextKind;
   text: string;
   timing?: TextTiming;
+  sources?: WebSource[];
 }
 
 /** 单段生成的实测时间；运行中 durationMs 为空，startedAt 为 Unix 毫秒。 */
@@ -183,10 +186,12 @@ export interface ResponseMetrics {
   inputTokens: number | null;
   cachedTokens: number | null;
   outputTokens: number | null;
+  webToolCalls?: number | null;
 }
 
 /** 工具展示记录；结果为空时尚未保存结果，不代表可以重新执行。 */
 export interface ToolView {
+  hosted?: true;
   images?: ImageRef[];
   id: string;
   outputIndex: number;
@@ -204,6 +209,7 @@ export interface ToolOutputPreview { output: string; truncated: boolean; partial
 
 /** 服务推送数据；不向界面传递 SDK 响应对象或模型请求参数。 */
 export type TurnNotification =
+  | { event: "thread.title"; threadId: string }
   | { event: "question.updated"; threadId: string; question: QuestionGroup }
   | { event: "turn.notice"; threadId: string; turnId: string; message: string }
   | { event: "approval.requested"; approval: ToolApproval }

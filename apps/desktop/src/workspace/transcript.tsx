@@ -11,6 +11,7 @@ import { MessageActions } from "./message-actions";
 import { ElapsedTime, formatDuration } from "./elapsed-time";
 import { hasSelection, useAutoDisclosure } from "../hooks/use-auto-disclosure";
 import { ImageGallery } from "./images";
+import { WebSources } from "./web-sources";
 
 export { formatDuration } from "./elapsed-time";
 
@@ -78,8 +79,11 @@ function Reasoning({ text, live, timing }: { text: string; live: boolean; timing
 
 /** 正文和拒绝信息独立展示；思考另放在过程块里。 */
 function MessageParts({ parts, live }: { parts: MessagePart[]; live: boolean }) {
+  const sources = parts.flatMap((part) => part.sources ?? []);
   return <div className="grid min-w-0 grid-cols-1 gap-4">{parts.map((part, index) =>
-    <div key={index} className={part.kind === "refusal" ? "text-muted-foreground" : undefined}><MessageMarkdown text={part.text} streaming={live && index === parts.length - 1} /></div>)}</div>;
+    <div key={index} className={part.kind === "refusal" ? "text-muted-foreground" : undefined}><MessageMarkdown text={part.text} streaming={live && index === parts.length - 1} /></div>)}
+    {!!sources.length && <WebSources sources={sources} />}
+  </div>;
 }
 
 /** 连续思考和工具共用一个折叠块；更新内容不覆盖手动开关，离开当前块时收起。 */

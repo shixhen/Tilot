@@ -23,7 +23,7 @@ test("工具历史保留调用参数、输出位置与已保存结果", (context
   const call = store.history.listToolCalls(attempt.id)[0]!;
   assert.equal(listAttemptViews(store, turn.id)[0]!.tools[0]!.output, null);
   assert.deepEqual(listAttemptViews(store, turn.id)[0]!.metrics, {
-    firstTokenMs: null, durationMs: null, inputTokens: null, cachedTokens: null, outputTokens: null,
+    firstTokenMs: null, durationMs: null, inputTokens: null, cachedTokens: null, outputTokens: null, webToolCalls: null,
   });
   store.history.startTool(call.id);
   const startedAt = store.history.listToolCalls(attempt.id)[0]!.startedAt;
@@ -91,6 +91,50 @@ function sampleResponse(): Response {
   };
 }
 
+test("联网历史按顺序投影搜索、打开网页、失败状态及正文来源，并按服务端用量计费", (context) => {
+  const { store } = openHistory(context);
+  const turn = store.startTurn(store.createThread("联网历史").id, "查询");
+  const attempt = store.history.startAttempt(turn.id, store.listTurnInputs(turn.id)[0]!.id);
+  const response = sampleResponse();
+  const source = { url: "https://example.com/report", title: "报告" };
+  const usage = {
+    input_tokens: 100, input_tokens_details: { cached_tokens: 0, cache_write_tokens: 0 },
+    output_tokens: 20, output_tokens_details: { reasoning_tokens: 5 }, total_tokens: 120,
+    server_tool_use: { tool_search: 2, tool_fetch: 1, tool_image_search: 4, web_search_requests: 5 },
+  };
+  response.usage = usage;
+  const search = {
+    type: "web_search_call", id: "search", status: "completed", kind: "deep_search",
+    action: { type: "search", queries: ["第一条", "第二条"], sources: [{ type: "url", ...source, snippet: "摘要" }] },
+  } as const;
+  const opened = {
+    type: "web_search_call", id: "opened", status: "completed", kind: "read_link",
+    action: { type: "open_page", url: source.url }, page: source, signature: "only-for-replay",
+  } as const;
+  const failed = {
+    type: "web_search_call", id: "failed", status: "failed", kind: "deep_search",
+    action: { type: "find_in_page", url: source.url, pattern: "关键词" }, error: { code: "unavailable" },
+  } as const;
+  const message = response.output[1]!;
+  assert.equal(message.type, "message");
+  const part = message.content[0]!;
+  assert.equal(part.type, "output_text");
+  part.annotations = [{ type: "url_citation", start_index: 0, end_index: 2, ...source }];
+  response.output.splice(1, 0, { ...search, action: { ...search.action, queries: [...search.action.queries], sources: [...search.action.sources] } }, opened, failed);
+  store.history.finishAttempt(attempt.id, { status: "completed", response });
+  const view = listAttemptViews(store, turn.id)[0]!;
+  assert.deepEqual(view.tools.map((tool) => [tool.name, JSON.parse(tool.arguments), JSON.parse(tool.output!), tool.hosted]), [
+    ["web_search", { queries: ["第一条", "第二条"] }, { status: "ok", data: { sources: [{ ...source, snippet: "摘要" }] } }, true],
+    ["web_read", { url: source.url }, { status: "ok", data: { sources: [source] } }, true],
+    ["web_find", { url: source.url, pattern: "关键词" }, { status: "error", error: "unavailable" }, true],
+  ]);
+  assert.deepEqual(view.messages[1]!.parts[0]!.sources, [source]);
+  assert.equal(view.metrics?.webToolCalls, 7);
+  assert.doesNotMatch(JSON.stringify(view), /only-for-replay/);
+  assert.deepEqual(store.history.getAttempt(attempt.id)!.completedOutputs[2]!.item, opened);
+  assert.deepEqual(store.history.listToolCalls(attempt.id), []);
+});
+
 test("取消请求的完整消息和未执行工具在重开后仍显示，诊断里的未确认项不投影", async (context) => {
   const { store, directory } = openHistory(context);
   const turn = store.startTurn(store.createThread("取消展示").id, "输入");
@@ -131,7 +175,7 @@ test("历史查询保留原文、输入边界和消息位置，只返回展示�
   const expected = [{
     id: saved.id, turnId: turn.id, sequence: 1, inputThroughId: input.id, status: "completed",
     error: null, createdAt: saved.createdAt, finishedAt: saved.finishedAt, tools: [], reasoningTimings: [],
-    metrics: { firstTokenMs: 250, durationMs: 1250, inputTokens: 100, cachedTokens: 60, outputTokens: 20 },
+    metrics: { firstTokenMs: 250, durationMs: 1250, inputTokens: 100, cachedTokens: 60, outputTokens: 20, webToolCalls: 0 },
     messages: [
       { itemId: "reasoning_1", outputIndex: 0, parts: [{ kind: "reasoning", text: "推理正文" }] },
       { itemId: "message_1", outputIndex: 1, parts: [{ kind: "text", text: "正文" }, { kind: "refusal", text: "拒绝部分" }] },
@@ -186,7 +230,7 @@ test("失败、截断及取消请求保留服务端用量和实测时间，供�
     store.history.finishAttempt(attempt.id, { status, response, error: "诊断", firstTokenMs: 100, durationMs: 1100 });
   }
   for (const view of listAttemptViews(store, turn.id)) {
-    assert.deepEqual(view.metrics, { firstTokenMs: 100, durationMs: 1100, inputTokens: 100, cachedTokens: 60, outputTokens: 20 });
+    assert.deepEqual(view.metrics, { firstTokenMs: 100, durationMs: 1100, inputTokens: 100, cachedTokens: 60, outputTokens: 20, webToolCalls: 0 });
     assert.deepEqual(view.messages, []);
     assert.deepEqual(view.tools, []);
   }

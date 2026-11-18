@@ -54,7 +54,7 @@ Core 提供 `host = {outputs: OutputCache, threadId}` 和 `execution = {executio
 
 网页正文与命令日志共用宿主输出缓存和 7 天/256 MiB 总限额，通过类型及任务归属隔离；web_fetch 只能续读网页，read 的 outputId 可读命令和 MCP 输出。网络层按宿主 HTTP_PROXY/HTTPS_PROXY（含小写）、ALL_PROXY 和 NO_PROXY 自动选择代理或直连，支持 HTTP/HTTPS 代理，没有额外界面开关。未配置代理或匹配 NO_PROXY 时使用系统 DNS 与路由，兼容系统 TUN/Fake-IP；显式代理模式由代理解析及连接目标。代理凭据仅发给代理，错误结果不回显凭据，代理出错不自动改为直连。代理选择使用 [proxy-from-env](https://github.com/Rob--W/proxy-from-env)，传输使用 [Node 内置代理支持](https://nodejs.org/docs/latest-v24.x/api/http.html#built-in-proxy-support)。
 
-内置模型工具在 `packages/tool/src/` 的对应模块中各自维护描述、参数、access 类别和执行校验，不单独维护提示词文件。`createToolSet(workspace?, host?, permissions?, additional?)` 创建本轮工具集合，由 `execute.ts` 统一检查权限、等待审批、执行和包装结果；Core 的请求声明与执行共享这个集合。项目及普通对话均可使用本地工具，实际声明及执行规则见 [工具权限与审批](docs/tool-permissions.md)。Git、测试与构建继续由 shell 承担；目前没有专用网络搜索；已支持 MCP 本地和远程工具，配置与权限见 [MCP 接入](docs/mcp.md)。[工具重写计划](docs/tool-rewrite-plan.md)的 A1–A3、B1、B3a 已实现，按开发者要求暂缓搜索；背景调研见 [工具对比](docs/tool-comparison.md)。
+内置模型工具在 `packages/tool/src/` 的对应模块中各自维护描述、参数、access 类别和执行校验，不单独维护提示词文件。`createToolSet(workspace?, host?, permissions?, additional?)` 创建本轮工具集合，由 `execute.ts` 统一检查权限、等待审批、执行和包装结果；Core 的请求声明与执行共享这个集合。项目及普通对话均可使用本地工具，实际声明及执行规则见 [工具权限与审批](docs/tool-permissions.md)。Git、测试与构建继续由 shell 承担。DeepSeek 官方服务的思考模式由模型按需调用联网搜索和阅读链接，快速模式继续提供 `web_fetch`，见 [DeepSeek 接入](docs/deepseek-integration.md)。MCP 本地和远程工具的配置见 [MCP 接入](docs/mcp.md)。
 
 启动 Windows 桌面开发版还需要 Rust、Visual Studio C++ Build Tools 和 WebView2：
 
@@ -226,7 +226,7 @@ Protocol 只包含通信类型、展示数据及共享任务、轮次与配置�
 - Responses 使用 OpenAI SDK 接入 Responses API，优先复用 SDK 类型。
 - 支持多个 Responses 模型服务的配置，不设计通用模型协议适配层，不自行实现模型 HTTP 或 SSE 协议解析。
 - 模块划分见 `docs/technical-design.md`，模型接入细节见 `docs/deepseek-integration.md`。
-- 当前工具为 read、write、edit、shell、ls、find、grep、web_fetch、view_image、request_user_input_async；项目及普通对话按各自权限开放。shell 使用 PowerShell，网络搜索按开发者要求暂缓；规格与进度见 [工具重写计划](docs/tool-rewrite-plan.md)，权限规则见 [工具权限与审批](docs/tool-permissions.md)。
+- 当前本地工具为 read、write、edit、shell、ls、find、grep、web_fetch、view_image、request_user_input_async。项目及普通对话按各自权限开放，shell 使用 PowerShell。官方 DeepSeek 服务的思考模式另有服务端联网能力。规格见 [工具重写计划](docs/tool-rewrite-plan.md) 和 [工具权限与审批](docs/tool-permissions.md)。
 - 执行体验按开发者 Codex 截图中的“完全访问”模式：直接执行，不逐次弹窗；四个基础工具、文件差异、命令进度与日志续读已接入。
 - 分小批次开发，函数和类型添加中文用途注释；每批解释并经确认后继续。
 

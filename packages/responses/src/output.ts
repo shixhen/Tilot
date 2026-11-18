@@ -63,6 +63,14 @@ function validateOutputItem(item: ResponseOutputItem): void {
     throw new Error("模型输出项必须是对象。");
   }
   switch (item.type) {
+    case "web_search_call":
+      if (item.status !== "completed" && item.status !== "failed") {
+        throw new Error("正式历史中的联网工具必须已完成或失败。");
+      }
+      if (!item.action || !["search", "open_page", "find_in_page"].includes(item.action.type)) {
+        throw new Error("联网工具动作无效。");
+      }
+      break;
     case "message":
       if (item.role !== "assistant" || item.status !== "completed") {
         throw new Error("成功响应中的消息必须是已完成的 assistant 消息。");
@@ -91,6 +99,7 @@ function validateOutputItem(item: ResponseOutputItem): void {
 
 /** done 表示生命周期结束；明确未完成的项不能回放，其余仍须通过完整字段校验。 */
 export function isCompletedOutputItem(item: ResponseOutputItem): boolean {
+  if (item?.type === "web_search_call" && item.status === "searching") return false;
   if (item && "status" in item && (item.status === "in_progress" || item.status === "incomplete")) return false;
   validateOutputItem(item);
   registerId(item.id, new Set(), "输出项 id");

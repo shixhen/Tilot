@@ -1,3 +1,6 @@
+import type { WebSource } from "@tilot/protocol";
+import { WebSources } from "./web-sources";
+
 /** 历史搜索行的展示字段，不依赖服务端工具实现。 */
 interface SearchLine { line: number; text: string; textTruncated: boolean }
 
@@ -41,6 +44,12 @@ function searchResult(name: string, data: Record<string, unknown>): string | und
 /** 展示已保存的工具结果，旧历史没有 diff 时继续显示原始内容。 */
 export function ToolResult({ name, result, output }: { name: string; result: Record<string, unknown>; output: string }) {
   const data = result.data && typeof result.data === "object" ? result.data as Record<string, unknown> : {};
+  if (["web_search", "web_read", "web_find"].includes(name) && result.status === "ok" && Array.isArray(data.sources)) {
+    const sources = data.sources.filter((item): item is WebSource =>
+      !!item && typeof item.url === "string" && typeof item.title === "string");
+    return <div className="max-h-72 overflow-auto px-3 py-2 text-xs">{sources.length
+      ? <WebSources sources={sources} showSnippets /> : "（没有返回网页结果）"}</div>;
+  }
   if (name === "web_fetch" && result.status === "ok" && typeof data.content === "string") {
     return <pre aria-label="网页正文" className="max-h-72 overflow-auto px-3 py-2 font-mono text-xs leading-relaxed whitespace-pre-wrap wrap-anywhere">{data.content || "（正文为空）"}</pre>;
   }

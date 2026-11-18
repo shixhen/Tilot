@@ -5,7 +5,7 @@ import { DEFAULT_CONFIG } from "./config.ts";
 export function migrateDatabase(database: Database.Database): void {
   database.transaction(() => {
     const version = database.pragma("user_version", { simple: true });
-    if (typeof version !== "number" || !Number.isInteger(version) || version < 0 || version > 16) {
+    if (typeof version !== "number" || !Number.isInteger(version) || version < 0 || version > 17) {
       throw new Error("不支持此数据库版本，请使用匹配的 Tilot 版本。");
     }
     if (version === 0) {
@@ -232,6 +232,10 @@ export function migrateDatabase(database: Database.Database): void {
     if (version < 16) {
       database.exec("ALTER TABLE provider_models ADD COLUMN contextTokens INTEGER CHECK (contextTokens > 0);");
       database.pragma("user_version = 16");
+    }
+    if (version < 17) {
+      database.exec("ALTER TABLE threads ADD COLUMN autoTitle INTEGER NOT NULL DEFAULT 0 CHECK (autoTitle IN (0, 1));");
+      database.pragma("user_version = 17");
     }
   }).immediate();
 }

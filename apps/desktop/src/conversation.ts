@@ -70,6 +70,11 @@ function mergeAttempts(current: AttemptView[], incoming: AttemptView[]): Attempt
       const live = previous?.tools.find((entry) => entry.id === tool.id);
       return live && tool.output === null && (live.output !== null || live.running) ? live : tool;
     });
+    if (attempt.status === "running") {
+      for (const tool of previous?.tools ?? []) {
+        if (tool.hosted && !tools.some((entry) => entry.id === tool.id)) tools.push(tool);
+      }
+    }
     attempts.set(attempt.id, { ...attempt, tools });
   }
   return [...attempts.values()].sort((a, b) => a.sequence - b.sequence);
@@ -77,7 +82,7 @@ function mergeAttempts(current: AttemptView[], incoming: AttemptView[]): Attempt
 
 /** 应用单个服务事件；完成消息替换增量，终态不被迟到的启动应答覆盖。 */
 export function applyEvent(records: TurnRecord[], event: ServerEvent): TurnRecord[] {
-  if (event.event === "question.updated") return records;
+  if (event.event === "question.updated" || event.event === "thread.title") return records;
   if (event.event === "approval.requested" || event.event === "approval.resolved") return records;
   if ("turn" in event) {
     const existing = records.find((record) => record.turn.id === event.turn.id);

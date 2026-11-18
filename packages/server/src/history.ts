@@ -3,17 +3,20 @@ import type { AttemptView, MessagePart, MessageView, ReasoningTiming, ToolView }
 import { isImageRef } from "@tilot/protocol";
 import type { CompletedOutput, Store } from "@tilot/store";
 import { getResponseToolCallsFromResponse, isCompletedOutputItem } from "@tilot/responses/output";
+import { DEEPSEEK_FIND_NAME } from "@tilot/responses";
+import { projectWebTool, webSource, webToolCalls } from "./web-tools.ts";
 
 /** 按顺序分页读取已确认输出的展示记录；不传出原始响应或未完成片段。 */
 export function listAttemptViews(store: Store, turnId: string, afterSequence = 0, limit = 50): AttemptView[] {
   return store.history.listAttempts(turnId, afterSequence, limit).map((attempt) => {
     const messages = projectCompletedMessages(attempt.completedOutputs, attempt.reasoningTimings);
-    const tools: ToolView[] = [];
+    const tools: ToolView[] = attempt.completedOutputs.flatMap(({ outputIndex, item }) =>
+      item.type === "web_search_call" ? [projectWebTool(item, outputIndex)] : []);
     for (const record of store.history.listToolCalls(attempt.id)) {
       const call = attempt.completedOutputs.find((entry) => entry.outputIndex === record.outputIndex)?.item;
       if (call?.type !== "function_call") throw new Error("工具记录与模型响应不匹配。");
       tools.push({
-        id: record.id, outputIndex: record.outputIndex, name: call.name, arguments: call.arguments,
+        id: record.id, outputIndex: record.outputIndex, name: call.name === DEEPSEEK_FIND_NAME ? "find" : call.name, arguments: call.arguments,
         ...projectToolOutput(record.result?.output ?? null),
         running: false, startedAt: record.startedAt, durationMs: record.durationMs,
       });
@@ -21,7 +24,7 @@ export function listAttemptViews(store: Store, turnId: string, afterSequence = 0
     return {
       id: attempt.id, turnId: attempt.turnId, sequence: attempt.sequence,
       inputThroughId: attempt.inputThroughId, status: attempt.status, error: attempt.error,
-      createdAt: attempt.createdAt, finishedAt: attempt.finishedAt, messages, tools,
+      createdAt: attempt.createdAt, finishedAt: attempt.finishedAt, messages, tools: tools.sort((a, b) => a.outputIndex - b.outputIndex),
       reasoningTimings: attempt.reasoningTimings,
       metrics: {
         firstTokenMs: attempt.firstTokenMs,
@@ -29,6 +32,7 @@ export function listAttemptViews(store: Store, turnId: string, afterSequence = 0
         inputTokens: attempt.response?.usage?.input_tokens ?? null,
         cachedTokens: attempt.response?.usage?.input_tokens_details?.cached_tokens ?? null,
         outputTokens: attempt.response?.usage?.output_tokens ?? null,
+        webToolCalls: webToolCalls(attempt.response?.usage),
       },
     };
   });
@@ -60,7 +64,11 @@ function projectCompletedMessages(outputs: CompletedOutput[], timings: Reasoning
     const parts: MessagePart[] = [];
     if (item.type === "message") {
       for (const part of item.content) {
-        parts.push(part.type === "refusal" ? { kind: "refusal", text: part.refusal } : { kind: "text", text: part.text });
+        if (part.type === "refusal") parts.push({ kind: "refusal", text: part.refusal });
+        else {
+          const sources = part.annotations?.flatMap((annotation) => annotation.type === "url_citation" ? webSource(annotation) ?? [] : []);
+          parts.push({ kind: "text", text: part.text, ...(sources?.length ? { sources } : {}) });
+        }
       }
     } else if (item.type === "reasoning") {
       for (const [contentIndex, part] of item.content!.entries()) {
