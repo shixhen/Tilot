@@ -147,9 +147,9 @@ function summarize(name, result, session) {
 /** 在临时项目创建明确有缺陷的代码、独立测试及需要按需读取的技能。 */
 function seedProject(project) {
   mkdirSync(join(project, "src"), { recursive: true });
-  mkdirSync(join(project, ".tilot/skills/math-checks"), { recursive: true });
+  mkdirSync(join(project, "skills/math-checks"), { recursive: true });
   writeFileSync(join(project, "AGENTS.md"), "所有文件使用 UTF-8。只修改 src/math.mjs 和 CHANGELOG.md。修复完成的最终回答必须包含 TILOT_UTF8_你好🙂。\n", "utf8");
-  writeFileSync(join(project, ".tilot/skills/math-checks/SKILL.md"), "---\nname: math-checks\ndescription: 修复加法函数时运行项目自带验证。\n---\n修改前先读取 src/math.mjs 和 verify.mjs；使用 shell 执行 node verify.mjs。最终回答还需包含 SKILL_BODY_OK。\n", "utf8");
+  writeFileSync(join(project, "skills/math-checks/SKILL.md"), "---\nname: math-checks\ndescription: 修复加法函数时运行项目自带验证。\n---\n修改前先读取 src/math.mjs 和 verify.mjs；使用 shell 执行 node verify.mjs。最终回答还需包含 SKILL_BODY_OK。\n", "utf8");
   writeFileSync(join(project, "src/math.mjs"), "// 加法函数：支持整数、负数和小数。\r\nexport function add(a, b) {\r\n  return a - b;\r\n}\r\n", "utf8");
   writeFileSync(join(project, "verify.mjs"), "import assert from 'node:assert/strict';\nimport { add } from './src/math.mjs';\nassert.equal(add(2, 3), 5);\nassert.equal(add(-2, 3), 1);\nassert.equal(add(0, 0), 0);\nassert.equal(add(0.5, 0.25), 0.75);\nconsole.log('VERIFY_OK 中文🙂');\n", "utf8");
 }
@@ -195,7 +195,7 @@ async function main() {
     assert.equal(codingResult.turn.status, "completed", codingResult.turn.error ?? "代码轮次未完成。");
     const localTools = tools(codingResult.attempts);
     for (const name of ["ls", "find", "grep", "read", "edit", "shell", "write"]) assert.ok(localTools.some((tool) => tool.name === name), `未覆盖 ${name}。`);
-    assert.ok(localTools.some((tool) => tool.name === "read" && JSON.parse(tool.arguments).path === ".tilot/skills/math-checks/SKILL.md"));
+    assert.ok(localTools.some((tool) => tool.name === "read" && JSON.parse(tool.arguments).path === "skills/math-checks/SKILL.md"));
     assert.match(answer(codingResult.attempts), /TILOT_UTF8_你好🙂/);
     assert.match(answer(codingResult.attempts), /SKILL_BODY_OK/);
     assert.ok(localTools.some((tool) => tool.name === "shell" && tool.result.data.exitCode === 0 && tool.result.data.output.includes("VERIFY_OK 中文🙂")));

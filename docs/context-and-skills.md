@@ -3,7 +3,7 @@
 ## 添加 Skills
 
 - 全局技能放在 `~/.tilot/skills/<目录名>/SKILL.md`。Windows 下对应 `%USERPROFILE%\.tilot\skills`。普通对话和项目对话都能使用。
-- 项目技能放在项目根目录的 `.tilot/skills/<目录名>/SKILL.md`。同名时使用项目技能，名称以文件里的 `name` 为准。
+- 项目技能放在项目根目录的 `skills/<目录名>/SKILL.md`。同名时使用项目技能，名称以文件里的 `name` 为准。
 
 已有技能可以将整个目录复制到对应位置。新建技能时，用 UTF-8 保存如下格式的 `SKILL.md`。
 

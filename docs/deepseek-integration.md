@@ -149,7 +149,7 @@ Responses 的 function 字段位于工具对象顶层。以下仅示意读取工
 
 不启用摘要或历史裁剪。服务返回 HTTP 错误、response.failed 或 response.incomplete 时，Core 保存失败尝试及已收到的响应对象。生成前明确拒绝官方联网工具时，按上文降级重试。请求体过大时的图片处理见 [图片输入](images.md)。其余错误结束本轮并展示原因。工具自身的分页及输出限制由工具声明和执行器负责。
 
-原始历史与当前输入保留。项目上下文仅加载根目录 AGENTS.md 及项目 .tilot/skills 中的技能元数据，正文按需读取；详见 [上下文与项目技能](context-and-skills.md)。
+原始历史与当前输入保留。项目上下文加载根目录的 `AGENTS.md` 和 `skills/` 里的技能元数据。模型按需读取技能正文。[上下文与项目技能](context-and-skills.md)
 
 不发送 truncation 或 context_management 期待服务自动裁剪历史；上下文超限由 API 报错，Agent Core 按现有错误流程结束本轮并保留原始历史。[兼容限制][A4]
 

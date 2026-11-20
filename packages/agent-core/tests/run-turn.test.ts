@@ -939,12 +939,12 @@ test("大输入完整发送且不设置输出上限，API 超限错误保存并�
 test("请求加载 Tilot 技能元数据并可按需读取正文", async (context) => {
   const store = openTestStore(context);
   const directory = projectDirectory(context);
-  mkdirSync(join(directory, ".tilot/skills/demo"), { recursive: true });
+  mkdirSync(join(directory, "skills/demo"), { recursive: true });
   writeFileSync(join(directory, "AGENTS.md"), "只修改当前项目", "utf8");
-  writeFileSync(join(directory, ".tilot/skills/demo/SKILL.md"), "---\nname: demo\ndescription: 示例技能\n---\n不自动发送的技能正文", "utf8");
+  writeFileSync(join(directory, "skills/demo/SKILL.md"), "---\nname: demo\ndescription: 示例技能\n---\n不自动发送的技能正文", "utf8");
   let count = 0;
   const { client, requests } = mockClient(() => ++count === 1 ? toolEvents([
-    { name: "read", arguments: '{"path":".tilot/skills/demo/SKILL.md"}' },
+    { name: "read", arguments: '{"path":"skills/demo/SKILL.md"}' },
   ]) : sampleEvents());
   const thread = store.createThread("项目上下文", directory);
   const first = await runTurn(store, client, { threadId: thread.id, input: "你好", instructions: "基础策略" });
@@ -953,7 +953,7 @@ test("请求加载 Tilot 技能元数据并可按需读取正文", async (contex
   assert.match(sent.instructions, /基础策略/);
   assert.match(sent.instructions, /只修改当前项目/);
   assert.match(sent.instructions, /示例技能/);
-  assert.ok(sent.instructions.includes(".tilot/skills/demo/SKILL.md"));
+  assert.ok(sent.instructions.includes("skills/demo/SKILL.md"));
   assert.doesNotMatch(sent.instructions, /不自动发送的技能正文/);
   const nextInput = JSON.parse(String(requests[1]!.body)).input;
   const result = JSON.parse(nextInput.find((item: { type?: string }) => item.type === "function_call_output").output);

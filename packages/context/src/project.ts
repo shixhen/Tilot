@@ -3,6 +3,8 @@ import { dirname, join } from "node:path";
 import { parseDocument } from "yaml";
 import { readPrompt } from "./prompts.ts";
 
+const PROJECT_SKILLS_DIRECTORY = "skills";
+
 /** 只提供技能索引，不自动把正文加入上下文。 */
 export interface SkillMetadata { name: string; description: string; path: string }
 
@@ -84,7 +86,7 @@ async function scanSkills(directory: string, scope: "project" | "global", signal
     signal?.throwIfAborted();
     if (entry.isSymbolicLink() || !entry.isDirectory()) continue;
     const path = join(directory, entry.name, "SKILL.md");
-    const reference = scope === "project" ? `.tilot/skills/${entry.name}/SKILL.md` : path;
+    const reference = scope === "project" ? `${PROJECT_SKILLS_DIRECTORY}/${entry.name}/SKILL.md` : path;
     let skill: SkillMetadata;
     try {
       if (!await existsAs(path, "file")) continue;
@@ -110,7 +112,7 @@ export async function loadProjectContext(root: string, signal?: AbortSignal, glo
   signal?.throwIfAborted();
   const agents = join(root, "AGENTS.md");
   const instructions = await existsAs(agents, "file") ? decode(await readFile(agents, { signal }), "AGENTS.md") : "";
-  const project = await scanSkills(join(root, ".tilot", "skills"), "project", signal);
+  const project = await scanSkills(join(root, PROJECT_SKILLS_DIRECTORY), "project", signal);
   if (!globalSkillsDirectory) return { instructions, skills: project.skills };
 
   const global = await scanSkills(globalSkillsDirectory, "global", signal);

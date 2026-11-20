@@ -21,7 +21,7 @@ Core 在每轮开始时通过 Context 读取 `system.md`，轮内所有模型请
 
 DeepSeek 按输入前缀复用缓存，读取文件本身不影响缓存。修改靠前的系统策略可能影响其后历史的缓存复用；轮内固定避免中途切换指令，下一轮使用新内容时仍可能重新建立缓存，不能保证缓存命中率不变。规则见 [DeepSeek 缓存文档](https://api-docs.deepseek.com/zh-cn/guides/kv_cache/)。项目 AGENTS.md 和技能索引仍按原有规则每次请求重新加载，修改它们也可能改变请求前缀。
 
-项目维护 `AGENTS.md` 和 `.tilot/skills/*/SKILL.md`，用户级技能放在 `~/.tilot/skills/*/SKILL.md`。同名时项目技能优先，技能正文由模型按需读取。工具及参数描述直接放在工具声明中。 [添加 Skills](../../docs/context-and-skills.md)
+项目在根目录维护 `AGENTS.md` 和 `skills/*/SKILL.md`，用户级技能放在 `~/.tilot/skills/*/SKILL.md`。同名时项目技能优先，技能正文由模型按需读取。工具及参数描述直接放在工具声明中。 [添加 Skills](../../docs/context-and-skills.md)
 
 ## 取消与恢复
 
