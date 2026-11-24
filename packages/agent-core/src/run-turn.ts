@@ -79,7 +79,12 @@ export async function runTurn(store: Store, client: OpenAI, options: RunTurnOpti
   if (!outputs) { outputs = new OutputCache(store.dataDirectory); outputCaches.set(store, outputs); }
   try {
     await options.onEvent?.({ type: "turn.started", turn });
-    requestOptions.instructions = requestOptions.instructions ?? readPrompt("system");
+    if (requestOptions.instructions === undefined) {
+      const formatter = new Intl.DateTimeFormat("sv-SE", { dateStyle: "short" });
+      const date = formatter.format(turn.createdAt);
+      const { timeZone } = formatter.resolvedOptions();
+      requestOptions.instructions = `${readPrompt("system")}\n\n本轮于 ${date} 开始，宿主时区为 ${timeZone}。`;
+    }
     const directory = thread.projectPath ?? join(store.dataDirectory, "workspaces", thread.id);
     if (thread.projectPath === null) await mkdir(directory, { recursive: true });
     workspace = await openWorkspace(directory);

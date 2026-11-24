@@ -576,8 +576,11 @@ test("默认策略从 Markdown 读取，整轮只取得一次系统策略，后�
   assert.equal(reads, 1);
   assert.equal(requests.length, 2);
   assert.ok(requests.every((request) => JSON.parse(String(request.body)).instructions === "策略版本 1"));
-  await runTurn(store, client, { threadId: thread.id, input: "下一轮" });
-  assert.equal(JSON.parse(String(requests.at(-1)!.body)).instructions, readPrompt("system"));
+  const next = await runTurn(store, client, { threadId: thread.id, input: "下一轮", onEvent: options.onEvent });
+  const formatter = new Intl.DateTimeFormat("sv-SE", { dateStyle: "short" });
+  const expected = `${readPrompt("system")}\n\n本轮于 ${formatter.format(next.createdAt)} 开始，宿主时区为 ${formatter.resolvedOptions().timeZone}。`;
+  assert.equal(requests.length, 4);
+  assert.ok(requests.slice(2).every((request) => JSON.parse(String(request.body)).instructions === expected));
 });
 
 test("首请求保持原输入与冻结配置，补充输入在同一轮后续请求中处理并完整回放", async (context) => {

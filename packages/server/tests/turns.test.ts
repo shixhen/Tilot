@@ -342,7 +342,10 @@ test("继续仅接受最新中断轮次，创建新轮次并统一使用正式�
   assert.equal(session.store.listTurnInputs(resumed.id)[0]?.content, readPrompt("resume"));
   assert.equal((await session.request({ id: "duplicate", method: "turn.resume", params: { turnId: old.id } })).success, false);
   await session.waitFor((message) => "event" in message && message.event === "message.delta" && message.turnId === resumed.id);
-  assert.equal(model.requests[0]?.instructions, readPrompt("system"));
+  const instructions = String(model.requests[0]?.instructions);
+  const system = readPrompt("system");
+  assert.equal(instructions.slice(0, system.length), system);
+  assert.match(instructions.slice(system.length), /^\n\n本轮于 \d{4}-\d{2}-\d{2} 开始，宿主时区为 .+。$/);
   assert.deepEqual(model.requests[0]?.input, [{ role: "user", content: "原任务输入" }, { role: "developer", content: readPrompt("interrupted-turn") }, { role: "user", content: readPrompt("resume") }]);
   model.finish(0);
   await session.waitFor((message) => "event" in message && message.event === "turn.finished" && message.turn.id === resumed.id);
