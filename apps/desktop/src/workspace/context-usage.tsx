@@ -26,7 +26,7 @@ export const ContextUsage = memo(function ContextUsage({ records, capacity }: { 
       {percent !== null && <p className="font-medium tabular-nums">{percent}% 已用（剩余 {Math.max(0, 100 - percent)}%）</p>}
       <p className="tabular-nums">已用 {used === null ? "暂无数据" : `${tokenFormat.format(used).toLowerCase()} Token`}，总容量 {capacity === null ? "未设置" : `${tokenFormat.format(capacity).toLowerCase()} Token`}</p>
       <p className="mt-1 text-xs text-muted-foreground">{capacity === null ? "可在连接设置中填写该模型的上下文容量。"
-        : used === null ? "等待模型请求返回用量。" : "按最近一次请求的输入与输出用量估算。"}</p>
+        : used === null ? "发送新消息后显示上下文估算。" : "按最近一次模型请求发送前的内容估算。"}</p>
     </TooltipContent>
   </Tooltip>;
 });

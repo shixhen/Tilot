@@ -56,7 +56,7 @@ test("版本 13 迁移不改变旧文字输入和任务状态", (context) => {
   const turn = store.startTurn(store.createThread("旧对话").id, "原始文字🙂");
   const inputs = store.listTurnInputs(turn.id); store.finishTurn(turn.id, "completed"); store.close();
   const legacy = new Database(join(directory, "tilot.sqlite"));
-  legacy.exec("ALTER TABLE threads DROP COLUMN autoTitle; ALTER TABLE provider_models DROP COLUMN contextTokens; ALTER TABLE turn_inputs DROP COLUMN imagesJson; DROP INDEX inputs_delivery; ALTER TABLE turn_inputs DROP COLUMN deliveryId; PRAGMA user_version = 13;"); legacy.close();
+  legacy.exec("DROP TABLE context_compactions; ALTER TABLE model_attempts DROP COLUMN estimatedInputTokens; ALTER TABLE threads DROP COLUMN autoTitle; ALTER TABLE provider_models DROP COLUMN contextTokens; ALTER TABLE turn_inputs DROP COLUMN imagesJson; DROP INDEX inputs_delivery; ALTER TABLE turn_inputs DROP COLUMN deliveryId; PRAGMA user_version = 13;"); legacy.close();
   const migrated = new Store(directory);
   try { assert.deepEqual(migrated.listTurnInputs(turn.id), inputs); assert.equal(migrated.getTurn(turn.id)!.status, "completed"); }
   finally { migrated.close(); }

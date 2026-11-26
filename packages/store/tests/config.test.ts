@@ -63,7 +63,7 @@ test("版本 15 升级增加可选上下文容量，旧模型与对话保持原�
   const thread = store.createThread("原有对话");
   store.close();
   const legacy = new Database(join(directory, "tilot.sqlite"));
-  legacy.exec("ALTER TABLE threads DROP COLUMN autoTitle; ALTER TABLE provider_models DROP COLUMN contextTokens; PRAGMA user_version = 15;");
+  legacy.exec("DROP TABLE context_compactions; ALTER TABLE model_attempts DROP COLUMN estimatedInputTokens; ALTER TABLE threads DROP COLUMN autoTitle; ALTER TABLE provider_models DROP COLUMN contextTokens; PRAGMA user_version = 15;");
   legacy.close();
   const reopened = new Store(directory);
   try {
@@ -120,7 +120,7 @@ test("版本 7 升级移除请求次数配置，保留模型选择、用户输�
   } finally { migrated.close(); }
   const database = new Database(join(directory, "tilot.sqlite"));
   try {
-    assert.equal(database.pragma("user_version", { simple: true }), 17);
+    assert.equal(database.pragma("user_version", { simple: true }), 19);
     assert.equal(database.prepare<[], { name: string }>("PRAGMA table_info(app_config)").all().some((column) => column.name === "maxStepsPerRun"), false);
   } finally { database.close(); }
 });
@@ -149,7 +149,7 @@ test("版本 8 升级删除输入和输出 Token 限制，保留服务、任务�
   } finally { migrated.close(); }
   const database = new Database(join(directory, "tilot.sqlite"));
   try {
-    assert.equal(database.pragma("user_version", { simple: true }), 17);
+    assert.equal(database.pragma("user_version", { simple: true }), 19);
     const configColumns = database.prepare<[], { name: string }>("PRAGMA table_info(app_config)").all().map((column) => column.name);
     assert.ok(!configColumns.includes("maxOutputTokens") && !configColumns.includes("reserveTokens"));
     assert.deepEqual(database.prepare<[], { name: string }>("PRAGMA table_info(provider_models)").all().map((column) => column.name), ["providerId", "id", "contextTokens"]);

@@ -11,7 +11,7 @@ import type { Response as ModelResponse } from "openai/resources/responses/respo
 import type { RpcRequest, RpcResponse, ServerMessage } from "@tilot/protocol";
 import { Store } from "@tilot/store";
 import { serveStdio } from "../src/stdio.ts";
-import { readPrompt } from "@tilot/context";
+import { buildContext, readPrompt } from "@tilot/context";
 import { McpManager } from "@tilot/tool";
 import { fileURLToPath } from "node:url";
 import { emptyQuestionDraft, type QuestionGroup, type QuestionDelivery } from "@tilot/protocol";
@@ -336,7 +336,7 @@ test("继续仅接受最新中断轮次，创建新轮次并统一使用正式�
   assert.equal((await session.request({ id: "running", method: "turn.resume", params: { turnId: old.id } })).success, false);
   session.store.recoverInterruptedTurns();
   const result = await session.request({ id: "resume", method: "turn.resume", params: { turnId: old.id } });
-  assert.ok(result.success && result.result && !Array.isArray(result.result) && "threadId" in result.result);
+  assert.ok(result.success && result.result && !Array.isArray(result.result) && "sequence" in result.result);
   const resumed = result.result;
   assert.notEqual(resumed.id, old.id);
   assert.equal(session.store.listTurnInputs(resumed.id)[0]?.content, readPrompt("resume"));
@@ -365,7 +365,7 @@ test("工具开始但结果未落库时异常退出，RPC 恢复可完成新轮�
   writeFileSync(join(session.store.dataDirectory, "kept.txt"), "已发生的副作用", "utf8");
   session.store.recoverInterruptedTurns();
   const result = await session.request({ id: "resume-unknown", method: "turn.resume", params: { turnId: old.id } });
-  assert.ok(result.success && result.result && !Array.isArray(result.result) && "threadId" in result.result);
+  assert.ok(result.success && result.result && !Array.isArray(result.result) && "sequence" in result.result);
   const resumed = result.result;
   await session.waitFor((message) => "event" in message && message.event === "message.delta" && message.turnId === resumed.id);
   const input = model.requests[0]!.input as { type?: string; call_id?: string; output?: string }[];
@@ -432,7 +432,7 @@ function openSession(context: TestContext, baseURL: string) {
   /** 启动一个任务的轮次，并确认返回的是执行标识而非等待模型结束。 */
   async function start(threadId: string, id: string): Promise<string> {
     const result = await request({ id, method: "turn.start", params: { threadId, input: "输入" } });
-    assert.ok(result.success && result.result && !Array.isArray(result.result) && "threadId" in result.result);
+    assert.ok(result.success && result.result && !Array.isArray(result.result) && "sequence" in result.result);
     return result.result.id;
   }
   return { store, input, output, serving, received, waitFor, request, start, globalSkillsDirectory };
@@ -645,6 +645,119 @@ test("真实命令进度通过行协议交付，历史查询只包含最终结�
   await session.waitFor((message) => "event" in message && message.event === "turn.finished" && message.turn.id === turnId);
   assert.equal(session.store.getTurn(turnId)?.status, "completed");
 });
+
+test("/compact 先停止工具并保存实际结果，再独立请求摘要，重启后只回放摘要和保留的用户原话", {
+  skip: process.platform !== "win32", timeout: 15000,
+}, async (context) => {
+  const model = await mockModel(context);
+  const session = openSession(context, model.baseURL);
+  const thread = session.store.createThread("压缩", session.store.dataDirectory, "full-access");
+  const turnId = await session.start(thread.id, "original");
+  await session.waitFor((message) => "event" in message && message.event === "message.delta" && message.turnId === turnId);
+  model.finish(0, false, [
+    { name: "shell", arguments: JSON.stringify({ command: "[Console]::Write('停前日志'); Start-Sleep -Seconds 45" }) },
+    { name: "write", arguments: JSON.stringify({ path: "never.txt", content: "不能执行" }) },
+  ]);
+  await session.waitFor((message) => "event" in message && message.event === "tool.progress" && message.output.includes("停前日志"));
+  const accepted = await session.request({ id: "compact", method: "thread.compact", params: { threadId: thread.id } });
+  assert.ok(accepted.success && accepted.result && "status" in accepted.result && accepted.result.status === "stopping");
+  const running = await session.waitFor((message) => "event" in message && message.event === "compaction.updated" && message.compaction.status === "running");
+  const stopped = session.received.find((message) => "event" in message && message.event === "turn.finished" && message.turn.id === turnId);
+  assert.ok(stopped && "event" in stopped && stopped.event === "turn.finished" && stopped.turn.status === "cancelled");
+  assert.ok("event" in running && stopped.seq < running.seq);
+  const oldAttempt = session.store.history.listAttempts(turnId)[0]!;
+  const [shell, write] = session.store.history.listToolCalls(oldAttempt.id);
+  assert.match(String(shell!.result!.output), /停前日志/);
+  assert.equal(JSON.parse(String(write!.result!.output)).status, "not_executed");
+  assert.equal(existsSync(join(session.store.dataDirectory, "never.txt")), false);
+  assert.equal((await session.request({ id: "duplicate", method: "thread.compact", params: { threadId: thread.id } })).success, false);
+  assert.equal((await session.request({ id: "send-during", method: "turn.start", params: { threadId: thread.id, input: "不能启动" } })).success, false);
+  assert.ok((await session.request({ id: "read-compaction", method: "thread.compaction", params: { threadId: thread.id } })).success);
+  await waitForRequests(model.requests, 2);
+  assert.equal(model.requests.length, 2);
+  const summaryRequest = model.requests[1]!;
+  assert.equal(summaryRequest.tools, undefined);
+  assert.equal(summaryRequest.instructions, readPrompt("compact"));
+  assert.match(JSON.stringify(summaryRequest.input), /停前日志/);
+  assert.match(JSON.stringify(summaryRequest.input), /not_executed/);
+  assert.match(JSON.stringify(summaryRequest.input), /取消/);
+  model.finish(1);
+  await session.waitFor((message) => "event" in message && message.event === "compaction.updated" && message.compaction.status === "completed");
+  assert.equal(session.store.listTurns(thread.id).length, 1);
+  assert.equal(model.requests.length, 2);
+
+  session.input.end();
+  await session.serving;
+  const reopened = new Store(session.store.dataDirectory);
+  try {
+    reopened.recoverInterruptedTurns();
+    assert.equal(reopened.compactions.latest(thread.id)?.status, "completed");
+    assert.equal(reopened.history.listToolCalls(oldAttempt.id)[0]!.result?.output, shell!.result!.output);
+    const next = reopened.startTurn(thread.id, "继续");
+    const input = buildContext(reopened, { turnId: next.id, inputThroughId: reopened.getLatestTurnInput(next.id)!.id }).input;
+    assert.deepEqual(input, [
+      { role: "user", content: "输入" },
+      { role: "user", content: "以下是此前对话的压缩摘要，供继续当前对话时参考。\n\n答案" },
+      { role: "user", content: "继续" },
+    ]);
+  } finally { reopened.close(); }
+});
+
+test("多段压缩中途失败或应用退出时保留上次摘要，下一次启动不会自动补跑", { timeout: 10000 }, async (context) => {
+  const model = await mockModel(context);
+  const session = openSession(context, model.baseURL);
+  const thread = session.store.createThread("压缩失败");
+  const config = session.store.getConfig();
+  session.store.saveConfig({ ...config, providers: config.providers.map((provider) => ({
+    ...provider, models: provider.models.map((model) => ({ ...model, contextTokens: 2500 })),
+  })) });
+  const old = session.store.startTurn(thread.id, "应保留的原话");
+  session.store.finishTurn(old.id, "completed");
+  const saved = session.store.compactions.start(thread.id, false);
+  const checkpoint = { throughSequence: old.sequence, summary: "上次摘要", retainedInputs: [{ content: "应保留的原话" }] };
+  session.store.compactions.finish(saved.id, { checkpoint, usage: null });
+  for (const input of ["A".repeat(1_800), "B".repeat(1_800)]) {
+    const turn = session.store.startTurn(thread.id, input);
+    session.store.finishTurn(turn.id, "completed");
+  }
+
+  assert.ok((await session.request({ id: "compact-fail", method: "thread.compact", params: { threadId: thread.id } })).success);
+  await waitForRequests(model.requests, 1);
+  assert.match(JSON.stringify(model.requests[0]!.input), /上次摘要.*A{1800}/);
+  model.finish(0);
+  await waitForRequests(model.requests, 2);
+  assert.match(JSON.stringify(model.requests[1]!.input), /答案.*B{1800}/);
+  assert.deepEqual(session.store.compactions.checkpoint(thread.id), checkpoint);
+  model.finish(1, true);
+  await session.waitFor((message) => "event" in message && message.event === "compaction.updated" && message.compaction.status === "failed");
+  assert.deepEqual(session.store.compactions.checkpoint(thread.id), checkpoint);
+  assert.match(session.store.compactions.latest(thread.id)!.error!, /模拟模型失败/);
+
+  assert.ok((await session.request({ id: "compact-exit", method: "thread.compact", params: { threadId: thread.id } })).success);
+  await waitForRequests(model.requests, 3);
+  session.input.end();
+  await session.serving;
+  assert.equal(session.store.compactions.latest(thread.id)?.status, "interrupted");
+  // 覆盖旧进程来不及保存终态的恢复路径。
+  const interrupted = session.store.compactions.start(thread.id, true);
+  const reopened = new Store(session.store.dataDirectory);
+  try {
+    reopened.recoverInterruptedTurns();
+    assert.equal(reopened.compactions.latest(thread.id)?.id, interrupted.id);
+    assert.equal(reopened.compactions.latest(thread.id)?.status, "interrupted");
+    assert.deepEqual(reopened.compactions.checkpoint(thread.id), checkpoint);
+    assert.equal(reopened.listTurns(thread.id).length, 3);
+    assert.equal(model.requests.length, 3);
+  } finally { reopened.close(); }
+});
+
+async function waitForRequests(requests: readonly unknown[], count: number): Promise<void> {
+  const signal = AbortSignal.timeout(3000);
+  while (requests.length < count) {
+    signal.throwIfAborted();
+    await new Promise((resolve) => setTimeout(resolve, 10));
+  }
+}
 
 test("真实审批协议逐条放行或拒绝，等待不计工具耗时，轮内切换权限不改变审批策略或工具声明", { timeout: 10000 }, async (context) => {
   const model = await mockModel(context);

@@ -28,7 +28,8 @@ test("上下文图标悬浮才显示用量，切换容量更新比例，未知�
     turn: { id: "turn", threadId: "thread", sequence: 1, permissionMode: "read-only", status: "completed", createdAt: 1, finishedAt: 2, error: null },
     inputs: [], previews: [], attempts: [{
       id: "attempt", turnId: "turn", sequence: 1, inputThroughId: 1, status: "completed", createdAt: 1, finishedAt: 2, error: null, messages: [], tools: [],
-      metrics: { inputTokens: 219000, cachedTokens: 100000, outputTokens: 0, firstTokenMs: null, durationMs: null },
+      estimatedInputTokens: 219000,
+      metrics: { inputTokens: 968300, cachedTokens: 810000, outputTokens: 42000, firstTokenMs: null, durationMs: null, webToolCalls: 82 },
     }],
   }];
   const render = async (capacity: number | null, data = records) => {

@@ -8,6 +8,8 @@ import type Database from "better-sqlite3";
 /** 把测试数据库退回版本 9，删除单项过程计时。 */
 export function downgradeToVersion9(database: Database.Database): void {
   database.exec(`
+    DROP TABLE context_compactions;
+    ALTER TABLE model_attempts DROP COLUMN estimatedInputTokens;
     ALTER TABLE threads DROP COLUMN autoTitle;
     ALTER TABLE provider_models DROP COLUMN contextTokens;
     DROP TABLE user_questions;

@@ -33,7 +33,7 @@ export function useWorkspace() {
   const contextCapacity = chat.config?.providers.find((provider) => provider.id === choice?.providerId)?.models
     .find((model) => model.id === choice?.model)?.contextTokens ?? DEFAULT_CONTEXT_TOKENS;
   const configured = !!choice && chat.configured.includes(choice.providerId);
-  const canSubmit = chat.connected && configured && !busy && !restoring && !chat.historyLoading;
+  const canSubmit = chat.connected && configured && !busy && !restoring && !chat.historyLoading && !chat.compacting;
 
   /** 更新当前任务草稿，其他任务草稿保持独立。 */
   const editDraft = useCallback((value: string): void => {
@@ -85,6 +85,12 @@ export function useWorkspace() {
     const snapshot = drafts.view(draftKey);
     const readyImages = snapshot.attachments.flatMap((attachment) => attachment.image ? [attachment.image] : []);
     if (!snapshot.text.trim() && !readyImages.length) return;
+    if (snapshot.text.trim() === "/compact" && !readyImages.length) {
+      sending.current = true;
+      try { drafts.settle(draftKey, draftKey, snapshot, await chat.compact()); }
+      finally { sending.current = false; }
+      return;
+    }
     const deliveryId = drafts.prepare(draftKey, snapshot);
     if (!deliveryId) return;
     sending.current = true;

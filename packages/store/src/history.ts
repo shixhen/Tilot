@@ -20,7 +20,7 @@ export class ModelHistoryStore {
   }
 
   /** 未决调用阻止继续；旧中断轮次可由 Context 配 unknown 说明后继续，不改写实际结果。 */
-  startAttempt(turnId: string, inputThroughId: number): ModelAttempt {
+  startAttempt(turnId: string, inputThroughId: number, estimatedInputTokens: number | null = null): ModelAttempt {
     return this.database.transaction(() => {
       const turn = this.database.prepare<[string, number], { threadId: string }>(`
         SELECT turns.threadId FROM turns JOIN turn_inputs ON turn_inputs.turnId = turns.id
@@ -38,11 +38,11 @@ export class ModelHistoryStore {
       if (pending) {
         throw new Error("该任务仍有工具调用缺少结果，请先核对并补齐。");
       }
-      const row = this.database.prepare<[string, string, string, number, number], AttemptRow>(`
-        INSERT INTO model_attempts (id, turnId, sequence, inputThroughId, status, createdAt)
-        VALUES (?, ?, (SELECT COALESCE(MAX(sequence), 0) + 1 FROM model_attempts WHERE turnId = ?), ?, 'running', ?)
+      const row = this.database.prepare<[string, string, string, number, number, number | null], AttemptRow>(`
+        INSERT INTO model_attempts (id, turnId, sequence, inputThroughId, status, createdAt, estimatedInputTokens)
+        VALUES (?, ?, (SELECT COALESCE(MAX(sequence), 0) + 1 FROM model_attempts WHERE turnId = ?), ?, 'running', ?, ?)
         RETURNING *
-      `).get(randomUUID(), turnId, turnId, inputThroughId, Date.now())!;
+      `).get(randomUUID(), turnId, turnId, inputThroughId, Date.now(), estimatedInputTokens)!;
       return decodeAttempt(row);
     }).immediate();
   }
@@ -142,6 +142,25 @@ export class ModelHistoryStore {
     return this.database.prepare<[string, number, number], AttemptRow>(`
       SELECT * FROM model_attempts WHERE turnId = ? AND sequence > ? ORDER BY sequence LIMIT ?
     `).all(turnId, afterSequence, limit).map(decodeAttempt);
+  }
+
+  /** 最新一组可回放请求留在原上下文，只允许压缩它之前的请求。 */
+  previousReplayableAttempt(turnId: string): number | undefined {
+    return this.database.prepare<[string], { sequence: number }>(`
+      SELECT sequence FROM model_attempts
+      WHERE turnId = ? AND (status = 'completed' OR json_array_length(completedOutputsJson) > 0)
+      ORDER BY sequence DESC LIMIT 1 OFFSET 1
+    `).get(turnId)?.sequence;
+  }
+
+  /** 压缩后的输入不再含旧调用标识，仍需拦截模型返回的同一调用。 */
+  hasEarlierCall(threadId: string, attemptId: string, callId: string): boolean {
+    return this.database.prepare(`
+      SELECT 1 FROM tool_calls
+      JOIN model_attempts ON model_attempts.id = tool_calls.attemptId
+      JOIN turns ON turns.id = model_attempts.turnId
+      WHERE turns.threadId = ? AND tool_calls.attemptId != ? AND tool_calls.callId = ? LIMIT 1
+    `).get(threadId, attemptId, callId) !== undefined;
   }
 
   /** 按模型输出顺序读取调用及结果；未记录结果的调用保留为 null，不能当成成功。 */

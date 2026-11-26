@@ -24,7 +24,7 @@ async function fixture(context: TestContext) {
 }
 
 test("内置 Markdown 提示词均可读取，正文不再嵌在 TypeScript 常量中", () => {
-  for (const name of ["system", "project-instructions", "skills", "resume", "unknown-tool-result", "cancelled-turn", "failed-turn", "interrupted-turn"] as const) {
+  for (const name of ["system", "project-instructions", "skills", "resume", "compact", "unknown-tool-result", "cancelled-turn", "failed-turn", "interrupted-turn"] as const) {
     assert.ok(readPrompt(name).length > 0);
   }
   assert.match(readPrompt("system"), /你是 Tilot/);

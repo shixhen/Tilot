@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import type { AppConfig, ImageRef, PermissionMode, ReasoningEffort, ServerEvent, Thread, ToolApproval } from "@tilot/protocol";
+import type { AppConfig, CompactionView, ImageRef, PermissionMode, ReasoningEffort, ServerEvent, Thread, ToolApproval } from "@tilot/protocol";
 import { BackendConnection } from "./backend";
 import { createClient, type Request } from "./client";
 import { applyEvent, loadConversation, mergeHistory, type TurnRecord } from "./conversation";
@@ -33,6 +33,7 @@ export function useChat() {
   const [busy, setBusy] = useState(false);
   const [historyLoading, setHistoryLoading] = useState<Record<string, boolean>>({});
   const [queues, setQueues] = useState<Record<string, QueueView>>({});
+  const [compactions, setCompactions] = useState<Record<string, CompactionView>>({});
   const queue = useRef<InputQueue | null>(null);
   const [questions, setQuestions] = useState<Record<string, QuestionState | null>>({});
   const questionSession = useRef<QuestionSession | null>(null);
@@ -112,6 +113,22 @@ export function useChat() {
     }
   }
 
+  function observeCompaction(value: CompactionView): void {
+    if (!mounted.current || deletedThreads.current.has(value.threadId)) return;
+    setCompactions((current) => {
+      const previous = current[value.threadId];
+      // 应答或历史查询可能晚于事件，起始状态不能覆盖已经推进的状态。
+      if (previous && (previous.id > value.id || previous.id === value.id &&
+        (previous.status === value.status || previous.finishedAt !== null || value.status === "stopping"))) return current;
+      return { ...current, [value.threadId]: value };
+    });
+  }
+
+  async function refreshCompaction(threadId: string): Promise<void> {
+    const value = await request("thread.compaction", { threadId });
+    if (value) observeCompaction(value);
+  }
+
   /** 一批增量只更新一次会话状态，审批及轮次事件仍立即处理。 */
   function receive(incoming: ServerEvent[]): void {
     if (!mounted.current) return;
@@ -119,7 +136,7 @@ export function useChat() {
       const threadId = "turn" in event ? event.turn.threadId : "approval" in event ? event.approval.threadId : event.threadId;
       return !deletedThreads.current.has(threadId);
     });
-    const updates = events.filter((event) => event.event !== "approval.requested" && event.event !== "approval.resolved" && event.event !== "question.updated" && event.event !== "thread.title");
+    const updates = events.filter((event) => event.event !== "approval.requested" && event.event !== "approval.resolved" && event.event !== "question.updated" && event.event !== "thread.title" && event.event !== "compaction.updated");
     if (updates.length) setConversations((state) => {
       const next = { ...state };
       for (const event of updates) {
@@ -129,6 +146,11 @@ export function useChat() {
       return next;
     });
     for (const event of events) {
+      if (event.event === "compaction.updated") {
+        if (event.compaction.finishedAt === null) queue.current!.pause(event.threadId);
+        observeCompaction(event.compaction);
+        continue;
+      }
       if (event.event === "question.updated") { questionSession.current!.receive(event.threadId, event.question); continue; }
       if (event.event === "approval.requested") {
         const threadId = event.approval.threadId;
@@ -160,6 +182,7 @@ export function useChat() {
       questionSession.current!.setConnected(false);
       setConnected(false);
       setApprovals([]);
+      setCompactions({});
       report(error);
     }).then(async (backend) => {
       connection = backend;
@@ -183,7 +206,7 @@ export function useChat() {
     setSelected(threadId);
     if (threadId === null) { setNewProjectPath(projectPath); setNewPermissionMode(null); }
     setError("");
-    if (threadId) void Promise.all([refreshHistory(threadId), refreshApprovals(threadId)]).catch(report);
+    if (threadId) void Promise.all([refreshCompaction(threadId), refreshHistory(threadId), refreshApprovals(threadId)]).catch(report);
   }
 
   /** 和在途投递串行，服务确认删除后再移除界面记录与本地等待消息。 */
@@ -198,6 +221,7 @@ export function useChat() {
       setConversations(({ [threadId]: removed, ...current }) => current);
       setHistoryLoading(({ [threadId]: removed, ...current }) => current);
       setQueues(({ [threadId]: removed, ...current }) => current);
+      setCompactions(({ [threadId]: removed, ...current }) => current);
       setQuestions(({ [threadId]: removed, ...current }) => current);
       setApprovals((current) => current.filter((approval) => approval.threadId !== threadId));
       if (selected === threadId) select(null, thread.projectPath);
@@ -205,6 +229,27 @@ export function useChat() {
       try { questionSession.current!.discardThread(threadId, questionIds); }
       catch { report(new Error("对话已删除，本机答题草稿清理失败。")); }
     });
+  }
+
+  /** 暂停等待队列，再让服务端停止当前轮次并异步压缩。 */
+  async function compact(): Promise<boolean> {
+    if (!selected) { report(new Error("当前对话还没有可压缩的历史。")); return false; }
+    if (submitting.current) return false;
+    submitting.current = true;
+    setBusy(true);
+    setError("");
+    try {
+      queue.current!.pause(selected);
+      const value = await queue.current!.withPriority(selected, () => request("thread.compact", { threadId: selected }));
+      observeCompaction(value);
+      return true;
+    } catch (error) {
+      report(error);
+      return false;
+    } finally {
+      submitting.current = false;
+      if (mounted.current) setBusy(false);
+    }
   }
 
   /** 首次发送时创建任务；所有消息先可靠入队，再由相同投递身份提交服务。 */
@@ -303,13 +348,18 @@ export function useChat() {
     retryQuestion: () => { if (selected) questionSession.current!.retry(selected); },
   }), [selected]);
 
-  return { connected, threads, selected, newProjectPath, records: selected ? conversations[selected] ?? [] : [], config, configured,
+  const records = selected ? conversations[selected] ?? [] : [];
+  const lastCompaction = selected ? compactions[selected] : undefined;
+  const compaction = lastCompaction && (lastCompaction.finishedAt === null ||
+    (records.at(-1)?.turn.createdAt ?? 0) <= lastCompaction.finishedAt) ? lastCompaction : undefined;
+  const compacting = compaction?.finishedAt === null;
+  return { connected, threads, selected, newProjectPath, records, config, configured, compaction, compacting, compact,
     ...questionActions, question: selected ? questions[selected] ?? null : null,
     newPermissionMode, permissionBusy, approvals: approvals.filter((item) => item.threadId === selected), approvalBusy, choosePermission, respondApproval,
     queue: selected ? queues[selected] ?? { messages: [], paused: false, busy: false } : { messages: [], paused: false, busy: false },
     steer: (id: string) => selected ? queue.current!.steer(selected, id) : Promise.resolve(),
     removeQueued: (id: string) => { if (selected) queue.current!.remove(selected, id); },
-    resumeQueue: () => { if (selected) queue.current!.resume(selected); },
+    resumeQueue: () => { if (selected && !compacting) queue.current!.resume(selected); },
     error, busy, historyLoading: selected ? historyLoading[selected] ?? false : false,
     knownDeliveries: async (deliveryIds: string[]) => [...queue.current!.pendingDeliveryIds(), ...await request("input.receipts", { deliveryIds })],
     request, select, deleteThread, send, resume, stop, updateThread, updateDefaults, refreshConfig };

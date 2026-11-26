@@ -19,12 +19,20 @@ export function Composer({ state }: { state: WorkspaceState }) {
   useSyncExternalStore(state.drafts.subscribe, state.drafts.getRevision);
   const { text, attachments } = state.drafts.view(state.draftKey);
   const canSend = state.canSubmit && (!!text.trim() || attachments.some((attachment) => attachment.image));
+  const compactCommand = text.trim() === "/compact" && !attachments.some((attachment) => attachment.image);
+  const compaction = state.chat.compaction;
+  const sendLabel = compactCommand ? "压缩对话" : state.running ? "加入等待区" : "发送消息";
 
   return <div className="min-w-0 w-full" onPaste={(event) => {
     const files = Array.from(event.clipboardData.files).filter((file) => file.type.startsWith("image/"));
     if (files.length) { event.preventDefault(); state.addImages(files); }
   }}>
-    <PendingInputs queue={state.chat.queue} running={!!state.running} connected={state.chat.connected}
+    {compaction && <div role={compaction.error ? "alert" : "status"} className={`mb-2 flex items-center gap-2 px-2 text-sm ${compaction.error ? "text-destructive" : "text-muted-foreground"}`}>
+      {state.chat.compacting && <LoaderCircle className="size-3.5 shrink-0 animate-spin" />}
+      {compaction.status === "stopping" ? "正在停止当前轮次…" : compaction.status === "running" ? "正在压缩对话…"
+        : compaction.status === "failed" ? `压缩失败 · ${compaction.error}` : compaction.error ?? "对话已压缩"}
+    </div>}
+    <PendingInputs queue={state.chat.queue} running={!!state.running} connected={state.chat.connected && !state.chat.compacting}
       onSteer={(id) => void state.chat.steer(id)} onRemove={state.chat.removeQueued} onResume={state.chat.resumeQueue} />
     <QuestionPanel state={state.chat.question} connected={state.chat.connected} onEdit={state.chat.editQuestion}
       onSubmit={state.chat.submitQuestion} onClose={state.chat.closeQuestion} onRetry={state.chat.retryQuestion} />
@@ -71,8 +79,8 @@ export function Composer({ state }: { state: WorkspaceState }) {
               <ModelPicker providerId={state.choice.providerId} model={state.choice.model} reasoningEffort={state.choice.reasoningEffort}
                 providers={state.chat.config.providers} onChange={state.chooseModel} /></>
             : <span className="px-2.5 text-sm text-muted-foreground">{state.chat.error ? "未连接" : "连接中"}</span>}
-          {state.running && <Button type="button" size="icon-sm" className="rounded-full bg-foreground text-background hover:bg-foreground/85" aria-label="停止生成" title="停止生成" disabled={!state.chat.connected} onClick={() => void state.chat.stop(state.running!.turn.id)}><Square className="size-3 fill-current" /></Button>}
-          {(!state.running || canSend) && <Button type="submit" size="icon-sm" className="rounded-full bg-brand text-white hover:bg-brand/90 disabled:bg-white/10 disabled:text-muted-foreground disabled:opacity-100" aria-label={state.running ? "加入等待区" : "发送消息"} title={state.running ? "加入等待区 (Enter)" : "发送 (Enter)"} disabled={!canSend}>{state.busy ? <LoaderCircle className="animate-spin" /> : <ArrowUp />}</Button>}
+          {state.running && <Button type="button" size="icon-sm" className="rounded-full bg-foreground text-background hover:bg-foreground/85" aria-label="停止生成" title="停止生成" disabled={!state.chat.connected || state.chat.compacting} onClick={() => void state.chat.stop(state.running!.turn.id)}><Square className="size-3 fill-current" /></Button>}
+          {(!state.running || canSend) && <Button type="submit" size="icon-sm" className="rounded-full bg-brand text-white hover:bg-brand/90 disabled:bg-white/10 disabled:text-muted-foreground disabled:opacity-100" aria-label={sendLabel} title={`${sendLabel} (Enter)`} disabled={!canSend}>{state.busy ? <LoaderCircle className="animate-spin" /> : <ArrowUp />}</Button>}
         </div>
       </CardFooter>
     </Card></form>

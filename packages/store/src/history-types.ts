@@ -23,6 +23,7 @@ export interface ModelAttempt {
   /** 请求开始至流结束的毫秒数，不包含工具执行。 */
   durationMs: number | null;
   reasoningTimings: ReasoningTiming[];
+  estimatedInputTokens: number | null;
 }
 
 /** 结束请求时提交的数据；原始非成功响应用于诊断，已确认输出独立保存。 */

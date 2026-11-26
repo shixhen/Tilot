@@ -1,4 +1,4 @@
-import type { AppConfig, AttemptView, ImageData, ImageRef, RpcRequest, Thread, ToolApproval, Turn, TurnInput } from "@tilot/protocol";
+import type { AppConfig, AttemptView, CompactionView, ImageData, ImageRef, RpcRequest, Thread, ToolApproval, Turn, TurnInput } from "@tilot/protocol";
 import type { BackendConnection } from "./backend";
 import type { QuestionDelivery, QuestionGroup } from "@tilot/protocol";
 
@@ -8,6 +8,7 @@ interface Results {
   "input.receipts": string[];
   "question.pending": QuestionGroup | null; "question.draft": QuestionGroup; "question.close": QuestionGroup; "question.submit": QuestionDelivery;
   "thread.create": Thread; "thread.read": Thread | null; "thread.list": Thread[]; "thread.rename": Thread; "thread.delete": string[];
+  "thread.compact": CompactionView; "thread.compaction": CompactionView | null;
   "turn.start": Turn; "turn.resume": Turn; "turn.interrupt": { interrupted: boolean }; "turn.read": Turn | null;
   "turn.steer": TurnInput | null;
   "turn.list": Turn[]; "turn.inputs": TurnInput[]; "turn.attempts": AttemptView[];

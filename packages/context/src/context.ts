@@ -1,6 +1,6 @@
 import { toResponseInputItems } from "openai/lib/responses/ResponseInputItems";
 import type { ResponseInputItem } from "openai/resources/responses/responses";
-import type { ModelAttempt, Store, Turn, TurnInput } from "@tilot/store";
+import type { ContextCheckpoint, HistoryPosition, ModelAttempt, RetainedInput, Store, Turn, TurnInput } from "@tilot/store";
 import { getResponseToolCallsFromResponse, isCompletedOutputItem } from "@tilot/responses/output";
 import { readPrompt } from "./prompts.ts";
 import { imageContent } from "@tilot/protocol";
@@ -12,6 +12,7 @@ export interface ContextOptions {
   turnId: string;
   inputThroughId: number;
   instructions?: string | undefined;
+  checkpoint?: ContextCheckpoint;
 }
 
 /** 下一次请求的系统策略和 SDK 输入；模型、工具声明及预算由各自负责的模块补充。 */
@@ -30,25 +31,56 @@ export function buildContext(store: Store, options: ContextOptions): ModelContex
     throw new Error("构建上下文需要存在且正在运行的轮次。");
   }
   const instructions = options.instructions ?? readPrompt("system");
+  const checkpoint = options.checkpoint ?? store.compactions.checkpoint(target.threadId);
   const input: ResponseInputItem[] = [];
+  if (checkpoint) {
+    input.push(...checkpoint.retainedInputs.map(userInput));
+    input.push({
+      role: "user",
+      content: `以下是此前对话的压缩摘要，供继续当前对话时参考。\n\n${checkpoint.summary}`,
+    });
+  }
+  for (const group of readHistoryGroups(store, target.threadId, checkpoint, { throughSequence: target.sequence }, options.inputThroughId)) {
+    input.push(...group.items);
+  }
+  return { instructions, input };
+}
+
+interface HistoryGroup {
+  items: ResponseInputItem[];
+  user?: { input: RetainedInput; turnSequence: number };
+}
+
+export function coversNewHistory(through: HistoryPosition, after?: HistoryPosition): boolean {
+  if (through.throughSequence !== (after?.throughSequence ?? 0)) return through.throughSequence > (after?.throughSequence ?? 0);
+  return (through.throughAttempt ?? Infinity) > (after?.throughAttempt ?? Infinity);
+}
+
+/** 回放到指定轮次。压缩按同样的边界读取，完整工具调用和结果始终在同一组。 */
+export function* readHistoryGroups(
+  store: Store, threadId: string, after: HistoryPosition | undefined, through: HistoryPosition, inputThroughId?: number,
+): Generator<HistoryGroup> {
+  if (!coversNewHistory(through, after)) return;
+  const { throughSequence, throughAttempt } = through;
   const itemIds = new Set<string>();
   const callIds = new Set<string>();
-  let afterSequence = 0;
-  while (true) {
-    const turns = store.listTurns(target.threadId, afterSequence);
+  let afterSequence = after ? after.throughSequence - Number(after.throughAttempt !== undefined) : 0;
+  while (afterSequence < throughSequence) {
+    const turns = store.listTurns(threadId, afterSequence);
     for (const turn of turns) {
+      if (turn.sequence > throughSequence) break;
       const inputs = readTurnInputs(store, turn.id);
-      const boundary = turn.id === target.id ? options.inputThroughId : inputs.at(-1)?.id;
+      const boundary = turn.sequence === throughSequence && inputThroughId !== undefined ? inputThroughId : inputs.at(-1)?.id;
       if (boundary === undefined || !inputs.some((item) => item.id === boundary)) {
         throw new Error("上下文输入边界不属于该轮次，或轮次缺少用户输入。");
       }
-      input.push(...buildTurnInput(store, turn, inputs.filter((item) => item.id <= boundary), itemIds, callIds));
-      if (turn.id === target.id) {
-        return { instructions, input };
-      }
+      const skipAttempts = turn.sequence === after?.throughSequence ? after.throughAttempt ?? 0 : 0;
+      const stopAfterAttempt = turn.sequence === throughSequence ? throughAttempt : undefined;
+      yield* buildTurnInput(store, turn, inputs.filter((item) => item.id <= boundary), itemIds, callIds, skipAttempts, stopAfterAttempt);
       afterSequence = turn.sequence;
+      if (afterSequence === throughSequence) return;
     }
-    if (turns.length === 0) {
+    if (turns.length === 0 || turns.at(-1)!.sequence > throughSequence) {
       throw new Error("未能读取目标轮次，历史记录不完整。");
     }
   }
@@ -67,12 +99,11 @@ function readTurnInputs(store: Store, turnId: string): TurnInput[] {
 }
 
 /** 按请求边界回放已确认输出，工具消息组中间不插入补充输入。 */
-function buildTurnInput(
+function* buildTurnInput(
   store: Store, turn: Turn, inputs: TurnInput[], itemIds: Set<string>, callIds: Set<string>,
-): ResponseInputItem[] {
-  const result: ResponseInputItem[] = [];
+  afterSequence: number, stopAfterAttempt?: number,
+): Generator<HistoryGroup> {
   let inputIndex = 0;
-  let afterSequence = 0;
   let previousBoundary = 0;
   while (true) {
     const attempts = store.history.listAttempts(turn.id, afterSequence);
@@ -86,25 +117,31 @@ function buildTurnInput(
           throw new Error("请求的输入边界倒退或超出本次上下文范围。");
         }
         while (inputIndex < inputs.length && inputs[inputIndex]!.id <= attempt.inputThroughId) {
-          result.push(userInput(inputs[inputIndex++]!));
+          yield userGroup(inputs[inputIndex++]!, turn.sequence);
         }
-        result.push(...buildResponseGroup(store, attempt, itemIds, callIds, turn.status === "interrupted"));
+        yield { items: buildResponseGroup(store, attempt, itemIds, callIds, turn.status === "interrupted") };
         previousBoundary = attempt.inputThroughId;
       }
+      if (attempt.sequence === stopAfterAttempt) return;
       afterSequence = attempt.sequence;
     }
   }
+  if (stopAfterAttempt !== undefined) throw new Error("压缩截止请求不存在。");
   // 未消费的补充输入放在该轮输出之后，结束原因只在该轮末尾出现一次。
   for (const item of inputs.slice(inputIndex)) {
-    result.push(userInput(item));
+    yield userGroup(item, turn.sequence);
   }
   if (turn.status === "cancelled" || turn.status === "failed" || turn.status === "interrupted") {
-    result.push({ role: "developer", content: readPrompt(`${turn.status}-turn`) });
+    yield { items: [{ role: "developer", content: readPrompt(`${turn.status}-turn`) }] };
   }
-  return result;
 }
 
-function userInput(input: TurnInput): ResponseInputItem {
+function userGroup({ content, images }: TurnInput, turnSequence: number): HistoryGroup {
+  const input = { content, ...(images?.length ? { images } : {}) };
+  return { user: { input, turnSequence }, items: [userInput(input)] };
+}
+
+function userInput(input: RetainedInput): ResponseInputItem {
   return { role: "user", content: input.images?.length
     ? [...(input.content ? [{ type: "input_text" as const, text: input.content }] : []), ...input.images.map(imageContent)] : input.content };
 }

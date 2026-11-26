@@ -38,13 +38,13 @@ export interface ToolApproval {
   resolvedPath?: string;
 }
 
-/** 未单独填写模型容量时，用于上下文占用显示的默认值。 */
+/** 未单独填写模型容量时，用于上下文占用估算和自动压缩的默认值。 */
 export const DEFAULT_CONTEXT_TOKENS = 666_000;
 
 /** 服务提供的一个模型；输入和输出限制由模型服务决定。 */
 export interface ModelInfo {
   id: string;
-  /** 用户填写的上下文容量，仅用于显示；省略时使用 DEFAULT_CONTEXT_TOKENS。 */
+  /** 用户填写的上下文容量；省略时使用 DEFAULT_CONTEXT_TOKENS。 */
   contextTokens?: number;
 }
 
@@ -83,6 +83,8 @@ export type RpcRequest =
   | { id: string; method: "thread.create"; params: { title: string; projectPath?: string | null; permissionMode?: PermissionMode; autoTitle?: boolean } }
   | { id: string; method: "thread.permission"; params: { threadId: string; permissionMode: PermissionMode } }
   | { id: string; method: "thread.read"; params: { threadId: string } }
+  | { id: string; method: "thread.compact"; params: { threadId: string } }
+  | { id: string; method: "thread.compaction"; params: { threadId: string } }
   | { id: string; method: "thread.list"; params: { limit?: number; offset?: number } }
   | { id: string; method: "thread.rename"; params: { threadId: string; title: string } }
   | { id: string; method: "thread.delete"; params: { threadId: string } }
@@ -102,12 +104,23 @@ export type RpcResponse =
 /** 已实现方法的返回数据；凭据只返回哪些服务已配置密钥，不返回原文。 */
 export type RpcResult =
   | ImageRef | ImageData
+  | CompactionView
   | QuestionGroup | QuestionDelivery
   | Thread | Thread[] | Turn | Turn[] | TurnInput | TurnInput[] | AttemptView[] | AppConfig | string[] | ToolApproval[]
   | { configured: string[] } | { interrupted: boolean } | null;
 
 /** 轮次的结束状态；interrupted 表示旧执行进程退出，区别于用户主动取消。 */
 export type TurnFinalStatus = "completed" | "failed" | "cancelled" | "interrupted";
+
+/** 压缩有独立状态，不占用聊天轮次。 */
+export interface CompactionView {
+  id: number;
+  threadId: string;
+  status: "stopping" | "running" | "completed" | "failed" | "interrupted";
+  error: string | null;
+  createdAt: number;
+  finishedAt: number | null;
+}
 
 /** 一次执行轮次的共享记录；sequence 是任务内的顺序，时间为 Unix 毫秒。 */
 export interface Turn {
@@ -177,6 +190,8 @@ export interface AttemptView {
   tools: ToolView[];
   metrics?: ResponseMetrics;
   reasoningTimings?: ReasoningTiming[];
+  /** 发出请求前的输入占用估算，与服务商计费用量独立。 */
+  estimatedInputTokens?: number;
 }
 
 /** 单次模型请求的实测时间和服务端用量；null 表示未采集或服务端未返回，缓存命中包含在输入中。 */
@@ -210,6 +225,7 @@ export interface ToolOutputPreview { output: string; truncated: boolean; partial
 /** 服务推送数据；不向界面传递 SDK 响应对象或模型请求参数。 */
 export type TurnNotification =
   | { event: "thread.title"; threadId: string }
+  | { event: "compaction.updated"; threadId: string; compaction: CompactionView }
   | { event: "question.updated"; threadId: string; question: QuestionGroup }
   | { event: "turn.notice"; threadId: string; turnId: string; message: string }
   | { event: "approval.requested"; approval: ToolApproval }

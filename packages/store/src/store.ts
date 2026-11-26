@@ -7,6 +7,8 @@ import { migrateDatabase } from "./database.ts";
 import { isPermissionMode, type PermissionMode, type Provider, type ReasoningEffort, type Thread } from "@tilot/protocol";
 import type { Turn, TurnFinalStatus, TurnInput } from "@tilot/protocol";
 import { ModelHistoryStore } from "./history.ts";
+import { CompactionStore } from "./compactions.ts";
+export type { CompactionUsage, ContextCheckpoint, HistoryPosition, RetainedInput } from "./compactions.ts";
 import { QuestionStore } from "./questions.ts";
 import { ImageStore } from "./images.ts";
 import type { ImageRef } from "@tilot/protocol";
@@ -36,6 +38,7 @@ export class Store {
   private readonly database: Database.Database;
   /** 模型请求和工具结果的存储入口，与配置、任务共用同一数据库。 */
   readonly history: ModelHistoryStore;
+  readonly compactions: CompactionStore;
   readonly questions: QuestionStore;
   readonly images: ImageStore;
   /** 单独文件保存的本地凭据，不随普通配置读取返回。 */
@@ -54,6 +57,7 @@ export class Store {
       migrateDatabase(this.database);
       this.database.pragma("journal_mode = WAL");
       this.history = new ModelHistoryStore(this.database);
+      this.compactions = new CompactionStore(this.database);
       this.questions = new QuestionStore(this.database);
       this.images = new ImageStore(dataDirectory);
       this.credentials = new CredentialStore(dataDirectory);
@@ -268,6 +272,10 @@ export class Store {
     `).all(threadId, afterSequence, limit);
   }
 
+  getLatestTurn(threadId: string): Turn | undefined {
+    return this.database.prepare<[string], Turn>("SELECT * FROM turns WHERE threadId = ? ORDER BY sequence DESC LIMIT 1").get(threadId);
+  }
+
   /** 向运行中的轮次追加用户输入并更新任务时间；保存原文，不在此决定何时发送给模型。 */
   appendTurnInput(turnId: string, content: string, images: ImageRef[] = [], deliveryId?: string): TurnInput {
     const attachments = this.images.references(images);
@@ -339,6 +347,7 @@ export class Store {
   /** 服务确认旧执行停止后恢复：生成中的调用确定未执行，执行中缺失的结果保持未知。 */
   recoverInterruptedTurns(): number {
     return this.database.transaction(() => {
+      this.compactions.recover();
       const now = Date.now();
       for (const attempt of this.database.prepare<[], { id: string }>("SELECT id FROM model_attempts WHERE status = 'running'").all()) {
         const saved = this.history.getAttempt(attempt.id)!;

@@ -27,17 +27,17 @@ function record(attempts: AttemptView[]): TurnRecord {
   };
 }
 
-test("上下文使用最近一次请求的输入加输出，运行中沿用已返回用量，缺失历史保持未知", () => {
+test("上下文使用最近一次请求发送前的估算，忽略计费用量，无估算的旧历史保持未知", () => {
   const previous = record([attempt(1, { inputTokens: 1000, cachedTokens: 600, outputTokens: 100 })]);
-  const current = record([attempt(1, { inputTokens: 2000, outputTokens: 200 })]);
-  assert.equal(getContextTokens([previous, current]), 2200);
+  const current = record([{ ...attempt(1, { inputTokens: 968300, outputTokens: 42000, webToolCalls: 82 }), estimatedInputTokens: 2000 }]);
+  assert.equal(getContextTokens([previous]), null);
+  assert.equal(getContextTokens([previous, current]), 2000);
   const running = { ...attempt(2), status: "running" as const };
   delete running.metrics;
   current.attempts.push(running);
-  assert.equal(getContextTokens([previous, current]), 2200);
-  current.attempts[1] = attempt(2, { inputTokens: 3000, outputTokens: 300 });
-  assert.equal(getContextTokens([previous, current]), 3300);
-  assert.equal(getContextTokens([record([attempt(1, { inputTokens: 0, outputTokens: 0 })])]), 0);
+  assert.equal(getContextTokens([previous, current]), 2000);
+  current.attempts[1] = { ...attempt(2), estimatedInputTokens: 900 };
+  assert.equal(getContextTokens([previous, current]), 900);
   assert.equal(getContextTokens([record([running])]), null);
   assert.equal(getContextTokens([]), null);
 });

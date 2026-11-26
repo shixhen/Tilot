@@ -5,7 +5,7 @@ import { DEFAULT_CONFIG } from "./config.ts";
 export function migrateDatabase(database: Database.Database): void {
   database.transaction(() => {
     const version = database.pragma("user_version", { simple: true });
-    if (typeof version !== "number" || !Number.isInteger(version) || version < 0 || version > 17) {
+    if (typeof version !== "number" || !Number.isInteger(version) || version < 0 || version > 19) {
       throw new Error("不支持此数据库版本，请使用匹配的 Tilot 版本。");
     }
     if (version === 0) {
@@ -236,6 +236,34 @@ export function migrateDatabase(database: Database.Database): void {
     if (version < 17) {
       database.exec("ALTER TABLE threads ADD COLUMN autoTitle INTEGER NOT NULL DEFAULT 0 CHECK (autoTitle IN (0, 1));");
       database.pragma("user_version = 17");
+    }
+    if (version < 18) {
+      database.exec(`
+        CREATE TABLE context_compactions (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          threadId TEXT NOT NULL REFERENCES threads(id) ON DELETE CASCADE,
+          status TEXT NOT NULL CHECK (status IN ('stopping', 'running', 'completed', 'failed', 'interrupted')),
+          createdAt INTEGER NOT NULL,
+          finishedAt INTEGER,
+          error TEXT,
+          checkpointJson TEXT CHECK (checkpointJson IS NULL OR json_valid(checkpointJson)),
+          usageJson TEXT CHECK (usageJson IS NULL OR json_valid(usageJson)),
+          CHECK ((status = 'completed') = (checkpointJson IS NOT NULL)),
+          CHECK ((status IN ('stopping', 'running')) = (finishedAt IS NULL))
+        ) STRICT;
+        CREATE INDEX compactions_latest ON context_compactions (threadId, id DESC);
+        CREATE UNIQUE INDEX compactions_one_active ON context_compactions (threadId) WHERE status IN ('stopping', 'running');
+      `);
+      database.pragma("user_version = 18");
+    }
+    if (version < 19) {
+      database.exec(`
+        ALTER TABLE model_attempts ADD COLUMN estimatedInputTokens INTEGER CHECK (estimatedInputTokens >= 0);
+        ALTER TABLE context_compactions ADD COLUMN kind TEXT NOT NULL DEFAULT 'manual' CHECK (kind IN ('manual', 'automatic'));
+        DROP INDEX compactions_one_active;
+        CREATE UNIQUE INDEX compactions_one_active ON context_compactions (threadId, kind) WHERE status IN ('stopping', 'running');
+      `);
+      database.pragma("user_version = 19");
     }
   }).immediate();
 }

@@ -1,10 +1,10 @@
-import { runTurn, type TurnEvent } from "@tilot/agent-core";
+import { compactHistory, runTurn, type TurnEvent } from "@tilot/agent-core";
 import { createResponsesClient } from "@tilot/responses";
 import type { Store, Turn, TurnInput } from "@tilot/store";
-import type { ImageRef, ServerEvent, ToolView, TurnNotification } from "@tilot/protocol";
+import type { CompactionView, ImageRef, ServerEvent, Thread, ToolView, TurnNotification } from "@tilot/protocol";
 import type { QuestionDelivery, QuestionDraft } from "@tilot/protocol";
 import { listAttemptViews, projectMessages } from "./history.ts";
-import { readPrompt } from "@tilot/context";
+import { coversNewHistory, readPrompt } from "@tilot/context";
 import { ApprovalManager } from "./approvals.ts";
 import { McpManager } from "@tilot/tool";
 import { projectWebTool } from "./web-tools.ts";
@@ -30,6 +30,7 @@ export class TurnManager {
   private readonly send: (event: ServerEvent) => Promise<void>;
   private readonly onFatal: (error: Error) => void;
   private readonly active = new Map<string, ActiveTurn>();
+  private readonly compacting = new Map<string, Pick<ActiveTurn, "controller" | "done">>();
   private sequence = 0;
   private closed = false;
 
@@ -49,17 +50,64 @@ export class TurnManager {
     const attachments = this.store.images.references(images);
     const delivered = this.store.findInputDelivery(threadId, deliveryId, input, attachments);
     if (delivered) return Promise.resolve(this.store.getTurn(delivered.turnId)!);
+    this.requireNotCompacting(threadId);
     if (!input.trim() && !attachments.length) throw new Error("用户输入不能为空。");
-    return this.launch(threadId, input, this.createClient(threadId), undefined, attachments, deliveryId);
+    return this.launch(threadId, input, this.createClient(this.store.lockThreadPermissions(threadId)), undefined, attachments, deliveryId);
   }
 
-  private createClient(threadId: string) {
-    const thread = this.store.lockThreadPermissions(threadId);
+  private createClient(thread: Thread) {
     const provider = this.store.getConfig().providers.find((item) => item.id === thread.providerId);
     if (!provider) throw new Error("对话使用的服务已不存在，请重新选择模型。");
     const apiKey = this.store.credentials.getApiKey(provider.id, provider.baseURL);
     if (!apiKey) throw new Error(`${provider.name} 尚未配置 API Key。`);
     return createResponsesClient({ apiKey, baseURL: provider.baseURL });
+  }
+
+  /** 先预留对话，再停止当前轮次。旧轮次和摘要在后台收尾，行协议无需等待。 */
+  compact(threadId: string): CompactionView {
+    if (this.closed) throw new Error("服务正在关闭，不能开始压缩。");
+    this.requireNotCompacting(threadId);
+    const thread = this.store.getThread(threadId);
+    const latest = this.store.getLatestTurn(threadId);
+    if (!thread || !latest) throw new Error("当前对话还没有可压缩的历史。");
+    if (!coversNewHistory({ throughSequence: latest.sequence }, this.store.compactions.checkpoint(threadId))) {
+      throw new Error("上次压缩后没有新的对话内容。");
+    }
+    const active = this.active.get(latest.id);
+    if (latest.status === "running" && !active) throw new Error("当前轮次还未收尾，暂不能压缩。");
+    const client = this.createClient(thread);
+    const job = this.store.compactions.start(threadId, !!active);
+    const execution = { controller: new AbortController(), done: Promise.resolve() };
+    this.compacting.set(threadId, execution);
+    if (active && latest.status === "running") active.controller.abort();
+    const signal = execution.controller.signal;
+    const publish = (compaction: CompactionView) => this.emit({ event: "compaction.updated", threadId, compaction });
+    execution.done = (async () => {
+      await publish(job);
+      if (active) {
+        await active.done;
+        if (!signal.aborted) await publish(this.store.compactions.begin(job.id));
+      }
+      let result: Parameters<Store["compactions"]["finish"]>[1];
+      try {
+        result = await compactHistory(this.store, client, thread, signal);
+      } catch (error) {
+        result = signal.aborted ? { status: "interrupted", error: "应用退出，压缩未完成。" }
+          : { status: "failed", error: error instanceof Error ? error.message : String(error) };
+      }
+      const finished = this.store.compactions.finish(job.id, result);
+      this.compacting.delete(threadId);
+      await publish(finished);
+    })().catch((error: unknown) => {
+      this.onFatal(error instanceof Error ? error : new Error("压缩状态保存或事件交付失败。"));
+    }).finally(() => {
+      if (this.compacting.get(threadId) === execution) this.compacting.delete(threadId);
+    });
+    return job;
+  }
+
+  private requireNotCompacting(threadId: string): void {
+    if (this.compacting.has(threadId)) throw new Error("正在压缩对话，请等待压缩结束。");
   }
 
   private launch(threadId: string, input: string, client: ReturnType<typeof createResponsesClient>, turn?: Turn, images: ImageRef[] = [], deliveryId?: string): Promise<Turn> {
@@ -98,11 +146,11 @@ export class TurnManager {
           const webStarted = response.type === "response.output_item.added" && response.item.type === "web_search_call"
             ? projectWebTool(response.item, response.output_index) : undefined;
           if (response.type === "response.created" || response.type === "response.completed" ||
-              response.type === "response.failed" || response.type === "response.incomplete") pendingWeb.clear();
+              response.type === "response.failed" || response.type === "response.incomplete" || response.type === "error") pendingWeb.clear();
           else if (webStarted) pendingWeb.set(webStarted.id, webStarted);
           else if (response.type === "response.output_item.done") pendingWeb.delete(response.item.id!);
           if (event.titleUpdated) await this.emit({ event: "thread.title", threadId });
-          if (webStarted || ["response.created", "response.output_item.done", "response.completed", "response.failed", "response.incomplete"].includes(response.type)) {
+          if (webStarted || ["response.created", "response.output_item.done", "response.completed", "response.failed", "response.incomplete", "error"].includes(response.type)) {
             const saved = this.store.history.getAttempt(event.attemptId)!;
             const attempt = listAttemptViews(this.store, event.turnId, saved.sequence - 1, 1)[0]!;
             attempt.tools.push(...pendingWeb.values());
@@ -153,9 +201,10 @@ export class TurnManager {
     if (!question) throw new Error("问题不存在。");
     if (question.status === "answered") return this.store.answerQuestion(questionId, draft);
     if (question.status !== "pending") throw new Error("该组问题已关闭。");
+    this.requireNotCompacting(question.threadId);
     const running = this.store.getRunningTurn(question.threadId);
     if (running && (!this.active.has(running.id) || this.active.get(running.id)!.controller.signal.aborted)) throw new Error("当前轮次正在停止，请稍后再次提交。答案仍保留。");
-    const client = running ? undefined : this.createClient(question.threadId);
+    const client = running ? undefined : this.createClient(this.store.lockThreadPermissions(question.threadId));
     const delivery = this.store.answerQuestion(questionId, draft, running?.id);
     if (client) await this.launch(question.threadId, delivery.input.content, client, delivery.turn);
     else await this.emit({ event: "turn.input", threadId: question.threadId, turnId: delivery.turn.id, input: delivery.input });
@@ -179,6 +228,7 @@ export class TurnManager {
 
   /** 等执行及终态通知完全收尾后，才能删除对话历史。 */
   deleteThread(threadId: string): string[] {
+    this.requireNotCompacting(threadId);
     if ([...this.active.values()].some((execution) => execution.threadId === threadId)) {
       throw new Error("对话正在运行或收尾，请稍后再删除。");
     }
@@ -188,7 +238,7 @@ export class TurnManager {
   /** 停止接收新执行，取消所有活动轮次并等待保存终态，之后才能关闭数据库。 */
   async close(): Promise<void> {
     this.closed = true;
-    const running = [...this.active.values()];
+    const running = [...this.active.values(), ...this.compacting.values()];
     for (const execution of running) execution.controller.abort();
     await Promise.all(running.map((execution) => execution.done));
     await this.mcp.close();

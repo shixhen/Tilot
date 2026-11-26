@@ -26,6 +26,7 @@ export function listAttemptViews(store: Store, turnId: string, afterSequence = 0
       inputThroughId: attempt.inputThroughId, status: attempt.status, error: attempt.error,
       createdAt: attempt.createdAt, finishedAt: attempt.finishedAt, messages, tools: tools.sort((a, b) => a.outputIndex - b.outputIndex),
       reasoningTimings: attempt.reasoningTimings,
+      ...(attempt.estimatedInputTokens === null ? {} : { estimatedInputTokens: attempt.estimatedInputTokens }),
       metrics: {
         firstTokenMs: attempt.firstTokenMs,
         durationMs: attempt.durationMs,

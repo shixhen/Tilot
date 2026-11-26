@@ -150,6 +150,8 @@ function parseRequest(value: unknown): RpcRequest {
       }
       break;
     case "thread.read":
+    case "thread.compact":
+    case "thread.compaction":
     case "thread.delete":
       if (typeof params.threadId === "string") {
         return { id: value.id, method: value.method, params: { threadId: params.threadId } };
@@ -296,6 +298,12 @@ export async function handleRpcLine(store: Store, line: string, turns: TurnManag
       }
       case "thread.read":
         result = store.getThread(request.params.threadId) ?? null;
+        break;
+      case "thread.compact":
+        result = turns.compact(request.params.threadId);
+        break;
+      case "thread.compaction":
+        result = store.compactions.latest(request.params.threadId, "manual") ?? null;
         break;
       case "thread.list":
         result = store.listThreads(request.params.limit, request.params.offset);

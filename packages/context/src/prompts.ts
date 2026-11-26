@@ -1,7 +1,7 @@
 import { readFileSync } from "node:fs";
 
 /** 应用自带的提示词正文，不接受项目路径或用户提供的任意文件名。 */
-export type PromptName = "system" | "project-instructions" | "skills" | "resume" | "unknown-tool-result" | "cancelled-turn" | "failed-turn" | "interrupted-turn";
+export type PromptName = "system" | "project-instructions" | "skills" | "resume" | "compact" | "unknown-tool-result" | "cancelled-turn" | "failed-turn" | "interrupted-turn";
 
 /** 按模块位置读取 UTF-8 Markdown，不缓存；编辑后下一次使用即生效。 */
 export function readPrompt(name: PromptName): string {
