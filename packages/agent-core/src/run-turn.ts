@@ -1,19 +1,20 @@
 import { APIError, type default as OpenAI } from "openai";
 import { mkdir } from "node:fs/promises";
 import { join } from "node:path";
-import type { Response, ResponseInputItem, ResponseStreamEvent } from "openai/resources/responses/responses";
-import { appendProjectInstructions, buildContext, coversNewHistory, loadProjectContext, readPrompt } from "@tilot/context";
-import { DEEPSEEK_FIND_NAME, deepSeekWebTools, streamResponse, type ResponsesRequest } from "@tilot/responses";
+import type { Response, ResponseStreamEvent } from "openai/resources/responses/responses";
+import {
+  appendProjectInstructions, buildContext, configuredContextCapacity, fitToolResults, isContextOverflow, loadProjectContext,
+  nextCompactionBoundary, prepareModelRequest, readPrompt, requestBodyLimit, retryImageLimit, type ModelRequest, type PreparedRequest,
+} from "@tilot/context";
+import { DEEPSEEK_FIND_NAME, deepSeekWebTools, streamResponse } from "@tilot/responses";
 import { getResponseToolCallsFromResponse, isCompletedOutputItem } from "@tilot/responses/output";
 import type { AttemptCompletion, ContextCheckpoint, Store, Turn } from "@tilot/store";
 import { createToolSet, openWorkspace, OutputCache, type ApprovalInput, type McpManager, type McpSnapshot, type OutputSnapshot, type Workspace } from "@tilot/tool";
 import type { ImageRef, ReasoningTiming } from "@tilot/protocol";
 import type { QuestionGroup, UserQuestion } from "@tilot/protocol";
 import { ReasoningClock } from "./reasoning-clock.ts";
-import { measureRequestImages, offloadRequestImages, requestBodyLimit, retryImageLimit } from "./request-images.ts";
-import { compactHistory, configuredContextCapacity } from "./compact.ts";
-import { estimateContextTokens, isContextOverflow } from "./context-budget.ts";
-export { compactHistory } from "./compact.ts";
+import { compactHistory } from "./request-summary.ts";
+export { compactHistory } from "./request-summary.ts";
 
 const outputCaches = new WeakMap<Store, OutputCache>();
 
@@ -214,14 +215,21 @@ export async function runTurn(store: Store, client: OpenAI, options: RunTurnOpti
           tool_choice: definitions.length ? "auto" as const : "none" as const,
           ...(title ? { title: { enabled: true as const } } : {}),
         };
-        return prepareRequest(request, store, imageState.limit);
+        return prepareModelRequest(request, store.images, imageState.limit);
+      }
+
+      async function fitResults(request: PreparedRequest, overflow: boolean) {
+        const reduced = fitToolResults(request, store.images, imageState.limit, compactThreshold - 1, overflow);
+        if (reduced) await options.onEvent?.({ type: "turn.notice", turnId: turn.id,
+          message: "已缩短发给模型的工具结果，原始输出仍可在历史中查看。" });
+        return reduced;
       }
 
       async function compactRequest(before: PreparedRequest, overflow: boolean): Promise<PreparedRequest | undefined> {
-        const earlierAttempt = store.history.previousReplayableAttempt(turn.id);
-        const through = earlierAttempt === undefined ? { throughSequence: turn.sequence - 1 }
-          : { throughSequence: turn.sequence, throughAttempt: earlierAttempt };
-        if (!coversNewHistory(through, store.compactions.checkpoint(thread.id))) {
+        const through = nextCompactionBoundary(store, turn);
+        if (!through) {
+          const reduced = await fitResults(before, overflow);
+          if (reduced) return reduced;
           if (overflow) return undefined;
           throw new Error("上下文已达到 90%，没有可压缩的旧历史。请缩短本轮输入或减少附件。");
         }
@@ -233,6 +241,9 @@ export async function runTurn(store: Store, client: OpenAI, options: RunTurnOpti
             message: overflow ? "模型服务报告上下文超限，正在压缩。" : "上下文达到 90%，正在自动压缩。" });
           result = await compactHistory(store, client, thread, options.signal, through, capacity);
           reduced = prepare(result.checkpoint);
+          if (reduced.estimate >= before.estimate || !overflow && reduced.estimate >= compactThreshold) {
+            reduced = await fitResults(reduced, overflow) ?? reduced;
+          }
           if (reduced.estimate >= before.estimate || !overflow && reduced.estimate >= compactThreshold) {
             throw new Error("压缩后，本轮需要保留的内容仍占用过多上下文。");
           }
@@ -274,6 +285,7 @@ export async function runTurn(store: Store, client: OpenAI, options: RunTurnOpti
             title = false;
           } else return result;
           prepared = prepare();
+          if (prepared.estimate >= compactThreshold) prepared = (await compactRequest(prepared, false))!;
         } catch (error) { return requestFailure(error, options.signal); }
       }
     }
@@ -288,20 +300,6 @@ export async function runTurn(store: Store, client: OpenAI, options: RunTurnOpti
       throw error;
     }
   }
-}
-
-type ModelRequest = ResponsesRequest & { input: ResponseInputItem[] };
-type PreparedRequest = ReturnType<typeof prepareRequest>;
-
-function prepareRequest(request: ModelRequest, store: Store, imageLimit: number) {
-  const measured = measureRequestImages(request, store.images);
-  const prepared = offloadRequestImages(request, measured, imageLimit);
-  const estimate = estimateContextTokens({
-    instructions: request.instructions ?? "",
-    input: prepared.input,
-    tools: request.tools ?? [],
-  });
-  return { request: { ...request, input: prepared.input }, measured, prepared, estimate };
 }
 
 function requestFailure(error: unknown, signal?: AbortSignal): AttemptResult {

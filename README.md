@@ -1,7 +1,7 @@
 # Tilot
 
 基于 Tauri、React、TypeScript 和 Node.js 的本地桌面 Agent。
-当前已建立 Responses 客户端、SQLite 历史存储、Context 上下文构建、Core 工具调用循环，以及桌面宿主与 Node 服务连接。工具支持 read、write、edit、shell、ls、find、grep、web_fetch、view_image 和 request_user_input_async；按对话选择只读、项目内修改或完全访问，工具声明在首次发送后固定，需审批的调用在输入框上方单次允许或拒绝。普通对话默认只读，也可在首次发送前选择完全访问。桌面支持多服务与模型配置、普通对话、流式正文与推理、命令输出预览、编辑差异、目录和搜索结果、网页来源与正文、取消、历史切换和中断后继续。Context 已接入项目指令和技能元数据；不设置应用输入或输出 Token 限制，也不启用自动摘要。正式 Server 链路已通过 deepseek-flash 真实联调，原生桌面交互仍待验收，详见 [联调记录](docs/deepseek-live-testing.md)。
+当前已建立 Responses 客户端、SQLite 历史存储、Context 上下文构建、Core 工具调用循环，以及桌面宿主与 Node 服务连接。工具支持 read、write、edit、shell、ls、find、grep、web_fetch、view_image 和 request_user_input_async；按对话选择只读、项目内修改或完全访问，工具声明在首次发送后固定，需审批的调用在输入框上方单次允许或拒绝。普通对话默认只读，也可在首次发送前选择完全访问。桌面支持多服务与模型配置、普通对话、流式正文与推理、命令输出预览、编辑差异、目录和搜索结果、网页来源与正文、取消、历史切换和中断后继续。Context 支持项目指令、技能索引和上下文压缩。正式 Server 链路已通过 deepseek-flash 真实联调，原生桌面交互仍待验收，详见 [联调记录](docs/deepseek-live-testing.md)。
 
 分批开发顺序与验收方式见 [开发计划](docs/development-plan.md)。
 
@@ -103,7 +103,7 @@ Markdown 使用 [react-markdown](https://github.com/remarkjs/react-markdown)、r
 | `packages/responses` | 通过 OpenAI SDK 调用 Responses API |
 | `packages/protocol` | 桌面端与 Server 共用的 RPC 请求、响应和事件类型 |
 
-桌面应用及各包已有实现；Tool 已接入八个工具，项目和普通对话按各自权限开放，Context 已加载项目指令和技能元数据，不设置应用 Token 限制。MCP 已接入本地 stdio 和远程 Streamable HTTP 工具，历史压缩尚未实现。
+桌面应用及各包已有实现。项目和普通对话按各自权限开放工具。MCP 已接入本地 stdio 和远程 Streamable HTTP 工具。上下文压缩支持手动 `/compact` 和按模型容量自动触发。
 根目录的类型检查覆盖各包和桌面的 `src/` 与 `tests/`；桌面使用独立 React 配置。
 
 ## 数据存储
@@ -138,7 +138,7 @@ Context 读完该任务截至目标轮次的历史，按请求记录的输入边
 
 每次模型请求前加载 `~/.tilot/skills` 的全局技能元数据。项目对话还会加载项目根目录的 `AGENTS.md` 和 `skills/`，同名技能优先使用项目版本。模型需要使用技能时通过 `read` 读取正文。 [添加 Skills](docs/context-and-skills.md)
 
-完整发送指令、历史和工具声明，不估算或限制输入 Token，也不发送 max_output_tokens 或预留安全余量。模型服务返回超限等错误时结束本轮并展示原因，不自动摘要、裁剪历史或重试。
+Context 按模型容量估算输入。达到 90% 时，Core 调度 Context 压缩旧历史，并在必要时缩短模型看到的工具结果。模型服务在生成前明确报上下文超限时，腾出空间后可重试原请求一次。模型服务继续使用自己的默认输出上限。 [上下文压缩](docs/context-and-skills.md#上下文压缩)
 
 ## 模型与工具调用循环
 

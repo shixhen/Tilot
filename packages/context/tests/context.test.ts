@@ -6,7 +6,7 @@ import { dirname, join, resolve } from "node:path";
 import { test, type TestContext } from "node:test";
 import type { Response, ResponseOutputItem } from "openai/resources/responses/responses";
 import { Store } from "@tilot/store";
-import { buildContext, readPrompt } from "@tilot/context";
+import { buildContext, compactContext, readPrompt, SummaryContextOverflow } from "@tilot/context";
 
 /** 为每个测试创建独立数据库，结束时关闭连接并清理本次临时目录。 */
 function openTestStore(context: TestContext): Store {
@@ -34,6 +34,35 @@ function response(output: ResponseOutputItem[] = []): Response {
 function call(id: string): ResponseOutputItem {
   return { type: "function_call", id: `item_${id}`, call_id: id, name: "read_file", arguments: ' { "path": "a.ts" } ', status: "completed" };
 }
+
+test("大工具组可以分批摘要，摘要请求超限时缩小输入重试", async (context) => {
+  const store = openTestStore(context);
+  const thread = store.createThread("大工具组摘要");
+  const turn = store.startTurn(thread.id, "检查工具结果");
+  const attempt = store.history.startAttempt(turn.id, store.getLatestTurnInput(turn.id)!.id);
+  store.history.finishAttempt(attempt.id, { status: "completed", response: response([call("first"), call("second")]) });
+  const originals = store.history.listToolCalls(attempt.id).map(({ id, callId }) => store.history.saveToolResult(id, {
+    type: "function_call_output", call_id: callId, output: JSON.stringify({ status: "ok", data: { content: "中文🙂".repeat(2500) } }),
+  }));
+  store.finishTurn(turn.id, "completed");
+  const requests: string[] = [];
+  const compacted = await compactContext(store, thread.id, {
+    capacity: 5000, imageBudget: Infinity,
+    async summarize(_instructions, input) {
+      requests.push(input);
+      if (requests.length === 1) throw new SummaryContextOverflow("模拟上下文超限");
+      return { summary: "已整理工具结果", usage: null };
+    },
+  });
+  assert.ok(requests.length > 2);
+  assert.ok(Buffer.byteLength(requests[1]!) < Buffer.byteLength(requests[0]!));
+  for (const callId of ["first", "second"]) {
+    assert.ok(requests.some((input) => input.split("\n").some((line) =>
+      line.includes(`"call_id":"${callId}"`) && line.includes('"type":"function_call"') && line.includes('"type":"function_call_output"'))));
+  }
+  assert.equal(compacted.checkpoint.summary, "已整理工具结果");
+  assert.deepEqual(store.history.listToolCalls(attempt.id), originals);
+});
 
 test("取消请求的完整输出按位置回放，工具结果配对，补充输入和取消说明各出现一次", (context) => {
   const store = openTestStore(context);

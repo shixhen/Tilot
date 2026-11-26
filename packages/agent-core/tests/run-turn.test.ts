@@ -1003,6 +1003,46 @@ test("本轮工具结果使上下文达到阈值时压缩旧请求，保留最�
   assert.equal(store.compactions.checkpoint(thread.id)?.throughAttempt, 1);
 });
 
+test("第一批工具结果就超限时以配对的预览继续原轮次，完整工具结果仍可回放", async (context) => {
+  for (const mode of ["threshold", "service"] as const) {
+    const store = openTestStore(context);
+    const project = projectDirectory(context);
+    if (mode === "threshold") setContextCapacity(store, 11000);
+    const files = [{ path: "a.txt", content: "A".repeat(9000) }, { path: "b.txt", content: "B".repeat(9000) }];
+    for (const file of files) writeFileSync(join(project, file.path), file.content);
+    const list = toolEvents(files.map(({ path }) => ({ name: "read", arguments: JSON.stringify({ path }) })));
+    const thread = store.createThread("第一批超限", project, "full-access");
+    const requests: { input: { type?: string; content?: unknown; call_id?: string; output?: string }[] }[] = [];
+    const client = createResponsesClient({ apiKey: "local-test-placeholder" }).withOptions({
+      fetch: async (_url, options) => {
+        requests.push(JSON.parse(String(options?.body)));
+        if (requests.length === 1) return sse(list);
+        if (mode === "service" && requests.length === 2) {
+          return Response.json({ error: { code: "context_length_exceeded", message: "Context length exceeded" } }, { status: 400 });
+        }
+        return sse(sampleEvents());
+      },
+    });
+    const turn = await runTurn(store, client, { threadId: thread.id, input: "比较两个文件", instructions: "" });
+    assert.equal(turn.status, "completed", turn.error ?? "");
+    assert.equal(requests.length, mode === "threshold" ? 2 : 3);
+    const input = requests.at(-1)!.input;
+    assert.deepEqual(input[0], { role: "user", content: "比较两个文件" });
+    const calls = input.filter((item) => item.type === "function_call");
+    const results = input.filter((item) => item.type === "function_call_output");
+    assert.deepEqual(results.map(({ call_id }) => call_id), calls.map(({ call_id }) => call_id));
+    assert.equal(results.length, 2);
+    for (const [index, result] of results.entries()) {
+      const partial = JSON.parse(result.output!);
+      assert.equal(partial.contextTruncated, true);
+      assert.equal(partial.status, "ok");
+      assert.match(partial.path, new RegExp(files[index]!.path));
+    }
+    const saved = store.history.listToolCalls(store.history.listAttempts(turn.id)[0]!.id);
+    assert.deepEqual(saved.map((record) => JSON.parse(String(record.result!.output)).data.content), files.map(({ content }) => content));
+  }
+});
+
 test("明确上下文超限只重试一次，普通 400 或已有生成内容的失败不压缩", async (context) => {
   for (const mode of ["http", "repeat", "early-stream", "sse-error", "partial-stream", "other"] as const) {
     const store = openTestStore(context);

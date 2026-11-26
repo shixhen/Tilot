@@ -3,9 +3,11 @@ import type { ResponsesRequest } from "@tilot/responses";
 import type { Store } from "@tilot/store";
 import type { ImageRef } from "@tilot/protocol";
 import { Buffer } from "node:buffer";
+import { estimateContextTokens } from "./budget.ts";
+import { shortenToolResult } from "./tool-results.ts";
 
 type ToolOutput = ResponseInputItem.FunctionCallOutput;
-type Request = ResponsesRequest & { input: ResponseInputItem[] };
+export type ModelRequest = ResponsesRequest & { input: ResponseInputItem[] };
 type OutputParts = Exclude<ToolOutput["output"], string>;
 type Candidate = { item: ToolOutput; parts: OutputParts; index: number; savedBytes: number; placeholder: { type: "input_text"; text: string } };
 
@@ -18,7 +20,7 @@ export function requestBodyLimit(baseURL: string): number {
 }
 
 /** 以 SDK 实际发送的 UTF-8 JSON 为基准，换算图片展开后的字节，不提前读取原图。 */
-export function measureRequestImages(request: Request, images: Store["images"]) {
+function measureRequestImages(request: ModelRequest, images: Store["images"]) {
   const candidates: Candidate[] = [];
   const refs = new Map<string, ImageRef>();
   let expandedBytes = 0;
@@ -59,7 +61,7 @@ export function measureRequestImages(request: Request, images: Store["images"]) 
 }
 
 /** 从旧工具结果开始替换图片，保留调用标识、文字和至少一张最新工具图。 */
-export function offloadRequestImages(request: Request, measured: ReturnType<typeof measureRequestImages>, target: number) {
+function offloadRequestImages(request: ModelRequest, measured: ReturnType<typeof measureRequestImages>, target: number) {
   const outputs = new Map<ToolOutput, OutputParts>();
   let bytes = measured.bytes;
   let omitted = 0;
@@ -85,6 +87,31 @@ export function offloadRequestImages(request: Request, measured: ReturnType<type
 /** 413 发生在生成前。为服务未公布的上限腾出空间，只尝试一次且必须减小请求。 */
 export function retryImageLimit(measured: ReturnType<typeof measureRequestImages>, sentBytes: number): number | undefined {
   return measured.minimumBytes < sentBytes ? Math.floor(sentBytes / 2) : undefined;
+}
+
+export type PreparedRequest = ReturnType<typeof prepareModelRequest>;
+
+export function prepareModelRequest(source: ModelRequest, images: Store["images"], imageLimit: number) {
+  const measured = measureRequestImages(source, images);
+  const prepared = offloadRequestImages(source, measured, imageLimit);
+  const estimate = estimateContextTokens({
+    instructions: source.instructions ?? "", input: prepared.input, tools: source.tools ?? [],
+  });
+  return { source, request: { ...source, input: prepared.input }, measured, prepared, estimate };
+}
+
+/** 历史摘要仍腾不出空间时逐步缩短模型看到的工具文字，优先保留较小结果。 */
+export function fitToolResults(before: PreparedRequest, images: Store["images"], imageLimit: number, target: number, overflow: boolean) {
+  let best = before;
+  if (overflow) target = Math.min(target, Math.floor(before.estimate * 0.8));
+  for (const bytes of [8192, 2048, 512, 0]) {
+    const input = before.source.input.map((item) => shortenToolResult(item, bytes));
+    if (input.every((item, index) => item === before.source.input[index])) continue;
+    const candidate = prepareModelRequest({ ...before.source, input }, images, imageLimit);
+    if (candidate.estimate < best.estimate) best = candidate;
+    if (best !== before && best.estimate <= target) return best;
+  }
+  if (overflow && best !== before) return best;
 }
 
 function jsonBytes(value: unknown): number {

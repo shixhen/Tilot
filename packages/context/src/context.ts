@@ -4,8 +4,6 @@ import type { ContextCheckpoint, HistoryPosition, ModelAttempt, RetainedInput, S
 import { getResponseToolCallsFromResponse, isCompletedOutputItem } from "@tilot/responses/output";
 import { readPrompt } from "./prompts.ts";
 import { imageContent } from "@tilot/protocol";
-export { loadProjectContext, appendProjectInstructions, type ProjectContext, type SkillMetadata } from "./project.ts";
-export { readPrompt, type PromptName } from "./prompts.ts";
 
 /** 本次构建的边界；未覆盖系统策略时读取内置 Markdown 提示词。 */
 export interface ContextOptions {

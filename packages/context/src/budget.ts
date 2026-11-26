@@ -1,4 +1,10 @@
 import type { ResponsesRequest } from "@tilot/responses";
+import { DEFAULT_CONTEXT_TOKENS, type AppConfig, type Thread } from "@tilot/protocol";
+
+export function configuredContextCapacity(config: AppConfig, model: Pick<Thread, "providerId" | "model">): number {
+  return config.providers.find((provider) => provider.id === model.providerId)?.models
+    .find((item) => item.id === model.model)?.contextTokens ?? DEFAULT_CONTEXT_TOKENS;
+}
 
 /** 按待发送的内容估算单次请求。服务端重放的网页内容和图片只能近似计入。 */
 export function estimateContextTokens(request: Pick<ResponsesRequest, "instructions" | "input" | "tools">): number {
@@ -30,3 +36,6 @@ export function isContextOverflow(code: string | null | undefined, message: stri
   return code === "context_length_exceeded" ||
     /\b(?:context (?:length|window) (?:limit )?exceeded|maximum context length is \d|exceeds? (?:the )?(?:model(?:'s)? )?(?:max(?:imum)? )?context (?:length|window))\b/i.test(message);
 }
+
+/** 摘要提供方在生成前明确报告输入超限。 */
+export class SummaryContextOverflow extends Error {}
